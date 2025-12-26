@@ -1,0 +1,13 @@
+services:
+  redis:
+    image: redis:7-alpine # Versi ringan
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --requirepass PastiKaya
+    restart: always
+
+volumes:
+  redis_data:
