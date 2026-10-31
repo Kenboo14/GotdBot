@@ -4,6 +4,7 @@ import (
 	"assterisk/gateway/applications/models"
 	"assterisk/gateway/applications/utils"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"log"
 	"runtime/debug"
@@ -18,11 +19,19 @@ type Redis struct {
 	Client *redis.Client
 }
 
-func NewRedis(ctx context.Context, addr string, pwd string) (*Redis, error) {
+func NewRedis(ctx context.Context, addr string, pwd string, useTLS bool) (*Redis, error) {
+	var tlsConfig *tls.Config
+	if useTLS {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: pwd,
-		DB:       0,
+		Addr:         addr,
+		Password:     pwd,
+		DB:           0,
+		PoolSize:     100,
+		MinIdleConns: 10,
+		MaxRetries:   3,
+		TLSConfig:    tlsConfig,
 	})
 
 	// Cek apakah koneksi berhasil
@@ -67,7 +76,7 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 }
 
 func (r *Redis) Listener(ctx context.Context, b *bot.Bot, group string, worker string, stream string, callback func(context.Context, *bot.Bot, redis.XMessage)) {
-	delay := 10 * time.Second
+	delay := 0 * time.Second
 
 	err := r.Client.XGroupCreateMkStream(ctx, stream, group, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
@@ -148,7 +157,7 @@ func (r *Redis) Listener(ctx context.Context, b *bot.Bot, group string, worker s
 			Consumer: worker,
 			Streams:  []string{stream, ">"}, // ">" artinya pesan baru
 			Count:    1,
-			Block:    0,
+			Block:    2 * time.Second,
 		}).Result()
 
 		if err != nil {
@@ -185,8 +194,9 @@ func (r *Redis) CheckLimit(ctx context.Context, identifier string, limit int, wi
 	}
 
 	if count == 1 {
-		utils.LogError("RateLimit TTL check failed", err, map[string]interface{}{"key": key})
-		r.Client.Expire(ctx, key, window)
+		if err := r.Client.Expire(ctx, key, window).Err(); err != nil {
+			return false, 0, err
+		}
 	}
 
 	if count > int64(limit) {

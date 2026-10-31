@@ -1,2 +1,11 @@
+.env
 ubot/configs.yaml
 gateway/configs.yaml
+sync_config.jsonc
+*.exe
+gateway/gateway-bin
+ubot/ubot-bin
+*.log
+.cache/
+.gocache/
+.gocache*/

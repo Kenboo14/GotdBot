@@ -1,0 +1,6 @@
+.git
+configs.yaml
+gateway-bin
+gateway-bin.exe
+main.exe
+*.log

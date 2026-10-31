@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/base64"
+	"fmt"
 	"log"
-
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,22 +23,71 @@ type Config struct {
 	Redis struct {
 		Address  string `yaml:"redis_address"`
 		Password string `yaml:"redis_password"`
+		TLS      bool   `yaml:"redis_tls"`
 	} `yaml:"redis"`
+
+	Userbot struct {
+		APIID                int    `yaml:"api_id"`
+		APIHash              string `yaml:"api_hash"`
+		SessionEncryptionKey string `yaml:"session_encryption_key"`
+	} `yaml:"userbot"`
 }
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{}
 
 	file, err := os.ReadFile(path)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-
-	if err := yaml.Unmarshal(file, cfg); err != nil {
-		return nil, err
+	if err == nil {
+		if err := yaml.Unmarshal(file, cfg); err != nil {
+			return nil, err
+		}
+	}
+	applyEnv(cfg)
+	if strings.TrimSpace(cfg.Mongo.URI) == "" || strings.TrimSpace(cfg.Mongo.DBName) == "" || strings.TrimSpace(cfg.Redis.Address) == "" {
+		return nil, os.ErrInvalid
+	}
+	if cfg.Userbot.APIID < 1 || strings.TrimSpace(cfg.Userbot.APIHash) == "" {
+		return nil, fmt.Errorf("userbot API_ID dan API_HASH wajib diisi")
+	}
+	key, err := base64.StdEncoding.DecodeString(cfg.Userbot.SessionEncryptionKey)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("SESSION_ENCRYPTION_KEY harus base64 dari tepat 32 byte")
 	}
 
 	log.Println("config loaded:", path)
 
 	return cfg, nil
+}
+
+func applyEnv(cfg *Config) {
+	if value := os.Getenv("MONGO_URI"); value != "" {
+		cfg.Mongo.URI = value
+	}
+	if value := os.Getenv("BOT_TOKEN"); value != "" {
+		cfg.Telegram.BotToken = value
+	}
+	if value := os.Getenv("MONGO_DB"); value != "" {
+		cfg.Mongo.DBName = value
+	}
+	if value := os.Getenv("REDIS_ADDR"); value != "" {
+		cfg.Redis.Address = value
+	}
+	if value := os.Getenv("REDIS_PASS"); value != "" {
+		cfg.Redis.Password = value
+	}
+	if value := os.Getenv("REDIS_TLS"); value != "" {
+		cfg.Redis.TLS = strings.EqualFold(value, "true") || value == "1"
+	}
+	if value := os.Getenv("API_ID"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Userbot.APIID)
+	}
+	if value := os.Getenv("API_HASH"); value != "" {
+		cfg.Userbot.APIHash = value
+	}
+	if value := os.Getenv("SESSION_ENCRYPTION_KEY"); value != "" {
+		cfg.Userbot.SessionEncryptionKey = value
+	}
 }

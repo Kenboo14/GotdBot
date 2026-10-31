@@ -3,6 +3,7 @@ package databases
 import (
 	"assterisk/ubot/applications/models"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"log"
 	"strings"
@@ -15,11 +16,19 @@ type Redis struct {
 	Client *redis.Client
 }
 
-func NewRedis(ctx context.Context, addr string, pwd string) (*Redis, error) {
+func NewRedis(ctx context.Context, addr string, pwd string, useTLS bool) (*Redis, error) {
+	var tlsConfig *tls.Config
+	if useTLS {
+		tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
 	rdb := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: pwd,
-		DB:       0,
+		Addr:         addr,
+		Password:     pwd,
+		DB:           0,
+		PoolSize:     100,
+		MinIdleConns: 10,
+		MaxRetries:   3,
+		TLSConfig:    tlsConfig,
 	})
 
 	// Cek apakah koneksi berhasil
@@ -74,13 +83,22 @@ func (r *Redis) Listener(ctx context.Context, group, worker, stream string, call
 			Group:    group,
 			Consumer: worker,
 			Streams:  []string{stream, ">"}, // ">" artinya pesan baru
-			Count:    1,
-			Block:    0,
+			Count:    500,
+			Block:    2 * time.Second,
 		}).Result()
 
 		if err != nil {
+			// redis.Nil hanya menandakan tidak ada pesan baru selama periode Block.
+			// Ini kondisi normal pada worker yang sedang idle.
+			if err == redis.Nil {
+				continue
+			}
 			log.Printf("⚠️ Redis Error: %v. Retrying in 2s...", err)
-			time.Sleep(2 * time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(2 * time.Second):
+			}
 			continue
 		}
 

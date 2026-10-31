@@ -4,6 +4,7 @@ import (
 	"assterisk/ubot/applications/config"
 	"assterisk/ubot/applications/databases"
 	"assterisk/ubot/applications/modules/broadcast"
+	"assterisk/ubot/applications/modules/userbot"
 	"time"
 
 	"context"
@@ -31,13 +32,14 @@ func Run(ctx context.Context) {
 		log.Fatal("Failed Connect Mongodb:", err)
 	}
 
-	redisClient, err := databases.NewRedis(ctx_timeout, cfg.Redis.Address, cfg.Redis.Password)
+	redisClient, err := databases.NewRedis(ctx_timeout, cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.TLS)
 	if err != nil {
 		log.Fatal("Failed Connect Redis:", err)
 	}
 	// Modules
 	modules := []Module{
 		&broadcast.Init{},
+		&userbot.Init{Config: cfg},
 	}
 
 	for _, m := range modules {

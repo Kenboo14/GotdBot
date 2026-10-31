@@ -14,5 +14,4 @@ func (m *Init) Register(ctx context.Context, mongodb *mongo.Database, redis *dat
 	svc := NewService(repo)
 
 	go redis.Listener(ctx, "to:group:ubot", "to:worker:ubot", "to:ubot:broadcast", svc.Broadcast)
-
 }

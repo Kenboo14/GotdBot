@@ -1,13 +1,53 @@
 services:
   redis:
-    image: redis:7-alpine # Versi ringan
-    container_name: redis
-    ports:
-      - "6379:6379"
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASS:-change-me-for-local-dev}
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass PastiKaya
-    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASS ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 }).ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build: ./gateway
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
+      REDIS_ADDR: redis:6379
+      REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ubot:
+    build: ./ubot
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
+      MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017}
+      MONGO_DB: ${MONGO_DB:-gotdbot}
+      REDIS_ADDR: redis:6379
+      REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
+
+      API_ID: ${API_ID:?Set API_ID in .env before installing a userbot}
+      API_HASH: ${API_HASH:?Set API_HASH in .env before installing a userbot}
+      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?Set SESSION_ENCRYPTION_KEY in .env}
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
 
 volumes:
   redis_data:
+  mongo_data:
