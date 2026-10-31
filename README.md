@@ -25,6 +25,16 @@ dan API ID/API hash dari <https://my.telegram.org/apps>.
 > Gunakan hanya satu instance Gateway untuk satu `BOT_TOKEN`; dua instance akan
 > menyebabkan `409 Conflict` saat polling Telegram.
 
+### Apakah perlu `venv`?
+
+Tidak. GotdBot adalah aplikasi Go, bukan aplikasi Python. Pada production VPS,
+Gateway, Ubot, MongoDB, dan Redis berjalan di container Docker sehingga dependency
+tidak bercampur dengan program lain di host. Go dependency juga dikelola oleh
+`go.mod` masing-masing module (`gateway` dan `ubot`), bukan instalasi global.
+
+Python virtual environment hanya diperlukan untuk tool Python terpisah yang tidak
+termasuk dalam runtime GotdBot.
+
 ## Konfigurasi `.env`
 
 Salin `.env.example`:
@@ -71,6 +81,31 @@ menjalankan dependency seperti Redis dan MongoDB lokal bila dipakai.
 Pada mode development, perubahan kode cukup dilakukan dengan restart proses Go.
 Pada mode production, perubahan kode membutuhkan rebuild image dengan
 `docker compose up -d --build`.
+
+### Memberi nama project Docker Compose
+
+Jika ingin nama container dan network lebih mudah dikenali, gunakan opsi `-p`.
+Gunakan nama project yang sama untuk perintah berikutnya:
+
+```powershell
+# Production
+docker compose -p gotdbot up -d --build --remove-orphans
+docker compose -p gotdbot ps
+docker compose -p gotdbot logs -f gateway
+docker compose -p gotdbot down
+```
+
+Untuk dependency mode development:
+
+```powershell
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml up -d mongo redis
+docker compose -p gotdbot-dev ps
+docker compose -p gotdbot-dev down --remove-orphans
+```
+
+Opsi `-p` hanya mengatur nama project Compose; image, source code, dan volume
+tidak berubah. Jika memakai `run.ps1` atau `run-dev.ps1`, script menggunakan
+nama project default berdasarkan nama folder repository.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\run-dev.ps1
