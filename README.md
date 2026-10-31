@@ -168,6 +168,56 @@ Perintah ini aman dijalankan sebelum berpindah dari mode development ke
 production. Jangan menambahkan `--volumes` jika sesi userbot dan data MongoDB
 lokal masih ingin dipertahankan.
 
+### Development di VPS Linux
+
+`run-dev.ps1` hanya untuk Windows. Di VPS Ubuntu, jalankan dependency dan
+aplikasi secara manual pada terminal terpisah.
+
+Terminal 1 — MongoDB dan Redis:
+
+```bash
+cd ~/GotdBot
+docker compose -p gotdbot-dev \
+  -f docker-compose.yaml \
+  -f docker-compose.dev.yaml \
+  up -d mongo redis
+```
+
+Terminal 2 — Gateway:
+
+```bash
+cd ~/GotdBot/gateway
+go run ./main
+```
+
+Terminal 3 — Ubot:
+
+```bash
+cd ~/GotdBot/ubot
+go run ./main
+```
+
+Cek dependency development:
+
+```bash
+docker compose -p gotdbot-dev \
+  -f docker-compose.yaml \
+  -f docker-compose.dev.yaml \
+  ps
+```
+
+Hentikan dependency development:
+
+```bash
+docker compose -p gotdbot-dev \
+  -f docker-compose.yaml \
+  -f docker-compose.dev.yaml \
+  down --remove-orphans
+```
+
+Mode ini cocok untuk debugging sementara. Untuk aplikasi VPS yang berjalan
+24/7, gunakan mode production Docker dengan project name `gotdbot`.
+
 ## Production di VPS
 
 Ikuti langkah berikut setelah masuk ke VPS melalui SSH.
@@ -234,8 +284,8 @@ Isi `API_ID`, `API_HASH`, `BOT_TOKEN`, `MONGO_URI`, `REDIS_PASS`, dan
 ### 5. Build dan jalankan production
 
 ```bash
-docker compose up -d --build --remove-orphans
-docker compose ps
+docker compose -p gotdbot up -d --build --remove-orphans
+docker compose -p gotdbot ps
 ```
 
 Pastikan port keluar HTTPS (443) dan DNS VPS berfungsi. MongoDB Atlas harus
@@ -247,8 +297,8 @@ Jalankan setelah reboot VPS:
 
 ```bash
 cd GotdBot
-docker compose up -d
-docker compose ps
+docker compose -p gotdbot up -d
+docker compose -p gotdbot ps
 ```
 
 Pada Windows, alternatifnya:
@@ -263,22 +313,22 @@ Untuk mode foreground, jalankan `powershell -ExecutionPolicy Bypass -File .\run.
 Log dan update:
 
 ```bash
-docker compose logs -f gateway
-docker compose logs -f ubot
+docker compose -p gotdbot logs -f gateway
+docker compose -p gotdbot logs -f ubot
 git pull
-docker compose up -d --build --remove-orphans
+docker compose -p gotdbot up -d --build --remove-orphans
 ```
 
 Restart/stop:
 
 ```bash
-docker compose restart gateway ubot
-docker compose stop gateway ubot
-docker compose start gateway ubot
-docker compose down
+docker compose -p gotdbot restart gateway ubot
+docker compose -p gotdbot stop gateway ubot
+docker compose -p gotdbot start gateway ubot
+docker compose -p gotdbot down
 ```
 
-Jangan gunakan `docker compose down --volumes` kecuali memang ingin menghapus
+Jangan gunakan `docker compose -p gotdbot down --volumes` kecuali memang ingin menghapus
 data lokal secara permanen.
 
 ## Memasang userbot
@@ -360,21 +410,21 @@ gunakan migrasi atau login ulang.
 Periksa Redis:
 
 ```bash
-docker compose ps redis
-docker compose logs --tail=100 redis
+docker compose -p gotdbot ps redis
+docker compose -p gotdbot logs --tail=100 redis
 ```
 
 Jika ingin melihat seluruh status service:
 
 ```bash
-docker compose ps
-docker compose logs --tail=100 gateway ubot
+docker compose -p gotdbot ps
+docker compose -p gotdbot logs --tail=100 gateway ubot
 ```
 
 Jika source berubah tetapi container memakai image lama, rebuild:
 
 ```bash
-docker compose up -d --build --remove-orphans
+docker compose -p gotdbot up -d --build --remove-orphans
 ```
 
 ## Keamanan
