@@ -61,6 +61,17 @@ sesi dibuat karena sesi lama tidak dapat didekripsi.
 Mode ini menjalankan Gateway dan Ubot langsung dengan `go run`; Docker hanya
 menjalankan dependency seperti Redis dan MongoDB lokal bila dipakai.
 
+### Perbedaan mode Dev dan Production
+
+| Mode | Gateway/Ubot | MongoDB/Redis | Penggunaan |
+|---|---|---|---|
+| Development | Berjalan langsung dari source dengan `go run` | Berjalan di Docker | Pengembangan fitur dan debugging |
+| Production | Berjalan sebagai container Docker | Berjalan sebagai container Docker | VPS/deployment |
+
+Pada mode development, perubahan kode cukup dilakukan dengan restart proses Go.
+Pada mode production, perubahan kode membutuhkan rebuild image dengan
+`docker compose up -d --build`.
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\run-dev.ps1
 ```
@@ -110,6 +121,17 @@ Untuk menghentikan dependency development:
 ```bash
 docker compose -f docker-compose.yaml -f docker-compose.dev.yaml stop mongo redis
 ```
+
+Untuk menghentikan sekaligus menghapus seluruh container dan network yang dibuat
+oleh mode development, tanpa menghapus volume/data database:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.dev.yaml down --remove-orphans
+```
+
+Perintah ini aman dijalankan sebelum berpindah dari mode development ke
+production. Jangan menambahkan `--volumes` jika sesi userbot dan data MongoDB
+lokal masih ingin dipertahankan.
 
 ## Production di VPS
 
