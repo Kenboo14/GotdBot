@@ -170,70 +170,70 @@ lokal masih ingin dipertahankan.
 
 ## Production di VPS
 
-Sebelum instalasi, jalankan pemeriksaan ini agar terlihat komponen yang belum
-tersedia:
+Ikuti langkah berikut setelah masuk ke VPS melalui SSH.
+
+### 1. Periksa kebutuhan
+
+Jalankan perintah satu per satu:
 
 ```bash
-missing=()
-for command in docker git curl; do
-  if command -v "$command" >/dev/null 2>&1; then
-    printf '%-8s OK: ' "$command"
-    "$command" --version 2>/dev/null | head -n 1
-  else
-    printf '%-8s BELUM ADA\n' "$command"
-    missing+=("$command")
-  fi
-done
-
-if docker compose version >/dev/null 2>&1; then
-  echo "compose  OK: $(docker compose version --short)"
-else
-  echo "compose  BELUM ADA"
-  missing+=(docker-compose-plugin)
-fi
-
-if [ "${#missing[@]}" -eq 0 ]; then
-  echo "Semua kebutuhan tersedia; instalasi dapat dilewati."
-else
-  echo "Yang perlu disiapkan: ${missing[*]}"
-fi
+docker --version
+docker compose version
+git --version
+curl --version
 ```
 
-Jika output menunjukkan Docker belum ada, jalankan blok berikut. Perintah ini
-tidak perlu dijalankan jika pemeriksaan di atas menyatakan semuanya tersedia:
+Jika semuanya menampilkan versi, lewati langkah instalasi dan lanjut ke langkah
+deploy. Jika ada `command not found`, pasang komponen yang belum tersedia.
+
+### 2. Instal Docker jika belum tersedia
+
+Jalankan blok ini hanya jika `docker --version` gagal:
 
 ```bash
 sudo apt update
 sudo apt install -y ca-certificates curl git
-if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sudo sh
-fi
+curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
-if ! docker compose version >/dev/null 2>&1; then
-  sudo apt install -y docker-compose-plugin
-fi
-docker --version
-docker compose version
 ```
 
-Setelah itu, buka sesi SSH baru (atau jalankan `newgrp docker`) agar akses
-Docker tanpa `sudo` aktif.
+Keluar dari SSH lalu masuk kembali, atau jalankan:
 
-Jika Docker sudah ada tetapi Compose belum ada, cukup pasang plugin Compose:
+```bash
+newgrp docker
+```
+
+### 3. Instal Docker Compose jika belum tersedia
+
+Jalankan ini hanya jika `docker compose version` gagal:
 
 ```bash
 sudo apt update
 sudo apt install -y docker-compose-plugin
+```
+
+Verifikasi ulang:
+
+```bash
+docker --version
 docker compose version
 ```
 
-Deploy:
+### 4. Clone dan konfigurasi GotdBot
 
 ```bash
-git clone <URL_REPOSITORY> GotdBot
+git clone https://github.com/Kenboo14/GotdBot.git
 cd GotdBot
 cp .env.example .env
 nano .env
+```
+
+Isi `API_ID`, `API_HASH`, `BOT_TOKEN`, `MONGO_URI`, `REDIS_PASS`, dan
+`SESSION_ENCRYPTION_KEY`, lalu simpan file `.env`.
+
+### 5. Build dan jalankan production
+
+```bash
 docker compose up -d --build --remove-orphans
 docker compose ps
 ```
