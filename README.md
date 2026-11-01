@@ -49,7 +49,8 @@ Isi `.env`:
 API_ID=12345678
 API_HASH=isi_api_hash
 BOT_TOKEN=token_dari_botfather
-MONGO_URI=mongodb+srv://USER:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority
+REDIS_ADDR=localhost:6379
+MONGO_URI='mongodb+srv://USER:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority'
 MONGO_DB=gotdbot
 REDIS_PASS=ganti_password_redis
 SESSION_ENCRYPTION_KEY=base64_32_byte_key
@@ -65,6 +66,15 @@ Untuk MongoDB lokal Compose, gunakan `MONGO_URI=mongodb://mongo:27017`. Untuk
 Atlas, tambahkan IP komputer/VPS pada **Network Access**. Jangan commit `.env`
 atau membagikan URI database. Jangan mengganti `SESSION_ENCRYPTION_KEY` setelah
 sesi dibuat karena sesi lama tidak dapat didekripsi.
+
+Saat menjalankan Gateway/Ubot langsung dengan `go run` di VPS, gunakan
+`REDIS_ADDR=localhost:6379`. Docker production mengubahnya otomatis menjadi
+`redis:6379`. Jika `.env` dimuat dengan `source .env`, beri tanda kutip pada URI
+MongoDB karena URL mengandung karakter `&`:
+
+```dotenv
+MONGO_URI='mongodb+srv://USER:PASSWORD@cluster.mongodb.net/?retryWrites=true&w=majority&appName=GotdBot'
+```
 
 ## Development di Terminal VS Code
 
@@ -218,6 +228,50 @@ docker compose -p gotdbot-dev \
 Mode ini cocok untuk debugging sementara. Untuk aplikasi VPS yang berjalan
 24/7, gunakan mode production Docker dengan project name `gotdbot`.
 
+#### Menjalankan mode dev dengan `tmux`
+
+`tmux` menjaga Gateway dan Ubot tetap berjalan setelah koneksi SSH ditutup.
+Install terlebih dahulu jika belum tersedia:
+
+```bash
+sudo apt update
+sudo apt install -y tmux
+```
+
+Dari root project, muat `.env` lalu buat satu session untuk dua aplikasi:
+
+```bash
+cd ~/GotdBot
+set -a
+source .env
+set +a
+
+tmux new-session -d -s gotdbot-dev -n gateway \
+  "cd ~/GotdBot/gateway && go run ./main; bash"
+
+tmux new-window -t gotdbot-dev -n ubot \
+  "cd ~/GotdBot/ubot && go run ./main; bash"
+```
+
+Masuk ke session:
+
+```bash
+tmux attach -t gotdbot-dev
+```
+
+Di dalam tmux, tekan `Ctrl+B`, lepaskan, lalu tekan `D` untuk detach tanpa
+menghentikan aplikasi. Perintah lifecycle yang berguna:
+
+```bash
+tmux ls                         # lihat session
+tmux attach -t gotdbot-dev      # masuk kembali
+tmux kill-session -t gotdbot-dev # hentikan Gateway dan Ubot
+```
+
+Jika `go: command not found`, install Go terlebih dahulu. `tmux` hanya dipakai
+untuk development VPS; production menggunakan container Docker dan tidak
+memerlukan `go run` atau `tmux`.
+
 ## Production di VPS
 
 Ikuti langkah berikut setelah masuk ke VPS melalui SSH.
@@ -235,6 +289,10 @@ curl --version
 
 Jika semuanya menampilkan versi, lewati langkah instalasi dan lanjut ke langkah
 deploy. Jika ada `command not found`, pasang komponen yang belum tersedia.
+
+> Jika VPS menampilkan `docker-compose version 1.29.2`, gunakan perintah
+> `docker-compose` (dengan tanda hubung) pada panduan ini. Jika tersedia
+> `docker compose version`, gunakan format `docker compose`.
 
 ### 2. Instal Docker jika belum tersedia
 
@@ -255,11 +313,15 @@ newgrp docker
 
 ### 3. Instal Docker Compose jika belum tersedia
 
-Jalankan ini hanya jika `docker compose version` gagal:
+Jalankan ini hanya jika `docker compose version` gagal. Perintah berikut
+memasang Compose resmi `v5.6.1` untuk Linux AMD64 sebagai plugin Docker:
 
 ```bash
-sudo apt update
-sudo apt install -y docker-compose-plugin
+mkdir -p "$HOME/.docker/cli-plugins"
+curl -fL \
+  https://github.com/docker/compose/releases/download/v5.6.1/docker-compose-linux-x86_64 \
+  -o "$HOME/.docker/cli-plugins/docker-compose"
+chmod +x "$HOME/.docker/cli-plugins/docker-compose"
 ```
 
 Verifikasi ulang:
@@ -434,3 +496,75 @@ docker compose -p gotdbot up -d --build --remove-orphans
 - Gunakan password MongoDB dan Redis yang kuat.
 - Eval dapat menjalankan kode Go dengan hak proses Ubot; gunakan hanya untuk
   pengguna yang dipercaya.
+
+## Contekan Operasional VPS
+
+Jalankan perintah dari folder project:
+
+```bash
+cd /home/ubuntu/GotdBot
+```
+
+### Development (`gotdbot-dev`)
+
+```bash
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml up -d
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml ps -a
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml restart gateway ubot
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml stop gateway ubot
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml start gateway ubot
+docker compose -p gotdbot-dev -f docker-compose.yaml -f docker-compose.dev.yaml down --remove-orphans
+```
+
+### Production (`gotdbot`)
+
+```bash
+docker compose -p gotdbot -f docker-compose.yaml up -d --no-build
+docker compose -p gotdbot -f docker-compose.yaml ps
+docker compose -p gotdbot -f docker-compose.yaml restart gateway ubot
+docker compose -p gotdbot -f docker-compose.yaml stop
+```
+
+Gunakan `--build` hanya jika image belum tersedia atau memang ingin build di
+VPS. Untuk deployment berbasis image GHCR:
+
+```bash
+docker compose -p gotdbot pull gateway ubot
+docker compose -p gotdbot up -d --no-build --no-deps gateway ubot
+```
+
+Pastikan Compose memakai `image:` GHCR; jika hanya memakai `build:`, perintah
+`pull` tidak akan mengambil image aplikasi. Jika package GHCR private:
+
+```bash
+docker login ghcr.io
+```
+
+Gunakan token GitHub dengan izin `read:packages` dan jangan membagikannya.
+
+### Log dan resource
+
+```bash
+docker compose -p gotdbot logs --tail=100 gateway ubot
+docker compose -p gotdbot logs -f gateway ubot
+docker ps -a
+docker images
+docker volume ls
+docker stats --no-stream
+free -h
+df -h
+```
+
+Jika build Go menampilkan `signal: killed`, VPS kehabisan memori saat compile.
+Gunakan image GHCR prebuilt atau VPS dengan RAM lebih besar. Jangan hapus volume
+database untuk mengatasi masalah build.
+
+Jangan menjalankan perintah berikut tanpa backup:
+
+```bash
+docker compose down -v
+docker volume prune
+docker system prune -a --volumes
+git reset --hard
+git clean -fd
+```
