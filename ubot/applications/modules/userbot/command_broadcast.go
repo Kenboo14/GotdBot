@@ -127,7 +127,12 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		cancel()
 		return err
 	}
-	go s.runBroadcast(jobCtx, client, ownerID, targets, text, textEntities, replyMessageID, target, monitorChatID, taskID)
+	go func() {
+		// Batasi concurrent broadcast untuk menjaga CPU dan memory
+		s.broadcastSem <- struct{}{}
+		defer func() { <-s.broadcastSem }()
+		s.runBroadcast(jobCtx, client, ownerID, targets, text, textEntities, replyMessageID, target, monitorChatID, taskID)
+	}()
 	return nil
 }
 

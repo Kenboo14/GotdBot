@@ -1,9 +1,8 @@
-# Development dependencies only. Run the Go services on the host with
-# `go run ./main` from gateway/ and ubot/.
 services:
   mongo:
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
+
   redis:
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"

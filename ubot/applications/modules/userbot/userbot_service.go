@@ -31,18 +31,26 @@ import (
 )
 
 type Service struct {
-	root       context.Context
-	db         *mongo.Database
-	redis      *databases.Redis
-	apiID      int
-	apiHash    string
-	key        []byte
-	botToken   string
-	mu         sync.Mutex
-	logins     map[int64]*login
-	active     map[int64]*telegram.Client
-	prefixes   map[int64]string
-	broadcasts map[int64]context.CancelFunc
+	root             context.Context
+	db               *mongo.Database
+	redis            *databases.Redis
+	apiID            int
+	apiHash          string
+	key              []byte
+	botToken         string
+	inlineMu         sync.Mutex
+	botUsernameCache string
+	inlineBots       map[*telegram.Client]*tg.InputUser
+	mu               sync.Mutex
+	logins           map[int64]*login
+	active           map[int64]*telegram.Client
+	owners           map[int64]int64 // chatID -> ownerID
+	clientOwners     map[*telegram.Client]int64 // client -> ownerID
+	prefixes         map[int64]string
+	broadcasts       map[int64]context.CancelFunc
+	sudoMu           sync.RWMutex
+	sudoCache        map[string]bool // "ownerID:userID" -> bool
+	broadcastSem     chan struct{}   // Semaphore untuk membatasi concurrent gcast
 }
 type login struct {
 	cancel   context.CancelFunc
@@ -60,7 +68,24 @@ type record struct {
 }
 
 func NewService(root context.Context, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken string) *Service {
-	return &Service{root: root, db: db, redis: redis, apiID: apiID, apiHash: apiHash, key: key, botToken: botToken, logins: make(map[int64]*login), active: make(map[int64]*telegram.Client), prefixes: make(map[int64]string), broadcasts: make(map[int64]context.CancelFunc)}
+	return &Service{
+		root:             root,
+		db:               db,
+		redis:            redis,
+		apiID:            apiID,
+		apiHash:          apiHash,
+		key:              key,
+		botToken:         botToken,
+		logins:           make(map[int64]*login),
+		active:           make(map[int64]*telegram.Client),
+		owners:           make(map[int64]int64),
+		clientOwners:     make(map[*telegram.Client]int64),
+		prefixes:         make(map[int64]string),
+		broadcasts:       make(map[int64]context.CancelFunc),
+		inlineBots:       make(map[*telegram.Client]*tg.InputUser),
+		sudoCache:        make(map[string]bool),
+		broadcastSem:     make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
+	}
 }
 
 func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
@@ -118,8 +143,9 @@ func (s *Service) Restore(ctx context.Context) {
 			}
 			s.mu.Lock()
 			s.prefixes[row.ChatID] = prefix
+			s.owners[row.ChatID] = row.AccountID
 			s.mu.Unlock()
-			s.activate(row.ChatID)
+			s.activate(row.ChatID, row.AccountID)
 		}
 	}
 }
@@ -231,12 +257,13 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 		}
 		s.mu.Lock()
 		s.prefixes[chatID] = "!"
+		s.owners[chatID] = self.ID
 		s.mu.Unlock()
 		if err := store.setPrefix(ctx, "!", true); err != nil {
 			return err
 		}
 		s.reply(ctx, chatID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")
-		s.activate(chatID)
+		s.activate(chatID, self.ID)
 		return nil
 	})
 }
@@ -265,20 +292,39 @@ func (s *Service) hasInstalledSession(ctx context.Context, chatID, ownerID int64
 }
 
 func (s *Service) remove(chatID int64) { s.mu.Lock(); delete(s.logins, chatID); s.mu.Unlock() }
-func (s *Service) activate(chatID int64) {
+func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	s.mu.Lock()
 	if _, ok := s.active[chatID]; ok {
 		s.mu.Unlock()
 		return
 	}
+	var ownerID int64
+	if len(knownOwnerID) > 0 {
+		ownerID = knownOwnerID[0]
+	}
+	if ownerID == 0 {
+		ownerID = s.owners[chatID]
+	}
 	// Reserve the key before starting the network client.
 	s.active[chatID] = nil
 	s.mu.Unlock()
 	go func() {
-		defer func() { s.mu.Lock(); delete(s.active, chatID); s.mu.Unlock() }()
+		var client *telegram.Client
+		defer func() {
+			s.mu.Lock()
+			delete(s.active, chatID)
+			if client != nil {
+				delete(s.clientOwners, client)
+			}
+			s.mu.Unlock()
+			s.inlineMu.Lock()
+			if client != nil {
+				delete(s.inlineBots, client)
+			}
+			s.inlineMu.Unlock()
+		}()
 		store := &mongoStorage{collection: s.db.Collection("userbot_sessions"), chatID: chatID, key: s.key}
 		dispatcher := tg.NewUpdateDispatcher()
-		var client *telegram.Client
 		dispatcher.OnNewMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
 			return s.handleUserbotMessage(ctx, chatID, client, entities, update)
 		})
@@ -290,11 +336,20 @@ func (s *Service) activate(chatID int64) {
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: dispatcher})
 		s.mu.Lock()
 		s.active[chatID] = client
+		if ownerID > 0 {
+			s.owners[chatID] = ownerID
+			s.clientOwners[client] = ownerID
+		}
 		s.mu.Unlock()
 		_ = client.Run(s.root, func(ctx context.Context) error {
-			if _, err := client.Self(ctx); err != nil {
+			self, err := client.Self(ctx)
+			if err != nil {
 				return err
 			}
+			s.mu.Lock()
+			s.owners[chatID] = self.ID
+			s.clientOwners[client] = self.ID
+			s.mu.Unlock()
 			<-ctx.Done()
 			return ctx.Err()
 		})

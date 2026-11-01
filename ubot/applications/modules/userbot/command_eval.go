@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	maxEvalCodeBytes   = 16 * 1024
-	maxEvalOutputBytes = 64 * 1024
+	maxEvalCodeBytes   = 8 * 1024
+	maxEvalOutputBytes = 32 * 1024
 )
 
 // evaluatorCommand evaluates Go code. Shell commands remain exclusively in
@@ -77,7 +77,7 @@ func evaluateGo(ctx context.Context, code, commandArgs string, service *Service,
 			err = fmt.Errorf("panic saat evaluasi Go: %v", recovered)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if service == nil || client == nil {
 		return "", fmt.Errorf("context evaluator tidak tersedia")

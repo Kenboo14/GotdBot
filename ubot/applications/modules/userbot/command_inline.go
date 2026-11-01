@@ -20,24 +20,12 @@ func (s *Service) sendInlineHelp(ctx context.Context, client *telegram.Client, t
 }
 
 func (s *Service) sendInlineQuery(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, query string) error {
-	username, err := s.botUsername(ctx)
-	if err != nil {
-		return err
-	}
 	raw := client.API()
-	resolved, err := raw.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: username})
+	inputBot, err := s.inlineBotUser(ctx, client)
 	if err != nil {
 		return err
 	}
-	botPeer, err := peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
-	if err != nil {
-		return err
-	}
-	inputPeer, ok := botPeer.(*tg.InputPeerUser)
-	if !ok {
-		return fmt.Errorf("BOT_TOKEN bukan akun bot")
-	}
-	results, err := raw.MessagesGetInlineBotResults(ctx, &tg.MessagesGetInlineBotResultsRequest{Bot: &tg.InputUser{UserID: inputPeer.UserID, AccessHash: inputPeer.AccessHash}, Peer: target, Query: query, Offset: ""})
+	results, err := raw.MessagesGetInlineBotResults(ctx, &tg.MessagesGetInlineBotResultsRequest{Bot: inputBot, Peer: target, Query: query, Offset: ""})
 	if err != nil {
 		return err
 	}
@@ -56,10 +44,57 @@ func (s *Service) sendInlineQuery(ctx context.Context, client *telegram.Client, 
 	return err
 }
 
+// inlineBotUser resolves the gateway bot once and reuses its input user for
+// subsequent commands. Resolving the same bot on every !help added two extra
+// network round trips to each command.
+func (s *Service) inlineBotUser(ctx context.Context, client *telegram.Client) (*tg.InputUser, error) {
+	username, err := s.botUsername(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.inlineMu.Lock()
+	if cachedBot := s.inlineBots[client]; cachedBot != nil {
+		cached := *cachedBot
+		s.inlineMu.Unlock()
+		return &cached, nil
+	}
+	s.inlineMu.Unlock()
+	resolved, err := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: username})
+	if err != nil {
+		return nil, err
+	}
+	botPeer, err := peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
+	if err != nil {
+		return nil, err
+	}
+	inputPeer, ok := botPeer.(*tg.InputPeerUser)
+	if !ok {
+		return nil, fmt.Errorf("BOT_TOKEN bukan akun bot")
+	}
+	resolvedBot := &tg.InputUser{UserID: inputPeer.UserID, AccessHash: inputPeer.AccessHash}
+	s.inlineMu.Lock()
+	if s.inlineBots == nil {
+		s.inlineBots = make(map[*telegram.Client]*tg.InputUser)
+	}
+	if s.inlineBots[client] == nil {
+		s.inlineBots[client] = resolvedBot
+	}
+	cached := *s.inlineBots[client]
+	s.inlineMu.Unlock()
+	return &cached, nil
+}
+
 func (s *Service) botUsername(ctx context.Context) (string, error) {
 	if strings.TrimSpace(s.botToken) == "" {
 		return "", fmt.Errorf("BOT_TOKEN belum dikonfigurasi")
 	}
+	s.inlineMu.Lock()
+	if s.botUsernameCache != "" {
+		username := s.botUsernameCache
+		s.inlineMu.Unlock()
+		return username, nil
+	}
+	s.inlineMu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telegram.org/bot"+s.botToken+"/getMe", nil)
 	if err != nil {
 		return "", err
@@ -81,5 +116,12 @@ func (s *Service) botUsername(ctx context.Context) (string, error) {
 	if !answer.OK || strings.TrimSpace(answer.Result.Username) == "" {
 		return "", fmt.Errorf("BOT_TOKEN tidak dapat di-resolve")
 	}
-	return strings.TrimPrefix(strings.TrimSpace(answer.Result.Username), "@"), nil
+	username := strings.TrimPrefix(strings.TrimSpace(answer.Result.Username), "@")
+	s.inlineMu.Lock()
+	if s.botUsernameCache == "" {
+		s.botUsernameCache = username
+	}
+	username = s.botUsernameCache
+	s.inlineMu.Unlock()
+	return username, nil
 }

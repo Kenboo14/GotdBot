@@ -33,7 +33,7 @@ func (s *Service) runCommand(ctx context.Context, client *telegram.Client, targe
 
 // processCommand is the common executor used by both !eval and !sh.
 func processCommand(ctx context.Context, command string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	shell, args := "sh", []string{"-c", command}
 	if runtime.GOOS == "windows" {

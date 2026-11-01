@@ -24,10 +24,20 @@ func sendUserText(ctx context.Context, client *telegram.Client, target tg.InputP
 }
 
 func (s *Service) userbotOwner(ctx context.Context, client *telegram.Client) (int64, error) {
+	s.mu.Lock()
+	if id, ok := s.clientOwners[client]; ok && id > 0 {
+		s.mu.Unlock()
+		return id, nil
+	}
+	s.mu.Unlock()
+
 	self, err := client.Self(ctx)
 	if err != nil {
 		return 0, err
 	}
+	s.mu.Lock()
+	s.clientOwners[client] = self.ID
+	s.mu.Unlock()
 	return self.ID, nil
 }
 
@@ -48,9 +58,21 @@ func (s *Service) isSudo(ctx context.Context, ownerID, userID int64) bool {
 	if ownerID == 0 || userID == 0 {
 		return false
 	}
+	cacheKey := fmt.Sprintf("%d:%d", ownerID, userID)
+	s.sudoMu.RLock()
+	allowed, found := s.sudoCache[cacheKey]
+	s.sudoMu.RUnlock()
+	if found {
+		return allowed
+	}
+
 	var row sudoRecord
 	err := s.db.Collection("userbot_sudo").FindOne(ctx, bson.M{"owner_id": ownerID, "user_id": userID}).Decode(&row)
-	return err == nil
+	allowed = err == nil
+	s.sudoMu.Lock()
+	s.sudoCache[cacheKey] = allowed
+	s.sudoMu.Unlock()
+	return allowed
 }
 
 func (s *Service) commandAllowed(ctx context.Context, client *telegram.Client, msg *tg.Message) bool {
@@ -82,9 +104,13 @@ func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, targ
 		return sendUserText(ctx, client, target, "User ID tidak valid. Gunakan ID numerik Telegram.")
 	}
 	collection := s.db.Collection("userbot_sudo")
+	cacheKey := fmt.Sprintf("%d:%d", ownerID, userID)
 	if add {
 		_, err = collection.UpdateOne(ctx, bson.M{"owner_id": ownerID, "user_id": userID}, bson.M{"$set": bson.M{"owner_id": ownerID, "user_id": userID}}, options.Update().SetUpsert(true))
 		if err == nil {
+			s.sudoMu.Lock()
+			s.sudoCache[cacheKey] = true
+			s.sudoMu.Unlock()
 			err = sendUserText(ctx, client, target, fmt.Sprintf("Sudo ditambahkan: %d", userID))
 		}
 		return err
@@ -93,6 +119,9 @@ func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, targ
 	if removeErr != nil {
 		return removeErr
 	}
+	s.sudoMu.Lock()
+	s.sudoCache[cacheKey] = false
+	s.sudoMu.Unlock()
 	text := fmt.Sprintf("Sudo dihapus: %d", userID)
 	if result.DeletedCount == 0 {
 		text = "User tersebut tidak ada di daftar sudo."

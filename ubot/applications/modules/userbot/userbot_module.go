@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"log"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // Init owns short-lived MTProto login clients. Persisted sessions are restored
@@ -20,8 +22,24 @@ func (m *Init) Register(ctx context.Context, db *mongo.Database, redis *database
 		log.Printf("userbot disabled: invalid encryption key: %v", err)
 		return
 	}
+	ensureIndexes(ctx, db)
 	service := NewService(ctx, db, redis, m.Config.Userbot.APIID, m.Config.Userbot.APIHash, key, m.Config.Telegram.BotToken)
 	go service.Restore(ctx)
 	go redis.Listener(ctx, "to:group:ubot", "to:worker:auth", "to:ubot:auth", service.Handle)
 	go redis.Listener(ctx, "to:group:command", "to:worker:command", "to:ubot:command", service.HandleCommand)
+}
+
+func ensureIndexes(ctx context.Context, db *mongo.Database) {
+	_, _ = db.Collection("userbot_sudo").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	_, _ = db.Collection("userbot_broadcast_blacklist").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "owner_id", Value: 1}, {Key: "type", Value: 1}, {Key: "chat_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
+	_, _ = db.Collection("userbot_sessions").Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "account_id", Value: 1}}},
+		{Keys: bson.D{{Key: "owner_id", Value: 1}}},
+	})
 }

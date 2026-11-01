@@ -15,7 +15,12 @@ if (-not (Test-Path '.env')) {
 Get-Content '.env' | ForEach-Object {
     $line = $_.Trim()
     if ($line -and -not $line.StartsWith('#') -and $line -match '^([^=]+)=(.*)$') {
-        [Environment]::SetEnvironmentVariable($Matches[1].Trim(), $Matches[2].Trim(), 'Process')
+        $value = $Matches[2].Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+            ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        [Environment]::SetEnvironmentVariable($Matches[1].Trim(), $value, 'Process')
     }
 }
 
