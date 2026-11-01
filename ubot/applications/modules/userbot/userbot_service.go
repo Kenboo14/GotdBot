@@ -44,8 +44,10 @@ type Service struct {
 	mu               sync.Mutex
 	logins           map[int64]*login
 	active           map[int64]*telegram.Client
-	owners           map[int64]int64 // chatID -> ownerID
-	clientOwners     map[*telegram.Client]int64 // client -> ownerID
+	activeCancels    map[int64]context.CancelFunc // cancel func untuk idle disconnect
+	lastActive       map[int64]time.Time          // chatID -> waktu aktivitas terakhir
+	owners           map[int64]int64              // chatID -> ownerID
+	clientOwners     map[*telegram.Client]int64   // client -> ownerID
 	prefixes         map[int64]string
 	broadcasts       map[int64]context.CancelFunc
 	sudoMu           sync.RWMutex
@@ -78,6 +80,8 @@ func NewService(root context.Context, db *mongo.Database, redis *databases.Redis
 		botToken:         botToken,
 		logins:           make(map[int64]*login),
 		active:           make(map[int64]*telegram.Client),
+		activeCancels:    make(map[int64]context.CancelFunc),
+		lastActive:       make(map[int64]time.Time),
 		owners:           make(map[int64]int64),
 		clientOwners:     make(map[*telegram.Client]int64),
 		prefixes:         make(map[int64]string),
@@ -112,10 +116,33 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 	s.mu.Lock()
 	client := s.active[job.UserID]
+	targetID := job.UserID
 	if client == nil {
 		client = s.active[job.ChatID]
+		targetID = job.ChatID
 	}
-	s.mu.Unlock()
+	if client == nil {
+		// On-demand wake up: jika sesi ada di database tapi sedang idle (dimatikan oleh reaper)
+		s.mu.Unlock()
+		s.activate(job.ChatID, job.UserID)
+		// Tunggu sejenak hingga client siap
+		for i := 0; i < 15; i++ {
+			time.Sleep(200 * time.Millisecond)
+			s.mu.Lock()
+			client = s.active[job.ChatID]
+			if client == nil {
+				client = s.active[job.UserID]
+			}
+			if client != nil {
+				targetID = job.ChatID
+				break
+			}
+			s.mu.Unlock()
+		}
+	} else {
+		s.lastActive[targetID] = time.Now()
+		s.mu.Unlock()
+	}
 	if client == nil {
 		s.reply(ctx, job.ChatID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")
 		return
@@ -146,6 +173,39 @@ func (s *Service) Restore(ctx context.Context) {
 			s.owners[row.ChatID] = row.AccountID
 			s.mu.Unlock()
 			s.activate(row.ChatID, row.AccountID)
+		}
+	}
+	// Jalankan reaper di background untuk mematikan sesi yang idle > 30 menit
+	go s.startIdleReaper(ctx)
+}
+
+func (s *Service) startIdleReaper(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.reapIdleSessions()
+		}
+	}
+}
+
+func (s *Service) reapIdleSessions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for chatID, cancel := range s.activeCancels {
+		last, ok := s.lastActive[chatID]
+		// Jika tidak ada aktivitas lebih dari 30 menit dan sedang tidak menjalankan broadcast
+		if ok && now.Sub(last) > 30*time.Minute {
+			ownerID := s.owners[chatID]
+			if s.broadcasts[ownerID] == nil && cancel != nil {
+				log.Printf("[IdleReaper] Menutup sesi idle chatID=%d untuk hemat RAM", chatID)
+				cancel()
+				delete(s.activeCancels, chatID)
+			}
 		}
 	}
 }
@@ -294,7 +354,8 @@ func (s *Service) hasInstalledSession(ctx context.Context, chatID, ownerID int64
 func (s *Service) remove(chatID int64) { s.mu.Lock(); delete(s.logins, chatID); s.mu.Unlock() }
 func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	s.mu.Lock()
-	if _, ok := s.active[chatID]; ok {
+	if c, ok := s.active[chatID]; ok && c != nil {
+		s.lastActive[chatID] = time.Now()
 		s.mu.Unlock()
 		return
 	}
@@ -307,12 +368,17 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	}
 	// Reserve the key before starting the network client.
 	s.active[chatID] = nil
+	s.lastActive[chatID] = time.Now()
+	clientCtx, clientCancel := context.WithCancel(s.root)
+	s.activeCancels[chatID] = clientCancel
 	s.mu.Unlock()
 	go func() {
 		var client *telegram.Client
 		defer func() {
 			s.mu.Lock()
 			delete(s.active, chatID)
+			delete(s.activeCancels, chatID)
+			delete(s.lastActive, chatID)
 			if client != nil {
 				delete(s.clientOwners, client)
 			}
@@ -326,11 +392,17 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		store := &mongoStorage{collection: s.db.Collection("userbot_sessions"), chatID: chatID, key: s.key}
 		dispatcher := tg.NewUpdateDispatcher()
 		dispatcher.OnNewMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
+			s.mu.Lock()
+			s.lastActive[chatID] = time.Now()
+			s.mu.Unlock()
 			return s.handleUserbotMessage(ctx, chatID, client, entities, update)
 		})
 		dispatcher.OnNewChannelMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
 			// Telegram represents supergroup/channel messages with a separate
 			// update constructor. Reuse the same outgoing-command dispatcher.
+			s.mu.Lock()
+			s.lastActive[chatID] = time.Now()
+			s.mu.Unlock()
 			return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
 		})
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: dispatcher})
@@ -341,7 +413,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.clientOwners[client] = ownerID
 		}
 		s.mu.Unlock()
-		_ = client.Run(s.root, func(ctx context.Context) error {
+		_ = client.Run(clientCtx, func(ctx context.Context) error {
 			self, err := client.Self(ctx)
 			if err != nil {
 				return err

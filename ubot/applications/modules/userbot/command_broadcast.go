@@ -360,9 +360,15 @@ func (s *Service) broadcastTargets(ctx context.Context, client *telegram.Client,
 	}
 	targets := make([]broadcastTarget, 0)
 	seen := map[string]bool{}
+	dialogCount := 0
 	// Iterate every page. A single raw getDialogs request only returns up to
 	// 100 dialogs, which previously caused broadcasts to miss older groups.
 	err := dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
+		dialogCount++
+		// Micro-pacing: berikan yield time singkat setiap 50 dialog untuk menghindari lonjakan CPU 100%
+		if dialogCount%50 == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
 		peer := item.Peer
 		entities := tg.Entities{
 			Users:    item.Entities.Users(),

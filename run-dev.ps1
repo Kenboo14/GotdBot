@@ -45,8 +45,12 @@ if ($dockerPath) {
     Write-Warning 'Docker tidak ditemukan. Pastikan MongoDB dan Redis lokal sudah berjalan.'
 }
 
-Write-Host 'Starting gateway and ubot in separate PowerShell windows...'
-Start-Process powershell -ArgumentList '-NoExit', '-Command', "Set-Location '$PWD\gateway'; go run ./main"
-Start-Process powershell -ArgumentList '-NoExit', '-Command', "Set-Location '$PWD\ubot'; go run ./main"
+# Optimization settings for low-spec servers (RAM & CPU tuning)
+$env:GOMEMLIMIT = if ($env:GOMEMLIMIT) { $env:GOMEMLIMIT } else { '750MiB' }
+$env:GOGC = if ($env:GOGC) { $env:GOGC } else { '50' }
+
+Write-Host "Starting gateway and ubot in separate PowerShell windows (GOMEMLIMIT=$($env:GOMEMLIMIT), GOGC=$($env:GOGC))..."
+Start-Process powershell -ArgumentList '-NoExit', '-Command', "`$env:GOMEMLIMIT='$($env:GOMEMLIMIT)'; `$env:GOGC='$($env:GOGC)'; Set-Location '$PWD\gateway'; go run ./main"
+Start-Process powershell -ArgumentList '-NoExit', '-Command', "`$env:GOMEMLIMIT='$($env:GOMEMLIMIT)'; `$env:GOGC='$($env:GOGC)'; Set-Location '$PWD\ubot'; go run ./main"
 
 Write-Host 'Development services started. Tutup jendela gateway/ubot untuk menghentikan aplikasinya.'
