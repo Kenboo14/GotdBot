@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,6 +16,9 @@ import (
 
 	"github.com/go-telegram/bot"
 	t_models "github.com/go-telegram/bot/models"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 var gatewayStartedAt = time.Now()
@@ -135,7 +139,7 @@ func (h *Handler) cancelInstall(ctx context.Context, b *bot.Bot, update *t_model
 	delete(h.Sessions.sessions, chatID)
 	h.Sessions.mu.Unlock()
 	_ = h.broker.To(ctx, "to:ubot:auth", models.PToService{ChatID: chatID, Type: "auth_cancel"})
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Pemasangan dibatalkan.", ReplyMarkup: &t_models.ReplyKeyboardRemove{RemoveKeyboard: true}})
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Pemasangan dibatalkan.", ReplyMarkup: cachedRemoveKeyboard})
 }
 
 func (h *Handler) setInstallState(chatID int64, state string) {
@@ -170,8 +174,8 @@ func normalizePhone(value string) string {
 	return value
 }
 
-func installPhoneKeyboard() *t_models.ReplyKeyboardMarkup {
-	return &t_models.ReplyKeyboardMarkup{
+var (
+	cachedInstallPhoneMarkup = &t_models.ReplyKeyboardMarkup{
 		Keyboard: [][]t_models.KeyboardButton{{
 			{Text: "Kirim Kontak", RequestContact: true},
 			{Text: "Cancel"},
@@ -179,13 +183,22 @@ func installPhoneKeyboard() *t_models.ReplyKeyboardMarkup {
 		ResizeKeyboard:  true,
 		OneTimeKeyboard: true,
 	}
-}
-
-func cancelKeyboard() *t_models.ReplyKeyboardMarkup {
-	return &t_models.ReplyKeyboardMarkup{
+	cachedCancelMarkup = &t_models.ReplyKeyboardMarkup{
 		Keyboard:       [][]t_models.KeyboardButton{{{Text: "Cancel"}}},
 		ResizeKeyboard: true,
 	}
+	cachedServerMarkup = &t_models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
+	}
+	cachedRemoveKeyboard = &t_models.ReplyKeyboardRemove{RemoveKeyboard: true}
+)
+
+func installPhoneKeyboard() *t_models.ReplyKeyboardMarkup {
+	return cachedInstallPhoneMarkup
+}
+
+func cancelKeyboard() *t_models.ReplyKeyboardMarkup {
+	return cachedCancelMarkup
 }
 
 func (h *Handler) PingCommand(ctx context.Context, b *bot.Bot, update *t_models.Update) {
@@ -204,7 +217,14 @@ func (h *Handler) HelpCommand(ctx context.Context, b *bot.Bot, update *t_models.
 	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "<b>Bantuan userbot</b>\n\n!ping / !p — ukur latency koneksi Telegram\n!help — tampilkan bantuan ini\n!code [bahasa] — format pesan reply\n!eval / !sh — jalankan perintah shell\n!setp none — hapus prefix command\n/create — pasang userbot baru\n/cancel — batalkan pemasangan", ParseMode: "HTML"})
 }
 
-func helpHomeKeyboard() *t_models.InlineKeyboardMarkup {
+var (
+	cachedHelpHomeMarkup = buildHelpHomeKeyboard()
+	cachedHelpBackMarkup = &t_models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "‹ Kembali", CallbackData: "assist_help:home"}}},
+	}
+)
+
+func buildHelpHomeKeyboard() *t_models.InlineKeyboardMarkup {
 	labels := []string{"Admin", "Broadcast", "Code", "Extra", "Global", "Info", "Logs", "Notes", "Ping", "PM Permit", "Prefixes", "Profile", "Server", "Sticker", "Sudo", "VC Tools"}
 	keys := []string{"admin", "broadcast", "code", "extra", "globalz", "info", "logs", "notes", "ping", "pmpermit", "prefixes", "profile", "server", "sticker", "sudo", "vctools"}
 	rows := make([][]t_models.InlineKeyboardButton, 0, (len(labels)+2)/3)
@@ -215,6 +235,10 @@ func helpHomeKeyboard() *t_models.InlineKeyboardMarkup {
 		rows[len(rows)-1] = append(rows[len(rows)-1], t_models.InlineKeyboardButton{Text: labels[i], CallbackData: "assist_help:" + keys[i]})
 	}
 	return &t_models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func helpHomeKeyboard() *t_models.InlineKeyboardMarkup {
+	return cachedHelpHomeMarkup
 }
 
 func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
@@ -238,11 +262,15 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 	} else if data == "assist_help:server" {
 		text = "<b>Server</b>\n\n<code>!server</code> menampilkan status resource gateway dan tombol refresh."
 	}
-	markup := helpHomeKeyboard()
+	markup := cachedHelpHomeMarkup
 	if data != "assist_help:home" {
-		markup = &t_models.InlineKeyboardMarkup{InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "‹ Kembali", CallbackData: "assist_help:home"}}}}
+		markup = cachedHelpBackMarkup
 	}
-	_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: update.CallbackQuery.ID})
+	// Jawab callback secara asynchronous di background agar loading spinner tombol langsung hilang tanpa memblokir edit tampilan pesan
+	go func(cbID string) {
+		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cbID})
+	}(update.CallbackQuery.ID)
+
 	edit := &bot.EditMessageTextParams{Text: text, ParseMode: "HTML", ReplyMarkup: markup}
 	if update.CallbackQuery.InlineMessageID != "" {
 		// Messages inserted through messages.sendInlineBotResult do not carry a
@@ -258,7 +286,13 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 }
 
 func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
-	edit := &bot.EditMessageTextParams{Text: serverStatusText(), ParseMode: "HTML", ReplyMarkup: serverKeyboard()}
+	invokeStart := time.Now()
+	var invokerID int64
+	if update.CallbackQuery != nil && update.CallbackQuery.From.ID > 0 {
+		invokerID = update.CallbackQuery.From.ID
+	}
+	text := serverStatusText(invokerID, time.Since(invokeStart))
+	edit := &bot.EditMessageTextParams{Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()}
 	if update.CallbackQuery.InlineMessageID != "" {
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
 	} else if update.CallbackQuery.Message.Message != nil {
@@ -267,7 +301,9 @@ func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_mode
 	} else {
 		return
 	}
-	_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: update.CallbackQuery.ID, Text: "Status diperbarui"})
+	go func(cbID string) {
+		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cbID, Text: "Status diperbarui"})
+	}(update.CallbackQuery.ID)
 	_, _ = b.EditMessageText(ctx, edit)
 }
 
@@ -282,7 +318,13 @@ func (h *Handler) ServerCommand(ctx context.Context, b *bot.Bot, update *t_model
 	if update.Message == nil {
 		return
 	}
-	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: serverStatusText(), ParseMode: "HTML", ReplyMarkup: serverKeyboard()})
+	invokeStart := time.Now()
+	var invokerID int64
+	if update.Message.From != nil {
+		invokerID = update.Message.From.ID
+	}
+	text := serverStatusText(invokerID, time.Since(invokeStart))
+	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()})
 }
 
 func (h *Handler) CodeCommand(ctx context.Context, b *bot.Bot, update *t_models.Update) {
@@ -352,7 +394,13 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 		return
 	}
 	if query == "server" {
-		result := &t_models.InlineQueryResultArticle{ID: "assist_server", Title: "Server status", Description: "Status gateway dan resource proses", InputMessageContent: &t_models.InputTextMessageContent{MessageText: serverStatusText(), ParseMode: "HTML"}, ReplyMarkup: serverKeyboard()}
+		invokeStart := time.Now()
+		var invokerID int64
+		if update.InlineQuery != nil && update.InlineQuery.From.ID > 0 {
+			invokerID = update.InlineQuery.From.ID
+		}
+		text := serverStatusText(invokerID, time.Since(invokeStart))
+		result := &t_models.InlineQueryResultArticle{ID: "assist_server", Title: "Server status", Description: "Status gateway dan resource sistem lengkap", InputMessageContent: &t_models.InputTextMessageContent{MessageText: text, ParseMode: "HTML"}, ReplyMarkup: serverKeyboard()}
 		_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{result}, CacheTime: 0, IsPersonal: false})
 		return
 	}
@@ -394,13 +442,108 @@ func mustInt(value string) int {
 }
 
 func serverKeyboard() *t_models.InlineKeyboardMarkup {
-	return &t_models.InlineKeyboardMarkup{InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}}}
+	return cachedServerMarkup
 }
 
-func serverStatusText() string {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
-	return fmt.Sprintf("<b>Status server</b>\nGoroutine: <b>%d</b>\nRAM proses: <b>%.1f MB</b>\nHeap aktif: <b>%.1f MB</b>\nUptime gateway: <b>%s</b>", runtime.NumGoroutine(), float64(mem.Sys)/1024/1024, float64(mem.HeapAlloc)/1024/1024, formatUptime(time.Since(gatewayStartedAt)))
+func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	// Latency / Ping Server (TCP connect ke DNS 1.1.1.1:53)
+	pingServerStart := time.Now()
+	conn, err := net.DialTimeout("tcp", "1.1.1.1:53", 1500*time.Millisecond)
+	pingServerMs := float64(time.Since(pingServerStart).Microseconds()) / 1000.0
+	if err == nil {
+		_ = conn.Close()
+	} else {
+		pingServerMs = -1
+	}
+
+	// CPU Usage
+	cpuPercents, _ := cpu.Percent(0, false)
+	cpuUsage := 0.0
+	if len(cpuPercents) > 0 {
+		cpuUsage = cpuPercents[0]
+	}
+
+	// System RAM & Swap / Swapon
+	vMem, _ := mem.VirtualMemory()
+	sMem, _ := mem.SwapMemory()
+
+	totalRAMMB := 0.0
+	usedRAMMB := 0.0
+	ramPercent := 0.0
+	if vMem != nil {
+		totalRAMMB = float64(vMem.Total) / 1024 / 1024
+		usedRAMMB = float64(vMem.Used) / 1024 / 1024
+		ramPercent = vMem.UsedPercent
+	}
+
+	totalSwapMB := 0.0
+	usedSwapMB := 0.0
+	swapPercent := 0.0
+	if sMem != nil {
+		totalSwapMB = float64(sMem.Total) / 1024 / 1024
+		usedSwapMB = float64(sMem.Used) / 1024 / 1024
+		swapPercent = sMem.UsedPercent
+	}
+
+	// Disk I/O
+	diskStats, _ := disk.IOCounters()
+	readMB := 0.0
+	writeMB := 0.0
+	for _, stat := range diskStats {
+		readMB += float64(stat.ReadBytes) / 1024 / 1024
+		writeMB += float64(stat.WriteBytes) / 1024 / 1024
+	}
+
+	// Format invoke & ping
+	invokeStr := "-"
+	if invokeDuration > 0 {
+		invokeStr = fmt.Sprintf("%.2f ms", float64(invokeDuration.Microseconds())/1000.0)
+	}
+	serverPingStr := "Timeout"
+	if pingServerMs >= 0 {
+		serverPingStr = fmt.Sprintf("%.2f ms", pingServerMs)
+	}
+
+	userInvokeStr := "-"
+	if invokerID > 0 {
+		userInvokeStr = fmt.Sprintf("<code>%d</code>", invokerID)
+	}
+
+	return fmt.Sprintf(`<b>⚡ Status Server GotdBot</b>
+
+👤 <b>User Invoke:</b> %s
+⏱ <b>Latency Invoke:</b> <code>%s</code>
+🌐 <b>Ping Server:</b> <code>%s</code>
+
+⚙️ <b>CPU:</b> <code>%.1f%%</code> (%d Cores)
+🧠 <b>System RAM:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
+💾 <b>Swapon:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
+🔄 <b>Disk I/O:</b> <code>R: %.1f MB | W: %.1f MB</code>
+
+📦 <b>RAM Proses (Go):</b> <code>%.1f MB</code> (Heap: <code>%.1f MB</code>)
+🧵 <b>Goroutine:</b> <code>%d</code>
+⏳ <b>Uptime:</b> <code>%s</code>`,
+		userInvokeStr,
+		invokeStr,
+		serverPingStr,
+		cpuUsage,
+		runtime.NumCPU(),
+		usedRAMMB,
+		totalRAMMB,
+		ramPercent,
+		usedSwapMB,
+		totalSwapMB,
+		swapPercent,
+		readMB,
+		writeMB,
+		float64(m.Sys)/1024/1024,
+		float64(m.HeapAlloc)/1024/1024,
+		runtime.NumGoroutine(),
+		formatUptime(time.Since(gatewayStartedAt)),
+	)
 }
 
 func formatUptime(d time.Duration) string {

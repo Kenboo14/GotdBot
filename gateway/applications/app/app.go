@@ -42,8 +42,19 @@ func Run(ctx context.Context) {
 		&controllers.Init{},
 	}
 
+	httpClient := &http.Client{
+		Timeout: 65 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 50,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  false,
+		},
+	}
+
 	opts := []bot.Option{
 		bot.WithMiddlewares(),
+		bot.WithHTTPClient(65*time.Second, httpClient),
 	}
 	// Telegram Bot
 	b, err := bot.New(cfg.Telegram.BotToken, opts...)
@@ -57,14 +68,13 @@ func Run(ctx context.Context) {
 
 	go WaitShutdown(ctx)
 
-	startPolling(ctx, b, controllers.HandleInline)
+	startPolling(ctx, b, httpClient, controllers.HandleInline)
 }
 
 // startPolling owns the single getUpdates loop. go-telegram/bot v1.17 does
 // not expose an InlineQuery handler type, so inline_query updates are handled
 // by the supplied callback while all other updates use the library dispatcher.
-func startPolling(ctx context.Context, b *bot.Bot, inlineHandler func(context.Context, *bot.Bot, *t_models.Update)) {
-	client := &http.Client{Timeout: 65 * time.Second}
+func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHandler func(context.Context, *bot.Bot, *t_models.Update)) {
 	offset := int64(0)
 	for {
 		select {
@@ -72,7 +82,11 @@ func startPolling(ctx context.Context, b *bot.Bot, inlineHandler func(context.Co
 			return
 		default:
 		}
-		params := url.Values{"timeout": {"50"}, "allowed_updates": {`["message","callback_query","inline_query"]`}}
+		params := url.Values{
+			"timeout":         {"50"},
+			"limit":           {"100"},
+			"allowed_updates": {`["message","callback_query","inline_query"]`},
+		}
 		if offset > 0 {
 			params.Set("offset", strconv.FormatInt(offset, 10))
 		}
@@ -108,11 +122,12 @@ func startPolling(ctx context.Context, b *bot.Bot, inlineHandler func(context.Co
 			if update.ID >= offset {
 				offset = update.ID + 1
 			}
-			if update.InlineQuery != nil && inlineHandler != nil {
-				inlineHandler(ctx, b, &update)
+			up := update
+			if up.InlineQuery != nil && inlineHandler != nil {
+				go inlineHandler(ctx, b, &up)
 				continue
 			}
-			b.ProcessUpdate(ctx, &update)
+			go b.ProcessUpdate(ctx, &up)
 		}
 	}
 }

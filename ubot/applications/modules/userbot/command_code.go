@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 )
 
@@ -20,7 +19,7 @@ func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client
 	}
 	source, err := s.replySource(ctx, client, msg, target)
 	if err != nil || strings.TrimSpace(source) == "" {
-		_, sendErr := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, "Reply pesan yang mau di-code terlebih dahulu.")
+		_, sendErr := s.getSender(client).To(target).Text(ctx, "Reply pesan yang mau di-code terlebih dahulu.")
 		return sendErr
 	}
 	refBytes := make([]byte, 12)
@@ -34,7 +33,7 @@ func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client
 	query := "code " + language + " ref:" + ref
 	if err := s.sendInlineQuery(ctx, client, target, query); err != nil {
 		log.Printf("[userbot %d] !code inline gagal: %v", msg.ID, err)
-		_, sendErr := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, "Code formatter tidak bisa dibuka. Pastikan inline mode bot aktif.")
+		_, sendErr := s.getSender(client).To(target).Text(ctx, "Code formatter tidak bisa dibuka. Pastikan inline mode bot aktif.")
 		return sendErr
 	}
 	return nil

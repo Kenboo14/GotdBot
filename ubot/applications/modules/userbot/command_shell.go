@@ -21,14 +21,14 @@ func (s *Service) shellCommand(ctx context.Context, client *telegram.Client, tar
 
 func (s *Service) runCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, name, args string) error {
 	if strings.TrimSpace(args) == "" {
-		_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, "Gunakan: "+prefix+name+" <perintah>")
+		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: "+prefix+name+" <perintah>")
 		return err
 	}
 	output, runErr := processCommand(ctx, args)
 	if runErr != nil {
 		output = runErr.Error() + "\n" + output
 	}
-	return sendCommandOutput(ctx, client, target, output)
+	return s.sendCommandOutput(ctx, client, target, output)
 }
 
 // processCommand is the common executor used by both !eval and !sh.
@@ -48,14 +48,15 @@ func processCommand(ctx context.Context, command string) (string, error) {
 	return string(out), err
 }
 
-func sendCommandOutput(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, output string) error {
+func (s *Service) sendCommandOutput(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, output string) error {
 	if strings.TrimSpace(output) == "" {
 		output = "(tidak ada output)"
 	}
+	sender := s.getSender(client)
 	if len(output) > 3900 {
-		_, err := message.NewSender(tg.NewClient(client)).To(target).Upload(message.FromBytes("dump.txt", []byte(output))).File(ctx)
+		_, err := sender.To(target).Upload(message.FromBytes("dump.txt", []byte(output))).File(ctx)
 		return err
 	}
-	_, err := message.NewSender(tg.NewClient(client)).To(target).StyledText(ctx, styling.Code(output))
+	_, err := sender.To(target).StyledText(ctx, styling.Code(output))
 	return err
 }

@@ -36,20 +36,21 @@ func (s *Service) evaluatorCommand(ctx context.Context, client *telegram.Client,
 		args = reply.Message
 	}
 	if strings.TrimSpace(args) == "" {
-		_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, "Gunakan: "+prefix+"eval <kode Go>")
+		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: "+prefix+"eval <kode Go>")
 		return err
 	}
 	if len(args) > maxEvalCodeBytes {
-		_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, fmt.Sprintf("Kode eval terlalu panjang (maksimal %d KB).", maxEvalCodeBytes/1024))
+		_, err := s.getSender(client).To(target).Text(ctx, fmt.Sprintf("Kode eval terlalu panjang (maksimal %d KB).", maxEvalCodeBytes/1024))
 		return err
 	}
+	sender := s.getSender(client)
 	replyFunc := func(replyCtx context.Context, text string) error {
 		// Use the command context even when Yaegi calls m.Reply(), so a reply
 		// cannot outlive the eval timeout.
 		if replyCtx == nil {
 			replyCtx = ctx
 		}
-		_, err := message.NewSender(tg.NewClient(client)).To(target).Text(replyCtx, text)
+		_, err := sender.To(target).Text(replyCtx, text)
 		return err
 	}
 	output, err := evaluateGo(ctx, args, commandArgs, s, client, msg, reply, entities, replyFunc)
@@ -58,10 +59,10 @@ func (s *Service) evaluatorCommand(ctx context.Context, client *telegram.Client,
 	}
 	result := args + "\n\nOutput:\n" + output
 	if len(result) > 3900 {
-		_, sendErr := message.NewSender(tg.NewClient(client)).To(target).Upload(message.FromBytes("dump.txt", []byte(result))).File(ctx)
+		_, sendErr := sender.To(target).Upload(message.FromBytes("dump.txt", []byte(result))).File(ctx)
 		return sendErr
 	}
-	_, err = message.NewSender(tg.NewClient(client)).To(target).StyledText(ctx,
+	_, err = sender.To(target).StyledText(ctx,
 		styling.Bold("Go\n"),
 		styling.Pre(args, "go"),
 		styling.Bold("\n\nOutput:\n"),

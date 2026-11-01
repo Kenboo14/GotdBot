@@ -57,7 +57,7 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 		"ts":      time.Now().Unix(),
 	}
 
-	id, err := r.Client.XAdd(ctx, &redis.XAddArgs{
+	_, err = r.Client.XAdd(ctx, &redis.XAddArgs{
 		Stream: stream,
 		MaxLen: 1000,
 		Approx: true,
@@ -70,7 +70,6 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 		return err
 	}
 
-	log.Printf("✅ Message Sent! Stream: %s | ID: %s", stream, id)
 	return nil
 
 }
@@ -156,7 +155,7 @@ func (r *Redis) Listener(ctx context.Context, b *bot.Bot, group string, worker s
 			Group:    group,
 			Consumer: worker,
 			Streams:  []string{stream, ">"}, // ">" artinya pesan baru
-			Count:    1,
+			Count:    50,
 			Block:    2 * time.Second,
 		}).Result()
 

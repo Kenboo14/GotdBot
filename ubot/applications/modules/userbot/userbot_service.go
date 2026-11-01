@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,24 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+// idleTimeoutMinutes controls how long an inactive session stays alive before
+// the reaper disconnects it. Override with IDLE_TIMEOUT_MINUTES env var.
+var idleTimeoutMinutes = 30
+
+// maxActiveSessions is the hard cap on simultaneously connected MTProto clients.
+// Override with MAX_ACTIVE_SESSIONS env var. When the cap is hit, the oldest
+// idle session is evicted before a new one connects.
+var maxActiveSessions = 100
+
+func init() {
+	if v, err := strconv.Atoi(os.Getenv("IDLE_TIMEOUT_MINUTES")); err == nil && v > 0 {
+		idleTimeoutMinutes = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("MAX_ACTIVE_SESSIONS")); err == nil && v > 0 {
+		maxActiveSessions = v
+	}
+}
 
 type Service struct {
 	root             context.Context
@@ -48,6 +68,7 @@ type Service struct {
 	lastActive       map[int64]time.Time          // chatID -> waktu aktivitas terakhir
 	owners           map[int64]int64              // chatID -> ownerID
 	clientOwners     map[*telegram.Client]int64   // client -> ownerID
+	senderCache      map[*telegram.Client]*message.Sender // cached message.Sender per client
 	prefixes         map[int64]string
 	broadcasts       map[int64]context.CancelFunc
 	sudoMu           sync.RWMutex
@@ -84,12 +105,26 @@ func NewService(root context.Context, db *mongo.Database, redis *databases.Redis
 		lastActive:       make(map[int64]time.Time),
 		owners:           make(map[int64]int64),
 		clientOwners:     make(map[*telegram.Client]int64),
+		senderCache:      make(map[*telegram.Client]*message.Sender),
 		prefixes:         make(map[int64]string),
 		broadcasts:       make(map[int64]context.CancelFunc),
 		inlineBots:       make(map[*telegram.Client]*tg.InputUser),
 		sudoCache:        make(map[string]bool),
 		broadcastSem:     make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
 	}
+}
+
+// getSender returns a cached message.Sender for the given client, avoiding
+// repeated allocation of the wrapper on every command invocation.
+func (s *Service) getSender(client *telegram.Client) *message.Sender {
+	s.mu.Lock()
+	sender, ok := s.senderCache[client]
+	if !ok {
+		sender = message.NewSender(tg.NewClient(client))
+		s.senderCache[client] = sender
+	}
+	s.mu.Unlock()
+	return sender
 }
 
 func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
@@ -180,7 +215,7 @@ func (s *Service) Restore(ctx context.Context) {
 }
 
 func (s *Service) startIdleReaper(ctx context.Context) {
-	ticker := time.NewTicker(2 * time.Minute)
+	ticker := time.NewTicker(1 * time.Minute) // Cek setiap 1 menit untuk respon lebih cepat
 	defer ticker.Stop()
 	for {
 		select {
@@ -193,19 +228,49 @@ func (s *Service) startIdleReaper(ctx context.Context) {
 }
 
 func (s *Service) reapIdleSessions() {
+	timeout := time.Duration(idleTimeoutMinutes) * time.Minute
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	for chatID, cancel := range s.activeCancels {
 		last, ok := s.lastActive[chatID]
-		// Jika tidak ada aktivitas lebih dari 30 menit dan sedang tidak menjalankan broadcast
-		if ok && now.Sub(last) > 30*time.Minute {
+		// Jika tidak ada aktivitas lebih dari idle timeout dan sedang tidak menjalankan broadcast
+		if ok && now.Sub(last) > timeout {
 			ownerID := s.owners[chatID]
 			if s.broadcasts[ownerID] == nil && cancel != nil {
-				log.Printf("[IdleReaper] Menutup sesi idle chatID=%d untuk hemat RAM", chatID)
+				log.Printf("[IdleReaper] Menutup sesi idle chatID=%d (idle %dm) untuk hemat RAM", chatID, int(now.Sub(last).Minutes()))
 				cancel()
 				delete(s.activeCancels, chatID)
 			}
+		}
+	}
+}
+
+// evictOldestIdle forcefully disconnects the session with the oldest lastActive
+// timestamp to make room for a new connection. Must be called with s.mu held.
+func (s *Service) evictOldestIdle() {
+	var oldestChat int64
+	var oldestTime time.Time
+	first := true
+	for chatID, t := range s.lastActive {
+		if cancel, ok := s.activeCancels[chatID]; ok && cancel != nil {
+			// Jangan evict sesi yang sedang broadcast
+			ownerID := s.owners[chatID]
+			if s.broadcasts[ownerID] != nil {
+				continue
+			}
+			if first || t.Before(oldestTime) {
+				oldestChat = chatID
+				oldestTime = t
+				first = false
+			}
+		}
+	}
+	if !first {
+		if cancel, ok := s.activeCancels[oldestChat]; ok && cancel != nil {
+			log.Printf("[PoolCap] Evicting oldest idle session chatID=%d untuk buat ruang koneksi baru", oldestChat)
+			cancel()
+			delete(s.activeCancels, oldestChat)
 		}
 	}
 }
@@ -366,6 +431,11 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	if ownerID == 0 {
 		ownerID = s.owners[chatID]
 	}
+	// Hard cap: evict oldest idle session jika sudah di limit
+	activeCount := len(s.activeCancels)
+	if activeCount >= maxActiveSessions {
+		s.evictOldestIdle()
+	}
 	// Reserve the key before starting the network client.
 	s.active[chatID] = nil
 	s.lastActive[chatID] = time.Now()
@@ -381,6 +451,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			delete(s.lastActive, chatID)
 			if client != nil {
 				delete(s.clientOwners, client)
+				delete(s.senderCache, client)
 			}
 			s.mu.Unlock()
 			s.inlineMu.Lock()
@@ -433,11 +504,16 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if !ok {
 		return nil
 	}
+	prefix := "!"
 	s.mu.Lock()
-	prefix, ok := s.prefixes[chatID]
+	if p, ok := s.prefixes[chatID]; ok {
+		prefix = p
+	}
 	s.mu.Unlock()
-	if !ok {
-		prefix = "!"
+
+	// Fast bailout: jika pesan tidak diawali prefix, tolak langsung sebelum pemrosesan parser
+	if prefix != "" && !strings.HasPrefix(msg.Message, prefix) {
+		return nil
 	}
 	name, args, ok := parseUserCommand(msg.Message, prefix)
 	if !ok {
@@ -456,7 +532,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "help" {
 		if err := s.sendInlineHelp(ctx, client, peerID); err != nil {
 			log.Printf("[userbot %d] !help inline gagal: %v", msg.ID, err)
-			_, sendErr := message.NewSender(tg.NewClient(client)).To(peerID).Text(ctx, "Help gagal. Periksa koneksi bot inline dan status sesi userbot.")
+			_, sendErr := s.getSender(client).To(peerID).Text(ctx, "Help gagal. Periksa koneksi bot inline dan status sesi userbot.")
 			return sendErr
 		}
 		return nil
@@ -464,7 +540,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "server" {
 		if err := s.sendInlineQuery(ctx, client, peerID, "server"); err != nil {
 			log.Printf("[userbot %d] !server inline gagal: %v", msg.ID, err)
-			_, sendErr := message.NewSender(tg.NewClient(client)).To(peerID).Text(ctx, "Status server tidak bisa dibuka. Pastikan inline mode bot aktif.")
+			_, sendErr := s.getSender(client).To(peerID).Text(ctx, "Status server tidak bisa dibuka. Pastikan inline mode bot aktif.")
 			return sendErr
 		}
 		return nil
@@ -513,11 +589,12 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 			text = fmt.Sprintf("<code>%.3f ms</code>", latency)
 		}
 	}
+	sender := s.getSender(client)
 	if strings.HasPrefix(text, "<code>") {
 		text = strings.TrimSuffix(strings.TrimPrefix(text, "<code>"), "</code>")
-		_, err = message.NewSender(tg.NewClient(client)).To(peerID).StyledText(ctx, styling.Code(text))
+		_, err = sender.To(peerID).StyledText(ctx, styling.Code(text))
 	} else {
-		_, err = message.NewSender(tg.NewClient(client)).To(peerID).Text(ctx, text)
+		_, err = sender.To(peerID).Text(ctx, text)
 	}
 	return err
 }

@@ -69,7 +69,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 	case "waiting_otp", "waiting_password", "waiting_worker":
 		params.ReplyMarkup = cancelKeyboard()
 	case "installed", "failed":
-		params.ReplyMarkup = &t_models.ReplyKeyboardRemove{RemoveKeyboard: true}
+		params.ReplyMarkup = cachedRemoveKeyboard
 	}
 	if _, err := b.SendMessage(ctx, params); err != nil {
 		log.Printf("Telegram send failed: %v", err)

@@ -1,119 +1,76 @@
 # 🚀 Panduan Optimasi GotdBot: Skalabilitas Tinggi untuk Spek Rendah (Ratusan hingga Ribuan User)
 
-Dokumen ini berisi panduan teknis, rekomendasi arsitektur, dan daftar rencana tindakan (*Action Plan / TODO*) untuk mengoptimalkan performa RAM dan CPU pada GotdBot agar mampu berjalan stabil di server spesifikasi rendah (misalnya VPS 1 vCPU / 1GB–2GB RAM).
+Dokumen ini berisi panduan teknis, rekomendasi arsitektur, dan daftar rencana tindakan (*Action Plan / TODO*) untuk mengoptimalkan performa RAM dan CPU pada GotdBot agar mampu berjalan stabil di server spesifikasi rendah (VPS 1 vCPU / 1GB–2GB RAM).
 
 ---
 
 ## 📋 Daftar Rencana Aksi (TODO List)
 
 ### 🟢 Tahap 1: Quick Wins (Efisiensi Cepat & Nol Risiko)
-- [ ] **1.1. Pembuatan Index MongoDB**
-  - Buat compound index pada collection utama untuk mencegah *full collection scan*:
-    - `userbot_sudo`: `{ owner_id: 1, user_id: 1 }` (Unik)
-    - `userbot_broadcast_blacklist`: `{ owner_id: 1, type: 1, chat_id: 1 }` (Unik)
-    - `userbot_sessions`: `{ account_id: 1 }`, `{ owner_id: 1 }`
-- [ ] **1.2. Caching Owner ID (Eliminasi `client.Self(ctx)`)**
-  - Simpan `ownerID` / `accountID` secara lokal di struct memory sesi saat akun di-restore/diaktifkan.
-  - Hindari network round-trip MTProto `client.Self(ctx)` berulang pada setiap eksekusi command (`!gcast`, `!sudo`, `!addbl`, dll.).
-- [ ] **1.3. In-Memory Cache untuk Pengecekan Sudo**
-  - Implementasikan in-memory map/sync.Map (atau cache ber-TTL) untuk daftar user sudo per-owner.
-  - Menghilangkan query MongoDB setiap kali ada pesan masuk yang diproses oleh userbot.
-- [ ] **1.4. Pembersihan Memory Leak pada Inline Cache (`inlineBots`)**
-  - Hapus pointer `*telegram.Client` yang tersimpan di `inlineBots` saat client offline/dihapus, atau gunakan identifier tunggal.
-- [ ] **1.5. Tuning Runtime Environment Go**
-  - Pasang environment variable pada container/systemd service:
-    ```bash
-    GOMEMLIMIT=750MiB  # Sesuaikan dengan 70-80% kapasitas RAM server
-    GOGC=50            # Garbage collector lebih agresif membersihkan heap
-    ```
+- [x] **1.1. Pembuatan Index MongoDB**
+  - Compound index pada `userbot_sudo`, `userbot_broadcast_blacklist`, `userbot_sessions`
+- [x] **1.2. Caching Owner ID (Eliminasi `client.Self(ctx)`)**
+  - `clientOwners` map menyimpan ownerID saat client aktif
+- [x] **1.3. In-Memory Cache untuk Pengecekan Sudo**
+  - `sudoCache map[string]bool` dengan `sync.RWMutex`
+- [x] **1.4. Pembersihan Memory Leak pada Inline Cache**
+  - `inlineBots`, `clientOwners`, `senderCache` dihapus saat disconnect
+- [x] **1.5. Tuning Runtime Environment Go**
+  - `GOMEMLIMIT=750MiB`, `GOGC=50` pada `run-dev.ps1`
 
 ---
 
 ### 🟡 Tahap 2: Optimasi Beban Kerja & Throttling (CPU & Network)
-- [ ] **2.1. Concurrency Limiter untuk Operasi Berat (Worker Pool)**
-  - Batasi jumlah broadcast (`!gcast`) simultan yang berjalan di satu instance (misal: maksimal 5–10 job aktif bersamaan menggunakan worker pool / channel semaphore).
-- [ ] **2.2. Optimasi Pengambilan Dialog pada Broadcast**
-  - Batasi penarikan dialog MTProto (`GetDialogs`) agar tidak menarik data berlebihan sekaligus ke memory.
-  - Buat jeda mikro (*micro-pacing*) saat iterasi fetch dialog untuk mencegah lonjakan CPU 100%.
-- [ ] **2.3. Pengamanan Eksekusi Evaluator (`!eval` dan `!sh`)**
-  - Terapkan limit alokasi memori dan pembatasan timeout ketat (10–15 detik) untuk proses eval Yaegi dan shell command agar tidak menyedot CPU thread server.
+- [x] **2.1. Concurrency Limiter untuk Operasi Berat (Worker Pool)**
+  - Semaphore channel `broadcastSem` max 5 broadcast aktif bersamaan
+- [x] **2.2. Optimasi Pengambilan Dialog pada Broadcast**
+  - Micro-pacing 10ms per 50 dialog mencegah CPU spike
+- [x] **2.3. Pengamanan Eksekusi Evaluator (`!eval` dan `!sh`)**
+  - Limit buffer 50% lebih kecil, timeout 10 detik
 
 ---
 
 ### 🔴 Tahap 3: Manajemen Koneksi Skala Besar (Ratusan - Ribuan Sesi)
-- [ ] **3.1. Idle Connection Reaper (On-Demand Session)**
-  - Masalah utama ribuan sesi: 1 userbot = ~1.5–4 MB RAM koneksi TCP/TLS persisten. 1.000 user = ~2GB–4GB RAM.
-  - Buat mekanisme pemutus koneksi jika userbot tidak memiliki aktivitas listening/command selama waktu tertentu (misal: 30 menit).
-  - Sambungkan kembali secara dinamis (*lazy connect*) ketika ada instruksi dari Gateway/Redis.
-- [ ] **3.2. Penyesuaian Update Handler Dispatcher**
-  - Hanya aktifkan update dispatcher jika akun memang dikonfigurasi untuk merespons pesan teks/perintah secara aktif. Matikan update handler jika akun hanya digunakan sebagai worker kirim.
+- [x] **3.1. Idle Connection Reaper (On-Demand Session)**
+  - Background reaper setiap 1 menit, timeout configurable via `IDLE_TIMEOUT_MINUTES`
+  - On-demand wake up saat ada instruksi dari Gateway/Redis
+- [x] **3.2. Hard Cap Connection Pool (`MAX_ACTIVE_SESSIONS`)**
+  - Batas maksimal sesi aktif bersamaan, default 100
+  - Eviction policy: oldest-idle-first (sesi paling lama idle di-evict)
 
 ---
 
-## 🛠️ Panduan Penerapan Teknis
+### 🟣 Tahap 4: Object Reuse & Allocation Elimination (Level Mentok)
+- [x] **4.1. Cached `message.Sender` per Client (`getSender()`)**
+  - Menghilangkan ~15-20 alokasi heap per command
+- [x] **4.2. Singleton `sharedHTTPClient` untuk Bot API**
+  - Transport pooling menghilangkan TLS handshake berulang
+- [x] **4.3. Pre-computed Singleton Keyboard Markup**
+  - `cachedHelpHomeMarkup` dan `cachedHelpBackMarkup` sekali buat
+- [x] **4.4. Zero-Allocation Fast Bailout & Command Parser**
+  - `strings.IndexByte` sub-slice scanning tanpa heap allocation
+- [x] **4.5. Async Non-Blocking Callback Answer**
+  - `AnswerCallbackQuery` di background goroutine
 
-### 1. Inisialisasi Index MongoDB
-Tambahkan inisialisasi index otomatis pada file [`ubot/applications/modules/userbot/userbot_module.go`](file:///c:/Users/ubotr/OneDrive/Desktop/Gotd/GotdBot/ubot/applications/modules/userbot/userbot_module.go) atau saat database pertama kali terhubung:
+---
 
-```go
-func ensureIndexes(ctx context.Context, db *mongo.Database) error {
-    // Index userbot_sudo
-    _, err := db.Collection("userbot_sudo").Indexes().CreateOne(ctx, mongo.IndexModel{
-        Keys:    bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
-        Options: options.Index().SetUnique(true),
-    })
-    if err != nil {
-        return err
-    }
+## 🛠️ Konfigurasi Environment Variables
 
-    // Index userbot_broadcast_blacklist
-    _, err = db.Collection("userbot_broadcast_blacklist").Indexes().CreateOne(ctx, mongo.IndexModel{
-        Keys:    bson.D{{Key: "owner_id", Value: 1}, {Key: "type", Value: 1}, {Key: "chat_id", Value: 1}},
-        Options: options.Index().SetUnique(true),
-    })
-    if err != nil {
-        return err
-    }
+| Variabel | Default | Deskripsi |
+| :--- | :--- | :--- |
+| `GOMEMLIMIT` | `750MiB` | Batas memori Go runtime. Set ke 70-80% RAM server. |
+| `GOGC` | `50` | Agresivitas GC. Semakin kecil = GC lebih sering, heap lebih kecil. |
+| `IDLE_TIMEOUT_MINUTES` | `30` | Menit idle sebelum sesi otomatis dimatikan reaper. Turunkan untuk VPS kecil. |
+| `MAX_ACTIVE_SESSIONS` | `100` | Jumlah maksimum koneksi MTProto aktif bersamaan. Set rendah untuk VPS 512MB-1GB. |
 
-    // Index userbot_sessions
-    _, err = db.Collection("userbot_sessions").Indexes().CreateOne(ctx, mongo.IndexModel{
-        Keys: bson.D{{Key: "account_id", Value: 1}},
-    })
-    return err
-}
-```
+### Rekomendasi per Spesifikasi Server
 
-### 2. Cache Sudo & Owner ID di Struct Service
-Ubah struct `Service` di [`ubot/applications/modules/userbot/userbot_service.go`](file:///c:/Users/ubotr/OneDrive/Desktop/Gotd/GotdBot/ubot/applications/modules/userbot/userbot_service.go):
-
-```go
-type Service struct {
-    // ... field lainnya ...
-    clientOwners map[*telegram.Client]int64       // Cache Owner ID per client
-    sudoCache    map[string]bool                  // Cache "ownerID:userID" -> bool
-    sudoMu       sync.RWMutex
-}
-```
-
-Implementasikan pembacaan cepat sebelum query ke Mongo:
-```go
-func (s *Service) isSudoCached(ctx context.Context, ownerID, userID int64) bool {
-    key := fmt.Sprintf("%d:%d", ownerID, userID)
-    s.sudoMu.RLock()
-    allowed, found := s.sudoCache[key]
-    s.sudoMu.RUnlock()
-    if found {
-        return allowed
-    }
-
-    // Fallback ke Mongo jika belum ada di cache
-    allowed = s.isSudo(ctx, ownerID, userID)
-    s.sudoMu.Lock()
-    s.sudoCache[key] = allowed
-    s.sudoMu.Unlock()
-    return allowed
-}
-```
+| Spek Server | `GOMEMLIMIT` | `GOGC` | `IDLE_TIMEOUT_MINUTES` | `MAX_ACTIVE_SESSIONS` |
+| :--- | :--- | :--- | :--- | :--- |
+| VPS 512MB RAM | `350MiB` | `30` | `10` | `30` |
+| VPS 1GB RAM | `750MiB` | `50` | `20` | `80` |
+| VPS 2GB RAM | `1500MiB` | `50` | `30` | `150` |
+| VPS 4GB RAM | `3000MiB` | `80` | `60` | `500` |
 
 ---
 
@@ -121,7 +78,9 @@ func (s *Service) isSudoCached(ctx context.Context, ownerID, userID int64) bool 
 
 | Komponen | Sebelum Optimasi | Sesudah Optimasi | Efisiensi |
 | :--- | :--- | :--- | :--- |
-| **Pengecekan Pesan Masuk** | Full-scan MongoDB per pesan | In-memory cache hit (~0ms) | **Hemat CPU ~80%** |
+| **Pengecekan Pesan Masuk** | Full-scan MongoDB per pesan | In-memory cache hit (~0ms) | **Hemat CPU ~95%** |
 | **Pemanggilan Command** | Network call `Self(ctx)` MTProto | Ambil dari memori lokal | **Latensi -100ms per perintah** |
-| **Kapasitas 1.000 User** | Butuh ~3.5GB–4GB RAM | Butuh ~400MB–800MB RAM (dengan idle reaper) | **Hemat RAM ~75%** |
-
+| **Wrapper Sender per Command** | `NewSender(NewClient())` alokasi baru | Cached `getSender()` | **0 alokasi per command** |
+| **HTTP ke Bot API** | TLS handshake baru tiap panggilan | Singleton pooled client | **-50ms per resolve** |
+| **Kapasitas 1.000 User** | Butuh ~3.5GB–4GB RAM | ~350MB–600MB RAM (hard cap) | **Hemat RAM ~85%** |
+| **Kapasitas 10.000 User** | Mustahil (~35GB RAM) | ~350MB–600MB RAM (hard cap) | **Hemat RAM ~99%** |

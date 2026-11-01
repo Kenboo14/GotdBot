@@ -5,29 +5,39 @@ import (
 	"strings"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 )
 
 func parseUserCommand(text, prefix string) (name, args string, ok bool) {
-	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", "", false
+	}
 	if prefix != "" {
 		if !strings.HasPrefix(text, prefix) {
 			return "", "", false
 		}
-		text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+		text = text[len(prefix):]
 	}
-	parts := strings.SplitN(text, " ", 2)
-	name = strings.ToLower(strings.TrimSpace(parts[0]))
-	if name == "" {
+	// Zero-allocation whitespace trim di awal
+	for len(text) > 0 && (text[0] == ' ' || text[0] == '\t' || text[0] == '\n' || text[0] == '\r') {
+		text = text[1:]
+	}
+	if text == "" {
 		return "", "", false
 	}
-	if len(parts) == 2 {
-		args = strings.TrimSpace(parts[1])
+	idx := strings.IndexByte(text, ' ')
+	if idx < 0 {
+		name = strings.ToLower(text)
+		if _, exists := userbotCommandNames[name]; !exists {
+			return "", "", false
+		}
+		return name, "", true
 	}
+	name = strings.ToLower(text[:idx])
 	if _, exists := userbotCommandNames[name]; !exists {
 		return "", "", false
 	}
+	args = strings.TrimSpace(text[idx+1:])
 	return name, args, true
 }
 
@@ -36,7 +46,7 @@ func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, 
 	if value == "none" {
 		value = ""
 	} else if value == "" || strings.ContainsAny(value, " \t\r\n") || len([]rune(value)) > 8 {
-		_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, "Gunakan: !setp <prefix> atau !setp none")
+		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: !setp <prefix> atau !setp none")
 		return err
 	}
 	store := &mongoStorage{collection: s.db.Collection("userbot_sessions"), chatID: chatID, key: s.key}
@@ -50,6 +60,6 @@ func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, 
 	if label == "" {
 		label = "tanpa prefix"
 	}
-	_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, "Prefix disimpan: "+label)
+	_, err := s.getSender(client).To(target).Text(ctx, "Prefix disimpan: "+label)
 	return err
 }

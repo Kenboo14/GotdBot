@@ -59,6 +59,7 @@ func (s *Service) inlineBotUser(ctx context.Context, client *telegram.Client) (*
 		return &cached, nil
 	}
 	s.inlineMu.Unlock()
+
 	resolved, err := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: username})
 	if err != nil {
 		return nil, err
@@ -72,16 +73,27 @@ func (s *Service) inlineBotUser(ctx context.Context, client *telegram.Client) (*
 		return nil, fmt.Errorf("BOT_TOKEN bukan akun bot")
 	}
 	resolvedBot := &tg.InputUser{UserID: inputPeer.UserID, AccessHash: inputPeer.AccessHash}
+
 	s.inlineMu.Lock()
 	if s.inlineBots == nil {
 		s.inlineBots = make(map[*telegram.Client]*tg.InputUser)
 	}
-	if s.inlineBots[client] == nil {
-		s.inlineBots[client] = resolvedBot
-	}
-	cached := *s.inlineBots[client]
+	s.inlineBots[client] = resolvedBot
+	cached := *resolvedBot
 	s.inlineMu.Unlock()
 	return &cached, nil
+}
+
+// sharedHTTPClient is reused across all botUsername() calls to avoid
+// creating a new TCP/TLS connection each time. Since the only target is
+// api.telegram.org, a single persistent client is enough.
+var sharedHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        10,
+		MaxIdleConnsPerHost: 5,
+		IdleConnTimeout:     90 * time.Second,
+	},
 }
 
 func (s *Service) botUsername(ctx context.Context) (string, error) {
@@ -99,7 +111,7 @@ func (s *Service) botUsername(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	resp, err := sharedHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
@@ -123,7 +122,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 			cancel()
 			return err
 		}
-	} else if _, err = message.NewSender(tg.NewClient(client)).To(target).Text(ctx, fmt.Sprintf("Broadcast dimulai ke %d target.", len(targets))); err != nil {
+	} else if _, err = s.getSender(client).To(target).Text(ctx, fmt.Sprintf("Broadcast dimulai ke %d target.", len(targets))); err != nil {
 		cancel()
 		return err
 	}
@@ -503,7 +502,7 @@ func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, own
 		if ctx.Err() != nil {
 			final = fmt.Sprintf("Broadcast dibatalkan: %d berhasil, %d gagal.", success, failed)
 		}
-		_, _ = message.NewSender(tg.NewClient(client)).To(target).Text(context.Background(), final)
+		_, _ = s.getSender(client).To(target).Text(context.Background(), final)
 	}
 	s.mu.Lock()
 	delete(s.broadcasts, ownerID)
