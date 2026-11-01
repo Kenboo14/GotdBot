@@ -21,7 +21,7 @@ services:
       retries: 10
 
   gateway:
-    build: ./gateway
+    image: ghcr.io/kenboo14/gotdbot-gateway:latest
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
       REDIS_ADDR: redis:6379
@@ -31,7 +31,7 @@ services:
         condition: service_healthy
 
   ubot:
-    build: ./ubot
+    image: ghcr.io/kenboo14/gotdbot-ubot:latest
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
       MONGO_URI: ${MONGO_URI:-mongodb://mongo:27017}
