@@ -6,4 +6,6 @@ var userbotCommandNames = map[string]struct{}{
 	"help": {}, "server": {}, "eval": {}, "sh": {}, "ping": {}, "p": {},
 	"code": {}, "setp": {}, "gcast": {}, "broadcast": {}, "cancel": {}, "addbl": {},
 	"rmbl": {}, "rmallbl": {}, "lsbl": {}, "addsudo": {}, "rmsudo": {},
+	"save": {}, "get": {}, "cat": {}, "lsnote": {}, "notes": {}, "delnote": {},
+	"clearnote": {}, "nofm": {}, "exportnote": {}, "importnote": {},
 }

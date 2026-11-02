@@ -5,6 +5,7 @@ import (
 	"assterisk/gateway/applications/models"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html"
 	"net"
@@ -423,6 +424,52 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 			}
 		}
 	}
+	if strings.HasPrefix(query, "note_show") {
+		parts := strings.Fields(query)
+		var ref string
+		for _, p := range parts {
+			if strings.HasPrefix(p, "ref:") {
+				ref = strings.TrimPrefix(p, "ref:")
+				break
+			}
+		}
+		if ref != "" && inlineRedis != nil {
+			data, err := inlineRedis.Client.Get(ctx, "inline:note:"+ref).Bytes()
+			if err == nil {
+				var p NoteInlinePayload
+				if err := json.Unmarshal(data, &p); err == nil {
+					markup := buildNoteInlineKeyboard(p)
+					msgText := p.Text
+					if strings.TrimSpace(msgText) == "" {
+						msgText = fmt.Sprintf("Catatan: <b>%s</b>", html.EscapeString(p.Name))
+					}
+					desc := msgText
+					if len(desc) > 80 {
+						desc = desc[:77] + "..."
+					}
+					result := &t_models.InlineQueryResultArticle{
+						ID:          fmt.Sprintf("note_%d_%s", p.OwnerID, p.Name),
+						Title:       "Catatan: " + p.Name,
+						Description: desc,
+						InputMessageContent: &t_models.InputTextMessageContent{
+							MessageText: msgText,
+							ParseMode:   "HTML",
+						},
+						ReplyMarkup: markup,
+					}
+					_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{
+						InlineQueryID: update.InlineQuery.ID,
+						Results:       []t_models.InlineQueryResult{result},
+						CacheTime:     0,
+						IsPersonal:    true,
+					})
+					return
+				}
+			}
+		}
+		_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{}, CacheTime: 0, IsPersonal: true})
+		return
+	}
 	result := &t_models.InlineQueryResultArticle{
 		ID:                  "assist_help",
 		Title:               "Bantuan userbot",
@@ -551,4 +598,183 @@ func formatUptime(d time.Duration) string {
 	days, minutes := minutes/1440, minutes%1440
 	hours, minutes := minutes/60, minutes%60
 	return fmt.Sprintf("%d hari %d jam %d menit", days, hours, minutes)
+}
+
+type NoteInlineButton struct {
+	Kind   string `json:"kind"`
+	Label  string `json:"label"`
+	URL    string `json:"url,omitempty"`
+	Target string `json:"target,omitempty"`
+}
+
+type NoteInlinePayload struct {
+	OwnerID int64              `json:"owner_id"`
+	Name    string             `json:"name"`
+	Text    string             `json:"text"`
+	Buttons []NoteInlineButton `json:"buttons"`
+	Mode    string             `json:"mode"`
+}
+
+func buildNoteInlineKeyboard(p NoteInlinePayload) *t_models.InlineKeyboardMarkup {
+	buttons := p.Buttons
+	if len(buttons) == 0 {
+		if p.Mode == "callback" {
+			buttons = []NoteInlineButton{{Kind: "callback", Label: p.Name, Target: p.Name}}
+		} else if p.Mode == "popup" {
+			buttons = []NoteInlineButton{{Kind: "popup", Label: p.Name, Target: p.Name}}
+		}
+	}
+
+	var rows [][]t_models.InlineKeyboardButton
+	var currentRow []t_models.InlineKeyboardButton
+
+	for _, b := range buttons {
+		var btn t_models.InlineKeyboardButton
+		switch b.Kind {
+		case "url":
+			if b.URL != "" {
+				btn = t_models.InlineKeyboardButton{Text: b.Label, URL: b.URL}
+			}
+		case "popup":
+			target := b.Target
+			if target == "" {
+				target = p.Name
+			}
+			btn = t_models.InlineKeyboardButton{
+				Text:         b.Label,
+				CallbackData: fmt.Sprintf("note:pop:%d:%s", p.OwnerID, target),
+			}
+		case "callback":
+			target := b.Target
+			if target == "" {
+				target = p.Name
+			}
+			btn = t_models.InlineKeyboardButton{
+				Text:         b.Label,
+				CallbackData: fmt.Sprintf("note:show:%d:%s", p.OwnerID, target),
+			}
+		}
+		if btn.Text != "" {
+			currentRow = append(currentRow, btn)
+			if len(currentRow) >= 3 {
+				rows = append(rows, currentRow)
+				currentRow = nil
+			}
+		}
+	}
+	if len(currentRow) > 0 {
+		rows = append(rows, currentRow)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return &t_models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+	if update.CallbackQuery == nil {
+		return
+	}
+	data := update.CallbackQuery.Data
+	parts := strings.Split(data, ":")
+	if len(parts) < 4 {
+		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            "Tombol catatan tidak valid.",
+			ShowAlert:       true,
+		})
+		return
+	}
+	action := parts[1] // "pop" or "show"
+	ownerID, _ := strconv.ParseInt(parts[2], 10, 64)
+	name := strings.ToLower(parts[3])
+
+	// 1. Jika action == "pop": Tampilkan popup alert modal di layar
+	if action == "pop" {
+		var popText string
+		if inlineRedis != nil {
+			if recData, err := inlineRedis.Client.Get(ctx, fmt.Sprintf("note:record:%d:%s", ownerID, name)).Bytes(); err == nil {
+				var p NoteInlinePayload
+				if err := json.Unmarshal(recData, &p); err == nil && p.Text != "" {
+					popText = p.Text
+				}
+			}
+			if popText == "" {
+				popText, _ = inlineRedis.Client.Get(ctx, fmt.Sprintf("note:text:%d:%s", ownerID, name)).Result()
+			}
+		}
+		if popText == "" {
+			popText = fmt.Sprintf("Catatan: %s", name)
+		}
+		if len(popText) > 200 {
+			popText = popText[:197] + "..."
+		}
+		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            popText,
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	// 2. action == "show" (Callback): Ganti page pesan (edit message text & buttons) sesuai callbacknya
+	// Hilangkan loading spinner pada tombol tanpa menampilkan alert text
+	go func(cbID string) {
+		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: cbID,
+		})
+	}(update.CallbackQuery.ID)
+
+	var p NoteInlinePayload
+	found := false
+	if inlineRedis != nil {
+		if recData, err := inlineRedis.Client.Get(ctx, fmt.Sprintf("note:record:%d:%s", ownerID, name)).Bytes(); err == nil {
+			if err := json.Unmarshal(recData, &p); err == nil {
+				found = true
+			}
+		}
+		if !found {
+			if text, err := inlineRedis.Client.Get(ctx, fmt.Sprintf("note:text:%d:%s", ownerID, name)).Result(); err == nil && text != "" {
+				p = NoteInlinePayload{
+					OwnerID: ownerID,
+					Name:    name,
+					Text:    text,
+					Mode:    "callback",
+				}
+				found = true
+			}
+		}
+	}
+
+	if !found {
+		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: update.CallbackQuery.ID,
+			Text:            fmt.Sprintf("Catatan %s tidak ditemukan.", name),
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	markup := buildNoteInlineKeyboard(p)
+	msgText := p.Text
+	if strings.TrimSpace(msgText) == "" {
+		msgText = fmt.Sprintf("Catatan: <b>%s</b>", html.EscapeString(p.Name))
+	}
+
+	edit := &bot.EditMessageTextParams{
+		Text:        msgText,
+		ParseMode:   "HTML",
+		ReplyMarkup: markup,
+	}
+
+	if update.CallbackQuery.InlineMessageID != "" {
+		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
+	} else if update.CallbackQuery.Message.Message != nil {
+		edit.ChatID = update.CallbackQuery.Message.Message.Chat.ID
+		edit.MessageID = update.CallbackQuery.Message.Message.ID
+	} else {
+		return
+	}
+
+	_, _ = b.EditMessageText(ctx, edit)
 }

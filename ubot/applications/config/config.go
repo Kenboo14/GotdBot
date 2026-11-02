@@ -41,6 +41,11 @@ type Config struct {
 		APIHash              string `yaml:"api_hash"`
 		SessionEncryptionKey string `yaml:"session_encryption_key"`
 	} `yaml:"userbot"`
+
+	Cache struct {
+		GroupCache string `yaml:"group_cache"`
+		NotesCache int    `yaml:"notes_cache"`
+	} `yaml:"cache"`
 }
 
 func Load(path string) (*Config, error) {
@@ -119,5 +124,19 @@ func applyEnv(cfg *Config) {
 	}
 	if value := os.Getenv("SESSION_ENCRYPTION_KEY"); value != "" {
 		cfg.Userbot.SessionEncryptionKey = value
+	}
+
+	if value := os.Getenv("GROUP_CACHE"); value != "" {
+		cfg.Cache.GroupCache = value
+	}
+	if cfg.Cache.GroupCache == "" {
+		cfg.Cache.GroupCache = "AiotdCaches"
+	}
+
+	if value := os.Getenv("NOTES_CACHE"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Cache.NotesCache)
+	}
+	if cfg.Cache.NotesCache <= 0 {
+		cfg.Cache.NotesCache = 7157
 	}
 }

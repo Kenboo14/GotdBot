@@ -3,7 +3,9 @@ package userbot
 import (
 	"assterisk/ubot/applications/databases"
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -674,5 +676,172 @@ func TestSQLiteStorage_CRUD(t *testing.T) {
 	blListEmpty, _ := sqlite.ListBlacklist(ctx, 2001)
 	if len(blListEmpty) != 0 {
 		t.Fatalf("Expected 0 blacklist entries after clear, got %d", len(blListEmpty))
+	}
+}
+
+// TestNotes_ExtractionAndButtons memverifikasi ekstraksi tombol directive URL, callback, dan popup.
+func TestNotes_ExtractionAndButtons(t *testing.T) {
+	raw := "Halo ini pesan [Google|https://google.com] dan tombol [Callback#info] serta [Popup$help]"
+	clean, buttons := extractNoteButtons(raw)
+
+	if len(buttons) != 3 {
+		t.Fatalf("Expected 3 buttons, got %d", len(buttons))
+	}
+	if buttons[0].Kind != "url" || buttons[0].URL != "https://google.com" {
+		t.Fatalf("Button 0 unexpected: %+v", buttons[0])
+	}
+	if buttons[1].Kind != "callback" || buttons[1].Target != "info" {
+		t.Fatalf("Button 1 unexpected: %+v", buttons[1])
+	}
+	if buttons[2].Kind != "popup" || buttons[2].Target != "help" {
+		t.Fatalf("Button 2 unexpected: %+v", buttons[2])
+	}
+	if strings.Contains(clean, "[Google|") || strings.Contains(clean, "[Callback#") {
+		t.Fatalf("Cleaned text should not contain button directives: %s", clean)
+	}
+}
+
+// TestNotes_SQLiteCRUD memverifikasi operasi penyimpanan, listing, query, dan penghapusan catatan di SQLite.
+func TestNotes_SQLiteCRUD(t *testing.T) {
+	ctx := context.Background()
+	sqlite, err := databases.NewSQLiteClient(":memory:")
+	if err != nil {
+		t.Fatalf("Failed to init SQLite: %v", err)
+	}
+	defer sqlite.Close()
+
+	ownerID := int64(88888)
+
+	// 1. Simpan catatan
+	n1 := databases.NoteRecord{
+		OwnerID:        ownerID,
+		Name:           "test1",
+		Text:           "Isi catatan 1",
+		Mode:           "text",
+		MediaType:      "",
+		CacheMessageID: 715799,
+		CacheChannel:   "AiotdCaches",
+	}
+	err = sqlite.SaveNote(ctx, n1)
+	if err != nil {
+		t.Fatalf("SaveNote failed: %v", err)
+	}
+
+	n2 := databases.NoteRecord{
+		OwnerID:        ownerID,
+		Name:           "test2",
+		Text:           "Isi catatan 2",
+		Mode:           "popup",
+		MediaType:      "photo",
+		CacheMessageID: 715800,
+		CacheChannel:   "AiotdCaches",
+	}
+	_ = sqlite.SaveNote(ctx, n2)
+
+	// 2. Query catatan
+	got, err := sqlite.GetNote(ctx, ownerID, "test1")
+	if err != nil || got == nil || got.Text != "Isi catatan 1" || got.CacheMessageID != 715799 || got.CacheChannel != "AiotdCaches" {
+		t.Fatalf("GetNote unexpected: %v, got=%+v", err, got)
+	}
+
+	// 3. List catatan
+	list, err := sqlite.ListNotes(ctx, ownerID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("ListNotes unexpected: %v, len=%d", err, len(list))
+	}
+
+	// 4. Hapus satu catatan
+	delOk, err := sqlite.DeleteNote(ctx, ownerID, "test1")
+	if err != nil || !delOk {
+		t.Fatalf("DeleteNote failed: %v, delOk=%v", err, delOk)
+	}
+	delMiss, _ := sqlite.DeleteNote(ctx, ownerID, "test1")
+	if delMiss {
+		t.Fatalf("Second DeleteNote should return false")
+	}
+
+	// 5. Clear semua catatan
+	count, err := sqlite.ClearNotes(ctx, ownerID)
+	if err != nil || count != 1 {
+		t.Fatalf("ClearNotes unexpected: %v, count=%d", err, count)
+	}
+}
+
+// TestNotes_JSONExportImport_NoPassword memverifikasi bahwa export dan import notes
+// bekerja tanpa membutuhkan password, memvalidasi integritas data catatan.
+func TestNotes_JSONExportImport_NoPassword(t *testing.T) {
+	payload := NoteExportPayload{
+		Version:    1,
+		ExportedAt: time.Now().UTC().Format(time.RFC3339),
+		Notes: []databases.NoteRecord{
+			{OwnerID: 100, Name: "note_a", Text: "Konten A", Mode: "text", CacheMessageID: 715799, CacheChannel: "AiotdCaches"},
+			{OwnerID: 100, Name: "note_b", Text: "Konten B", Mode: "callback", CacheMessageID: 715800, CacheChannel: "AiotdCaches"},
+		},
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal export payload failed: %v", err)
+	}
+
+	var imported NoteExportPayload
+	err = json.Unmarshal(data, &imported)
+	if err != nil {
+		t.Fatalf("Unmarshal export payload failed: %v", err)
+	}
+
+	if len(imported.Notes) != 2 {
+		t.Fatalf("Expected 2 imported notes, got %d", len(imported.Notes))
+	}
+	if imported.Notes[0].Name != "note_a" || imported.Notes[0].CacheMessageID != 715799 || imported.Notes[0].CacheChannel != "AiotdCaches" {
+		t.Fatalf("Imported note A mismatched: %+v", imported.Notes[0])
+	}
+	if imported.Notes[1].Name != "note_b" || imported.Notes[1].CacheMessageID != 715800 || imported.Notes[1].CacheChannel != "AiotdCaches" {
+		t.Fatalf("Imported note B mismatched: %+v", imported.Notes[1])
+	}
+}
+
+// TestNotes_InlinePayloadAndButtons memverifikasi struktur payload inline notes dan sintesis tombol default untuk -cb / -pop
+func TestNotes_InlinePayloadAndButtons(t *testing.T) {
+	note := &databases.NoteRecord{
+		OwnerID: 12345,
+		Name:    "hi",
+		Text:    "Halo dunia",
+		Mode:    "callback",
+	}
+
+	var buttons []NoteButton
+	if len(buttons) == 0 {
+		if note.Mode == "callback" {
+			buttons = append(buttons, NoteButton{Kind: "callback", Label: note.Name, Target: note.Name})
+		} else if note.Mode == "popup" {
+			buttons = append(buttons, NoteButton{Kind: "popup", Label: note.Name, Target: note.Name})
+		}
+	}
+
+	if len(buttons) != 1 || buttons[0].Kind != "callback" || buttons[0].Label != "hi" {
+		t.Fatalf("Synthesized button unexpected: %+v", buttons)
+	}
+
+	payload := NoteInlinePayload{
+		OwnerID: note.OwnerID,
+		Name:    note.Name,
+		Text:    note.Text,
+		Buttons: buttons,
+		Mode:    note.Mode,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal inline payload failed: %v", err)
+	}
+
+	var parsed NoteInlinePayload
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Unmarshal inline payload failed: %v", err)
+	}
+
+	if parsed.Name != "hi" || len(parsed.Buttons) != 1 || parsed.Buttons[0].Label != "hi" {
+		t.Fatalf("Parsed payload unexpected: %+v", parsed)
 	}
 }

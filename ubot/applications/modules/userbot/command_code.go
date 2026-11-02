@@ -59,19 +59,68 @@ func (s *Service) replyMessage(ctx context.Context, client *telegram.Client, msg
 	if rh.ReplyToMsgID == 0 {
 		return &tg.Message{Message: rh.QuoteText}, nil
 	}
-	result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: target, OffsetID: rh.ReplyToMsgID + 1, AddOffset: -1, Limit: 1})
+
+	var messages []tg.MessageClass
+
+	// 1. Ambil pesan spesifik berdasarkan ReplyToMsgID
+	if ch, ok := target.(*tg.InputPeerChannel); ok {
+		res, err := client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: rh.ReplyToMsgID}},
+		})
+		if err == nil {
+			switch val := res.(type) {
+			case *tg.MessagesMessages:
+				messages = val.Messages
+			case *tg.MessagesMessagesSlice:
+				messages = val.Messages
+			case *tg.MessagesChannelMessages:
+				messages = val.Messages
+			}
+		}
+	} else {
+		res, err := client.API().MessagesGetMessages(ctx, []tg.InputMessageClass{
+			&tg.InputMessageID{ID: rh.ReplyToMsgID},
+		})
+		if err == nil {
+			switch val := res.(type) {
+			case *tg.MessagesMessages:
+				messages = val.Messages
+			case *tg.MessagesMessagesSlice:
+				messages = val.Messages
+			case *tg.MessagesChannelMessages:
+				messages = val.Messages
+			}
+		}
+	}
+
+	// Pastikan ID pesan yang dikembalikan benar-benar cocok dengan ReplyToMsgID (bukan pesan perintah itu sendiri)
+	for _, item := range messages {
+		if text, ok := item.(*tg.Message); ok && text.ID == rh.ReplyToMsgID {
+			return text, nil
+		}
+	}
+
+	// 2. Fallback via MessagesGetHistory jika GetMessages tidak mengembalikan hasil
+	result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:      target,
+		OffsetID:  rh.ReplyToMsgID + 1,
+		AddOffset: 0,
+		Limit:     5,
+	})
 	if err != nil {
 		return nil, err
 	}
-	var messages []tg.MessageClass
 	switch value := result.(type) {
 	case *tg.MessagesMessages:
 		messages = value.Messages
 	case *tg.MessagesMessagesSlice:
 		messages = value.Messages
+	case *tg.MessagesChannelMessages:
+		messages = value.Messages
 	}
 	for _, item := range messages {
-		if text, ok := item.(*tg.Message); ok {
+		if text, ok := item.(*tg.Message); ok && text.ID == rh.ReplyToMsgID {
 			return text, nil
 		}
 	}

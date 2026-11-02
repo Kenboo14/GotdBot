@@ -16,4 +16,5 @@ func registerBotCommands(b *bot.Bot, h *Handler) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "!code", bot.MatchTypePrefix, h.CodeCommand)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "assist_help:", bot.MatchTypePrefix, h.HelpCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "assist_server:", bot.MatchTypePrefix, h.HelpCallback)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "note:", bot.MatchTypePrefix, h.NoteCallback)
 }

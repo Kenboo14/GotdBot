@@ -33,6 +33,20 @@ type BlacklistRecord struct {
 	CreatedAt time.Time
 }
 
+type NoteRecord struct {
+	OwnerID        int64     `json:"owner_id"`
+	Name           string    `json:"name"`
+	Text           string    `json:"text"`
+	Entities       string    `json:"entities,omitempty"`
+	Buttons        string    `json:"buttons,omitempty"`
+	Mode           string    `json:"mode,omitempty"`
+	MediaType      string    `json:"media_type,omitempty"`
+	MediaData      string    `json:"media_data,omitempty"`
+	CacheMessageID int       `json:"cache_message_id,omitempty"`
+	CacheChannel   string    `json:"cache_channel,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
 func NewSQLiteClient(path string) (*SQLiteClient, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -91,6 +105,22 @@ func (s *SQLiteClient) initTables() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (owner_id, chat_type, chat_id)
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_notes (
+			owner_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			text TEXT NOT NULL,
+			entities TEXT DEFAULT '',
+			buttons TEXT DEFAULT '',
+			mode TEXT DEFAULT 'text',
+			media_type TEXT DEFAULT '',
+			media_data TEXT DEFAULT '',
+			cache_message_id INTEGER DEFAULT 0,
+			cache_channel TEXT DEFAULT '',
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (owner_id, name)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_notes_owner ON userbot_notes(owner_id);`,
 	}
 
 	for _, query := range queries {
@@ -98,6 +128,11 @@ func (s *SQLiteClient) initTables() error {
 			return err
 		}
 	}
+
+	// Safe column migration for existing userbot_notes tables
+	_, _ = s.DB.Exec(`ALTER TABLE userbot_notes ADD COLUMN cache_message_id INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`ALTER TABLE userbot_notes ADD COLUMN cache_channel TEXT DEFAULT '';`)
+
 	return nil
 }
 
@@ -159,8 +194,8 @@ func (s *SQLiteClient) GetSessionByAccount(ctx context.Context, accountID int64)
 
 func (s *SQLiteClient) HasSession(ctx context.Context, chatID, ownerID int64) (bool, error) {
 	var count int
-	query := `SELECT COUNT(1) FROM sessions WHERE (chat_id = ? OR owner_id = ?) AND account_id > 0;`
-	err := s.DB.QueryRowContext(ctx, query, chatID, ownerID).Scan(&count)
+	query := `SELECT COUNT(1) FROM sessions WHERE (chat_id = ? OR owner_id = ? OR account_id = ?) AND session_blob != '';`
+	err := s.DB.QueryRowContext(ctx, query, chatID, ownerID, ownerID).Scan(&count)
 	if err != nil {
 		return false, err
 	}
@@ -168,7 +203,7 @@ func (s *SQLiteClient) HasSession(ctx context.Context, chatID, ownerID int64) (b
 }
 
 func (s *SQLiteClient) GetAllSessions(ctx context.Context) ([]SessionRecord, error) {
-	query := `SELECT chat_id, owner_id, account_id, session_blob, prefix, prefix_set, updated_at FROM sessions WHERE account_id > 0;`
+	query := `SELECT chat_id, owner_id, account_id, session_blob, prefix, prefix_set, updated_at FROM sessions WHERE session_blob != '';`
 	rows, err := s.DB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -269,3 +304,87 @@ func (s *SQLiteClient) IsBlacklisted(ctx context.Context, ownerID int64, chatTyp
 	return count > 0, nil
 }
 
+func (s *SQLiteClient) SaveNote(ctx context.Context, n NoteRecord) error {
+	query := `INSERT INTO userbot_notes (owner_id, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(owner_id, name) DO UPDATE SET
+			text = excluded.text,
+			entities = excluded.entities,
+			buttons = excluded.buttons,
+			mode = excluded.mode,
+			media_type = excluded.media_type,
+			media_data = excluded.media_data,
+			cache_message_id = excluded.cache_message_id,
+			cache_channel = excluded.cache_channel,
+			updated_at = CURRENT_TIMESTAMP;`
+	_, err := s.DB.ExecContext(ctx, query, n.OwnerID, n.Name, n.Text, n.Entities, n.Buttons, n.Mode, n.MediaType, n.MediaData, n.CacheMessageID, n.CacheChannel)
+	return err
+}
+
+func (s *SQLiteClient) GetNote(ctx context.Context, ownerID int64, name string) (*NoteRecord, error) {
+	query := `SELECT owner_id, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at
+		FROM userbot_notes WHERE owner_id = ? AND name = ? LIMIT 1;`
+	var n NoteRecord
+	err := s.DB.QueryRowContext(ctx, query, ownerID, name).Scan(
+		&n.OwnerID, &n.Name, &n.Text, &n.Entities, &n.Buttons, &n.Mode, &n.MediaType, &n.MediaData, &n.CacheMessageID, &n.CacheChannel, &n.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+func (s *SQLiteClient) ListNotes(ctx context.Context, ownerID int64) ([]NoteRecord, error) {
+	query := `SELECT owner_id, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at
+		FROM userbot_notes WHERE owner_id = ? ORDER BY name ASC;`
+	rows, err := s.DB.QueryContext(ctx, query, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []NoteRecord
+	for rows.Next() {
+		var n NoteRecord
+		if err := rows.Scan(&n.OwnerID, &n.Name, &n.Text, &n.Entities, &n.Buttons, &n.Mode, &n.MediaType, &n.MediaData, &n.CacheMessageID, &n.CacheChannel, &n.UpdatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, n)
+	}
+	return records, rows.Err()
+}
+
+func (s *SQLiteClient) DeleteNote(ctx context.Context, ownerID int64, name string) (bool, error) {
+	query := `DELETE FROM userbot_notes WHERE owner_id = ? AND name = ?;`
+	res, err := s.DB.ExecContext(ctx, query, ownerID, name)
+	if err != nil {
+		return false, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0, nil
+}
+
+func (s *SQLiteClient) ClearNotes(ctx context.Context, ownerID int64) (int64, error) {
+	query := `DELETE FROM userbot_notes WHERE owner_id = ?;`
+	res, err := s.DB.ExecContext(ctx, query, ownerID)
+	if err != nil {
+		return 0, err
+	}
+	rows, _ := res.RowsAffected()
+	return rows, nil
+}
+
+func (s *SQLiteClient) CountNotes(ctx context.Context, ownerID int64) (int, error) {
+	var count int
+	query := `SELECT COUNT(1) FROM userbot_notes WHERE owner_id = ?;`
+	err := s.DB.QueryRowContext(ctx, query, ownerID).Scan(&count)
+	return count, err
+}
+
+
+func (s *SQLiteClient) CountAllNotes(ctx context.Context) (int, error) {
+	var count int
+	query := `SELECT COUNT(1) FROM userbot_notes;`
+	err := s.DB.QueryRowContext(ctx, query).Scan(&count)
+	return count, err
+}

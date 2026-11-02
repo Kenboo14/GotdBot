@@ -7,7 +7,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -60,7 +59,7 @@ type Service struct {
 	apiHash          string
 	key              []byte
 	botToken         string
-	inlineMu         sync.Mutex
+	inlineMu         sync.RWMutex
 	botUsernameCache string
 	inlineBots       map[*telegram.Client]*tg.InputUser
 	mu               sync.Mutex
@@ -176,7 +175,18 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		targetID = job.ChatID
 	}
 	if client == nil {
-		// On-demand wake up: jika sesi ada di database tapi sedang idle (dimatikan oleh reaper)
+		for cid, oid := range s.owners {
+			if oid == job.UserID || oid == job.ChatID {
+				if c := s.active[cid]; c != nil {
+					client = c
+					targetID = cid
+					break
+				}
+			}
+		}
+	}
+	if client == nil {
+		// On-demand wake up: jika sesi ada di database tapi belum aktif
 		s.mu.Unlock()
 		s.activate(job.ChatID, job.UserID)
 		// Tunggu sejenak hingga client siap
@@ -186,6 +196,17 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 			client = s.active[job.ChatID]
 			if client == nil {
 				client = s.active[job.UserID]
+			}
+			if client == nil {
+				for cid, oid := range s.owners {
+					if oid == job.UserID || oid == job.ChatID {
+						if c := s.active[cid]; c != nil {
+							client = c
+							targetID = cid
+							break
+						}
+					}
+				}
 			}
 			if client != nil {
 				targetID = job.ChatID
@@ -212,23 +233,80 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 }
 
 func (s *Service) Restore(ctx context.Context) {
-	// Disaster Recovery: jika SQLite lokal kosong tapi MongoDB cloud tersedia, download backup
+	// 1. Sinkronisasi Sesi dari MongoDB Cloud Atlas ke SQLite lokal
 	if s.db != nil && s.sqlite != nil {
-		count, _ := s.sqlite.CountSessions(ctx)
-		if count == 0 {
-			log.Println("🔄 SQLite lokal kosong. Mengambil salinan sesi dari MongoDB Cloud...")
-			cur, err := s.db.Collection("userbot_sessions").Find(ctx, bson.M{"account_id": bson.M{"$gt": 0}})
-			if err == nil {
-				defer cur.Close(ctx)
-				restored := 0
-				for cur.Next(ctx) {
-					var row record
-					if cur.Decode(&row) == nil {
-						_ = s.sqlite.SaveSession(ctx, row.ChatID, row.OwnerID, row.AccountID, row.Blob, row.Prefix, row.PrefixSet)
-						restored++
+		log.Println("🔄 Memeriksa sinkronisasi sesi dari MongoDB Cloud Atlas...")
+		cur, err := s.db.Collection("userbot_sessions").Find(ctx, bson.M{
+			"$or": []bson.M{
+				{"session": bson.M{"$ne": ""}},
+				{"account_id": bson.M{"$gt": 0}},
+			},
+		})
+		if err == nil {
+			defer cur.Close(ctx)
+			synced := 0
+			for cur.Next(ctx) {
+				var row record
+				if cur.Decode(&row) == nil && row.Blob != "" {
+					accID := row.AccountID
+					if accID == 0 {
+						accID = row.OwnerID
+					}
+					if accID == 0 {
+						accID = row.ChatID
+					}
+					if err := s.sqlite.SaveSession(ctx, row.ChatID, row.OwnerID, accID, row.Blob, row.Prefix, row.PrefixSet); err == nil {
+						synced++
 					}
 				}
-				log.Printf("✅ Disaster Recovery selesai: %d sesi dipulihkan ke SQLite", restored)
+			}
+			if synced > 0 {
+				log.Printf("✅ Sinkronisasi Startup: %d sesi dipulihkan/disinkronkan dari MongoDB ke SQLite", synced)
+			}
+		} else {
+			log.Printf("⚠️ Gagal membaca userbot_sessions dari MongoDB: %v", err)
+		}
+
+		// 2. Sinkronisasi Catatan (Notes) dari MongoDB Cloud Atlas jika SQLite kosong
+		noteCount, _ := s.sqlite.CountAllNotes(ctx)
+		if noteCount == 0 {
+			log.Println("🔄 Notes SQLite kosong. Mengambil salinan catatan dari MongoDB Cloud...")
+			cur, err := s.db.Collection("userbot_notes").Find(ctx, bson.M{})
+			if err == nil {
+				defer cur.Close(ctx)
+				restoredNotes := 0
+				for cur.Next(ctx) {
+					var doc struct {
+						OwnerID        int64  `bson:"owner_id"`
+						Name           string `bson:"name"`
+						Text           string `bson:"text"`
+						Entities       string `bson:"entities"`
+						Buttons        string `bson:"buttons"`
+						Mode           string `bson:"mode"`
+						MediaType      string `bson:"media_type"`
+						MediaData      string `bson:"media_data"`
+						CacheMessageID int    `bson:"cache_message_id"`
+						CacheChannel   string `bson:"cache_channel"`
+					}
+					if cur.Decode(&doc) == nil {
+						nr := databases.NoteRecord{
+							OwnerID:        doc.OwnerID,
+							Name:           doc.Name,
+							Text:           doc.Text,
+							Entities:       doc.Entities,
+							Buttons:        doc.Buttons,
+							Mode:           doc.Mode,
+							MediaType:      doc.MediaType,
+							MediaData:      doc.MediaData,
+							CacheMessageID: doc.CacheMessageID,
+							CacheChannel:   doc.CacheChannel,
+						}
+						if s.sqlite.SaveNote(ctx, nr) == nil {
+							restoredNotes++
+						}
+					}
+				}
+				log.Printf("✅ Disaster Recovery selesai: %d catatan dipulihkan ke SQLite", restoredNotes)
 			}
 		}
 	}
@@ -248,11 +326,18 @@ func (s *Service) Restore(ctx context.Context) {
 		if !row.PrefixSet {
 			prefix = "!"
 		}
+		accID := row.AccountID
+		if accID == 0 {
+			accID = row.OwnerID
+		}
+		if accID == 0 {
+			accID = row.ChatID
+		}
 		s.mu.Lock()
 		s.prefixes[row.ChatID] = prefix
-		s.owners[row.ChatID] = row.AccountID
+		s.owners[row.ChatID] = accID
 		s.mu.Unlock()
-		s.activate(row.ChatID, row.AccountID)
+		s.activate(row.ChatID, accID)
 
 		// Staggered Startup Jitter (Anti-CPU-Starvation for 1 vCPU)
 		// Membuka 500 akun bertahap ~15 detik tanpa memicu CPU 100% starvation
@@ -437,7 +522,23 @@ func (s *Service) reply(ctx context.Context, chatID int64, text, state string) {
 
 func (s *Service) hasInstalledSession(ctx context.Context, chatID, ownerID int64) (bool, error) {
 	if s.sqlite != nil {
-		return s.sqlite.HasSession(ctx, chatID, ownerID)
+		has, err := s.sqlite.HasSession(ctx, chatID, ownerID)
+		if err == nil && has {
+			return true, nil
+		}
+	}
+	if s.db != nil {
+		count, err := s.db.Collection("userbot_sessions").CountDocuments(ctx, bson.M{
+			"$or": []bson.M{
+				{"_id": chatID},
+				{"owner_id": ownerID},
+				{"account_id": ownerID},
+			},
+			"session": bson.M{"$ne": ""},
+		})
+		if err == nil && count > 0 {
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -536,7 +637,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			}
 		}
 		s.mu.Unlock()
-		_ = client.Run(clientCtx, func(ctx context.Context) error {
+		err := client.Run(clientCtx, func(ctx context.Context) error {
 			self, err := client.Self(ctx)
 			if err != nil {
 				return err
@@ -547,9 +648,17 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				s.clientOwners[client] = self.ID
 			}
 			s.mu.Unlock()
+			if store != nil {
+				_ = store.setAccount(ctx, self.ID)
+			}
+			// Pre-warm inline bot resolution so first inline command is fast (staggered & bound to clientCtx).
+			s.preWarmInlineBot(clientCtx, client)
 			<-ctx.Done()
 			return ctx.Err()
 		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("[Userbot chatID=%d] MTProto selesai/gagal: %v", chatID, err)
+		}
 	}()
 }
 
@@ -566,6 +675,17 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	s.mu.Unlock()
 
 	// Fast bailout:
+	// 0. Cek trigger hashtag note: misal "#nama" (diperbolehkan tanpa prefix perintah)
+	if strings.HasPrefix(msg.Message, "#") && len(msg.Message) > 1 && !strings.ContainsAny(msg.Message, " \t\r\n") {
+		hashName := strings.TrimPrefix(msg.Message, "#")
+		if isValidNoteName(hashName) && s.commandAllowed(ctx, client, msg) {
+			peerID, err := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
+			if err == nil {
+				return s.showNote(ctx, client, peerID, hashName, false)
+			}
+		}
+	}
+
 	// 1. Jika prefix aktif dan pesan tidak diawali prefix, tolak langsung dalam < 10 nanodetik.
 	if prefix != "" {
 		if !strings.HasPrefix(msg.Message, prefix) {
@@ -641,6 +761,51 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "addsudo" || name == "rmsudo" {
 		return s.sudoCommand(ctx, client, peerID, msg, args, name == "addsudo")
 	}
+	if name == "save" {
+		return s.saveNoteCommand(ctx, client, peerID, msg, args)
+	}
+	if name == "get" {
+		fields := strings.Fields(args)
+		if len(fields) == 0 {
+			return sendUserText(ctx, client, peerID, "Gunakan: !get <nama>")
+		}
+		return s.showNote(ctx, client, peerID, fields[0], false)
+	}
+	if name == "cat" {
+		noFm := false
+		catName := ""
+		fields := strings.Fields(args)
+		if len(fields) > 0 {
+			catName = fields[0]
+			for _, f := range fields[1:] {
+				if strings.ToLower(f) == "-nofm" {
+					noFm = true
+				}
+			}
+		}
+		if catName == "" {
+			return sendUserText(ctx, client, peerID, "Gunakan: !cat <nama> [-nofm]")
+		}
+		return s.showNote(ctx, client, peerID, catName, noFm)
+	}
+	if name == "lsnote" || name == "notes" {
+		return s.listNotesCommand(ctx, client, peerID)
+	}
+	if name == "delnote" {
+		return s.deleteNoteCommand(ctx, client, peerID, args)
+	}
+	if name == "clearnote" {
+		return s.clearNotesCommand(ctx, client, peerID)
+	}
+	if name == "nofm" {
+		return s.nofmCommand(ctx, client, peerID, msg, args)
+	}
+	if name == "exportnote" {
+		return s.exportNotesCommand(ctx, client, peerID)
+	}
+	if name == "importnote" {
+		return s.importNotesCommand(ctx, client, peerID, msg)
+	}
 	if name == "eval" || name == "sh" {
 		if name == "eval" {
 			return s.evaluatorCommand(ctx, client, peerID, msg, entities, prefix, args)
@@ -713,17 +878,37 @@ type sqliteStorage struct {
 }
 
 func (s *sqliteStorage) LoadSession(ctx context.Context) ([]byte, error) {
-	if s.sqlite == nil {
-		return nil, session.ErrNotFound
+	if s.sqlite != nil {
+		row, err := s.sqlite.GetSessionByChat(ctx, s.chatID)
+		if err == nil && row != nil && row.Blob != "" {
+			return decrypt(s.key, row.Blob)
+		}
 	}
-	row, err := s.sqlite.GetSessionByChat(ctx, s.chatID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, session.ErrNotFound
+	// Fallback ke MongoDB Cloud Atlas jika sesi belum ada di SQLite lokal
+	if s.db != nil {
+		var mRow record
+		err := s.db.Collection("userbot_sessions").FindOne(ctx, bson.M{
+			"$or": []bson.M{
+				{"_id": s.chatID},
+				{"owner_id": s.ownerID},
+			},
+			"session": bson.M{"$ne": ""},
+		}).Decode(&mRow)
+		if err == nil && mRow.Blob != "" {
+			accID := mRow.AccountID
+			if accID == 0 {
+				accID = mRow.OwnerID
+			}
+			if accID == 0 {
+				accID = mRow.ChatID
+			}
+			if s.sqlite != nil {
+				_ = s.sqlite.SaveSession(ctx, mRow.ChatID, mRow.OwnerID, accID, mRow.Blob, mRow.Prefix, mRow.PrefixSet)
+			}
+			return decrypt(s.key, mRow.Blob)
+		}
 	}
-	if err != nil {
-		return nil, err
-	}
-	return decrypt(s.key, row.Blob)
+	return nil, session.ErrNotFound
 }
 
 func (s *sqliteStorage) StoreSession(ctx context.Context, data []byte) error {
