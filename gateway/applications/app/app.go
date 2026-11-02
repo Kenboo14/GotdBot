@@ -4,6 +4,7 @@ import (
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/config"
 	"assterisk/gateway/applications/controllers"
+	"assterisk/gateway/applications/middleware"
 	"context"
 	"encoding/json"
 	"log"
@@ -53,7 +54,7 @@ func Run(ctx context.Context) {
 	}
 
 	opts := []bot.Option{
-		bot.WithMiddlewares(),
+		bot.WithMiddlewares(middleware.Chain),
 		bot.WithHTTPClient(65*time.Second, httpClient),
 	}
 	// Telegram Bot

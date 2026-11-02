@@ -16,20 +16,22 @@ import (
 // by the next runtime module; login state itself never leaves this process.
 type Init struct{ Config *config.Config }
 
-func (m *Init) Register(ctx context.Context, db *mongo.Database, redis *databases.Redis) {
+func (m *Init) Register(ctx context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis) {
 	key, err := base64.StdEncoding.DecodeString(m.Config.Userbot.SessionEncryptionKey)
 	if err != nil {
 		log.Printf("userbot disabled: invalid encryption key: %v", err)
 		return
 	}
-	ensureIndexes(ctx, db)
-	service := NewService(ctx, db, redis, m.Config.Userbot.APIID, m.Config.Userbot.APIHash, key, m.Config.Telegram.BotToken)
+	if db != nil {
+		ensureMongoIndexes(ctx, db)
+	}
+	service := NewService(ctx, sqlite, db, redis, m.Config.Userbot.APIID, m.Config.Userbot.APIHash, key, m.Config.Telegram.BotToken)
 	go service.Restore(ctx)
 	go redis.Listener(ctx, "to:group:ubot", "to:worker:auth", "to:ubot:auth", service.Handle)
 	go redis.Listener(ctx, "to:group:command", "to:worker:command", "to:ubot:command", service.HandleCommand)
 }
 
-func ensureIndexes(ctx context.Context, db *mongo.Database) {
+func ensureMongoIndexes(ctx context.Context, db *mongo.Database) {
 	_, _ = db.Collection("userbot_sudo").Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
 		Options: options.Index().SetUnique(true),

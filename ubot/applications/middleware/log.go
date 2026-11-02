@@ -4,24 +4,18 @@ import (
 	"context"
 	"log"
 
-	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
+	"github.com/gotd/td/tg"
 )
 
-func Chain(next bot.HandlerFunc) bot.HandlerFunc {
-	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil {
-			log.Printf("%d say: %s", update.Message.From.ID, update.Message.Text)
-		}
-		next(ctx, b, update)
-	}
-}
+// UserbotHandlerFunc defines a standard update handler for MTProto message updates.
+type UserbotHandlerFunc func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error
 
-func Denial(next bot.HandlerFunc) bot.HandlerFunc {
-	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil {
-			log.Printf("%d denial: %s", update.Message.From.ID, update.Message.Text)
+// LogUserbotMessage logs incoming MTProto message updates before forwarding them to the next handler.
+func LogUserbotMessage(next UserbotHandlerFunc) UserbotHandlerFunc {
+	return func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
+		if msg, ok := update.Message.(*tg.Message); ok {
+			log.Printf("[userbot] update received msg_id=%d", msg.ID)
 		}
-		next(ctx, b, update)
+		return next(ctx, entities, update)
 	}
 }

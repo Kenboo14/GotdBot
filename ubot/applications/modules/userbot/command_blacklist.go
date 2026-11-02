@@ -6,6 +6,7 @@ import (
 	"html"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
@@ -123,30 +124,36 @@ func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client,
 	if err != nil {
 		return sendUserText(ctx, client, target, "Format blacklist: !addbl [-pv|-gc|-ch] di chat target.")
 	}
-	collection := s.db.Collection("userbot_broadcast_blacklist")
-	filter := bson.M{"owner_id": ownerID, "type": kind, "chat_id": chatID}
 	switch operation {
 	case "add":
-		_, err = collection.UpdateOne(ctx, filter, bson.M{"$set": bson.M{"owner_id": ownerID, "type": kind, "chat_id": chatID, "title": title}}, options.Update().SetUpsert(true))
+		if s.sqlite != nil {
+			err = s.sqlite.AddBlacklist(ctx, ownerID, kind, chatID)
+		}
+		if s.db != nil {
+			go func(oid int64, k string, cid int64, t string) {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				filter := bson.M{"owner_id": oid, "type": k, "chat_id": cid}
+				_, _ = s.db.Collection("userbot_broadcast_blacklist").UpdateOne(bgCtx, filter, bson.M{"$set": bson.M{"owner_id": oid, "type": k, "chat_id": cid, "title": t}}, options.Update().SetUpsert(true))
+			}(ownerID, kind, chatID, title)
+		}
 		if err != nil {
 			return err
 		}
 		return sendUserText(ctx, client, target, fmt.Sprintf("Blacklist %s ditambahkan: %d", kind, displayChatID(kind, chatID)))
 	case "remove":
-		result, removeErr := collection.DeleteOne(ctx, filter)
-		if removeErr != nil {
-			return removeErr
+		if s.sqlite != nil {
+			err = s.sqlite.RemoveBlacklist(ctx, ownerID, kind, chatID)
 		}
-		// Older versions stored supergroups as type=channel. Remove that
-		// legacy record too when the current chat is now classified as group.
-		if result.DeletedCount == 0 && kind == "group" {
-			result, removeErr = collection.DeleteOne(ctx, bson.M{"owner_id": ownerID, "type": "channel", "chat_id": chatID})
-			if removeErr != nil {
-				return removeErr
-			}
+		if s.db != nil {
+			go func(oid int64, k string, cid int64) {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = s.db.Collection("userbot_broadcast_blacklist").DeleteOne(bgCtx, bson.M{"owner_id": oid, "type": k, "chat_id": cid})
+			}(ownerID, kind, chatID)
 		}
-		if result.DeletedCount == 0 {
-			return sendUserText(ctx, client, target, "Target tidak ada di blacklist.")
+		if err != nil {
+			return err
 		}
 		return sendUserText(ctx, client, target, fmt.Sprintf("Blacklist %s dihapus: %d", kind, displayChatID(kind, chatID)))
 	default:
@@ -159,14 +166,24 @@ func (s *Service) listBlacklist(ctx context.Context, client *telegram.Client, ta
 	if err != nil {
 		return err
 	}
-	cur, err := s.db.Collection("userbot_broadcast_blacklist").Find(ctx, bson.M{"owner_id": ownerID})
-	if err != nil {
-		return err
-	}
-	defer cur.Close(ctx)
 	var entries []blacklistRecord
-	if err := cur.All(ctx, &entries); err != nil {
-		return err
+	if s.sqlite != nil {
+		bls, err := s.sqlite.ListBlacklist(ctx, ownerID)
+		if err != nil {
+			return err
+		}
+		for _, b := range bls {
+			entries = append(entries, blacklistRecord{OwnerID: b.OwnerID, Type: b.ChatType, ChatID: b.ChatID})
+		}
+	} else if s.db != nil {
+		cur, err := s.db.Collection("userbot_broadcast_blacklist").Find(ctx, bson.M{"owner_id": ownerID})
+		if err != nil {
+			return err
+		}
+		defer cur.Close(ctx)
+		if err := cur.All(ctx, &entries); err != nil {
+			return err
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ChatID < entries[j].ChatID })
 	if len(entries) == 0 {
@@ -198,7 +215,16 @@ func (s *Service) clearBlacklist(ctx context.Context, client *telegram.Client, t
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Collection("userbot_broadcast_blacklist").DeleteMany(ctx, bson.M{"owner_id": ownerID})
+	if s.sqlite != nil {
+		err = s.sqlite.ClearBlacklist(ctx, ownerID)
+	}
+	if s.db != nil {
+		go func(oid int64) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("userbot_broadcast_blacklist").DeleteMany(bgCtx, bson.M{"owner_id": oid})
+		}(ownerID)
+	}
 	if err != nil {
 		return err
 	}

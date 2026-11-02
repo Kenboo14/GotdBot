@@ -15,6 +15,16 @@ type Config struct {
 		BotToken string `yaml:"bot_token"`
 	} `yaml:"telegram"`
 
+	Sqlite struct {
+		Path string `yaml:"path"`
+	} `yaml:"sqlite"`
+
+	MongoBackup struct {
+		URI    string `yaml:"uri"`
+		DBName string `yaml:"db_name"`
+	} `yaml:"mongo_backup"`
+
+	// Backward compatibility field
 	Mongo struct {
 		URI    string `yaml:"mongo_uri"`
 		DBName string `yaml:"mongo_db"`
@@ -46,7 +56,7 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	applyEnv(cfg)
-	if strings.TrimSpace(cfg.Mongo.URI) == "" || strings.TrimSpace(cfg.Mongo.DBName) == "" || strings.TrimSpace(cfg.Redis.Address) == "" {
+	if strings.TrimSpace(cfg.Redis.Address) == "" {
 		return nil, os.ErrInvalid
 	}
 	if cfg.Userbot.APIID < 1 || strings.TrimSpace(cfg.Userbot.APIHash) == "" {
@@ -63,14 +73,34 @@ func Load(path string) (*Config, error) {
 }
 
 func applyEnv(cfg *Config) {
-	if value := os.Getenv("MONGO_URI"); value != "" {
-		cfg.Mongo.URI = value
+	if value := os.Getenv("SQLITE_PATH"); value != "" {
+		cfg.Sqlite.Path = value
 	}
+	if cfg.Sqlite.Path == "" {
+		cfg.Sqlite.Path = "userbot.db"
+	}
+
+	if value := os.Getenv("MONGO_BACKUP_URI"); value != "" {
+		cfg.MongoBackup.URI = value
+	} else if value := os.Getenv("MONGO_URI"); value != "" {
+		cfg.MongoBackup.URI = value
+	}
+
+	if value := os.Getenv("MONGO_BACKUP_DB"); value != "" {
+		cfg.MongoBackup.DBName = value
+	} else if value := os.Getenv("MONGO_DB"); value != "" {
+		cfg.MongoBackup.DBName = value
+	}
+	if cfg.MongoBackup.DBName == "" {
+		cfg.MongoBackup.DBName = "gotdbot"
+	}
+
+	// Keep Mongo struct populated for backward compatibility
+	cfg.Mongo.URI = cfg.MongoBackup.URI
+	cfg.Mongo.DBName = cfg.MongoBackup.DBName
+
 	if value := os.Getenv("BOT_TOKEN"); value != "" {
 		cfg.Telegram.BotToken = value
-	}
-	if value := os.Getenv("MONGO_DB"); value != "" {
-		cfg.Mongo.DBName = value
 	}
 	if value := os.Getenv("REDIS_ADDR"); value != "" {
 		cfg.Redis.Address = value

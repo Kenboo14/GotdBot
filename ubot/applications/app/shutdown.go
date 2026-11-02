@@ -1,6 +1,7 @@
 package app
 
 import (
+	"assterisk/ubot/applications/databases"
 	"context"
 	"log"
 	"time"
@@ -8,18 +9,24 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func WaitShutdown(ctx context.Context, mClient *mongo.Client) {
-	// Menunggu sinyal stop dari NotifyContext di main
+func WaitShutdown(ctx context.Context, sqliteClient *databases.SQLiteClient, mClient *mongo.Client) {
 	<-ctx.Done()
 
 	log.Println("⚠️ Shutting down services...")
 
-	// Beri waktu 5 detik untuk bersih-bersih database sebelum aplikasi benar-benar mati
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	if sqliteClient != nil {
+		if err := sqliteClient.Close(); err != nil {
+			log.Printf("Error closing SQLite: %v", err)
+		}
+	}
 
-	if err := mClient.Disconnect(shutdownCtx); err != nil {
-		log.Printf("Error during MongoDB disconnect: %v", err)
+	if mClient != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := mClient.Disconnect(shutdownCtx); err != nil {
+			log.Printf("Error during MongoDB disconnect: %v", err)
+		}
 	}
 
 	log.Println("✅ Shutdown complete.")

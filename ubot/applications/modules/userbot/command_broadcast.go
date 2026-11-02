@@ -7,6 +7,7 @@ import (
 	"log"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -32,12 +34,12 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 			return err
 		}
 		s.mu.Lock()
-		cancel := s.broadcasts[ownerID]
+		job := s.broadcasts[ownerID]
 		s.mu.Unlock()
-		if cancel == nil {
+		if job == nil {
 			return sendUserText(ctx, client, target, "Tidak ada broadcast yang berjalan.")
 		}
-		cancel()
+		job.cancel()
 		return sendUserText(ctx, client, target, "Permintaan pembatalan broadcast diterima.")
 	}
 	if len(parts) == 0 {
@@ -97,14 +99,29 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 	// progress and the final report are always delivered by BOT_TOKEN to the
 	// owner's private chat.
 	monitorChatID := ownerID
-	jobCtx, cancel := context.WithCancel(s.root)
+
+	// Hierarki Context: jobCtx diturunkan dari accountCtx (bukan hanya s.root),
+	// sehingga jika lifecycle akun dihentikan, seluruh job akun ini otomatis dibatalkan.
 	s.mu.Lock()
+	var accountCtx context.Context
+	for cid, oid := range s.owners {
+		if oid == ownerID {
+			accountCtx = s.accountCtxs[cid]
+			break
+		}
+	}
+	if accountCtx == nil {
+		accountCtx = s.root
+	}
+	jobCtx, cancel := context.WithCancel(accountCtx)
+	job := &broadcastJob{id: taskID, cancel: cancel}
+
 	if s.broadcasts[ownerID] != nil {
 		s.mu.Unlock()
 		cancel()
 		return sendUserText(ctx, client, target, "Broadcast akun ini sedang berjalan. Gunakan !gcast cancel.")
 	}
-	s.broadcasts[ownerID] = cancel
+	s.broadcasts[ownerID] = job
 	s.mu.Unlock()
 	// Put an inline message into the originating chat so Telegram displays
 	// the `via @bot` attribution. The Bot API monitor below remains active as
@@ -129,8 +146,10 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 	go func() {
 		// Batasi concurrent broadcast untuk menjaga CPU dan memory
 		s.broadcastSem <- struct{}{}
-		defer func() { <-s.broadcastSem }()
-		s.runBroadcast(jobCtx, client, ownerID, targets, text, textEntities, replyMessageID, target, monitorChatID, taskID)
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { <-s.broadcastSem })
+
+		s.runBroadcast(jobCtx, client, ownerID, job, targets, text, textEntities, replyMessageID, target, monitorChatID, taskID)
 	}()
 	return nil
 }
@@ -345,16 +364,24 @@ func textMessageFromResult(result tg.MessagesMessagesClass, expectedID, excluded
 func (s *Service) broadcastTargets(ctx context.Context, client *telegram.Client, types map[string]bool, excludeBlacklist bool, ownerID int64) ([]broadcastTarget, error) {
 	blacklisted := map[string]bool{}
 	if excludeBlacklist {
-		cur, err := s.db.Collection("userbot_broadcast_blacklist").Find(ctx, bson.M{"owner_id": ownerID})
-		if err != nil {
-			return nil, err
-		}
-		var rows []blacklistRecord
-		if err = cur.All(ctx, &rows); err != nil {
-			return nil, err
-		}
-		for _, row := range rows {
-			blacklisted[fmt.Sprintf("%s:%d", row.Type, row.ChatID)] = true
+		if s.sqlite != nil {
+			bls, err := s.sqlite.ListBlacklist(ctx, ownerID)
+			if err == nil {
+				for _, b := range bls {
+					blacklisted[fmt.Sprintf("%s:%d", b.ChatType, b.ChatID)] = true
+				}
+			}
+		} else if s.db != nil {
+			cur, err := s.db.Collection("userbot_broadcast_blacklist").Find(ctx, bson.M{"owner_id": ownerID})
+			if err == nil {
+				var rows []blacklistRecord
+				if cur.All(ctx, &rows) == nil {
+					for _, row := range rows {
+						blacklisted[fmt.Sprintf("%s:%d", row.Type, row.ChatID)] = true
+					}
+				}
+				cur.Close(ctx)
+			}
 		}
 	}
 	targets := make([]broadcastTarget, 0)
@@ -436,7 +463,7 @@ func dialogName(peer tg.InputPeerClass, entities tg.Entities, id int64) string {
 	return fmt.Sprintf("%d", id)
 }
 
-func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, ownerID int64, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string) {
+func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, ownerID int64, job *broadcastJob, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string) {
 	success, failed := 0, 0
 	lastBucket := 0
 	lastProgress := 0
@@ -462,6 +489,25 @@ func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, own
 				})
 			} else {
 				_, sendErr = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{Peer: item.Peer, Message: text, Entities: entities, RandomID: randomID})
+			}
+			if sendErr != nil {
+				if flood, ok := tgerr.AsFloodWait(sendErr); ok {
+					waitDur := flood + 500*time.Millisecond
+					log.Printf("[userbot %d] Broadcast FloodWait %v. Backing off...", ownerID, waitDur)
+					select {
+					case <-ctx.Done():
+						break
+					case <-time.After(waitDur):
+						if replyMessageID != 0 && len(entities) == 0 {
+							_, sendErr = client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+								FromPeer: target, ID: []int{replyMessageID}, RandomID: []int64{randomID},
+								ToPeer: item.Peer, DropAuthor: true,
+							})
+						} else {
+							_, sendErr = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{Peer: item.Peer, Message: text, Entities: entities, RandomID: randomID})
+						}
+					}
+				}
 			}
 			if sendErr != nil {
 				failed++
@@ -505,7 +551,9 @@ func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, own
 		_, _ = s.getSender(client).To(target).Text(context.Background(), final)
 	}
 	s.mu.Lock()
-	delete(s.broadcasts, ownerID)
+	if s.broadcasts[ownerID] == job {
+		delete(s.broadcasts, ownerID)
+	}
 	s.mu.Unlock()
 }
 

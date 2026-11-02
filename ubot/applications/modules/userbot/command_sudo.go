@@ -2,14 +2,18 @@ package userbot
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
@@ -60,17 +64,53 @@ func (s *Service) isSudo(ctx context.Context, ownerID, userID int64) bool {
 	}
 	cacheKey := fmt.Sprintf("%d:%d", ownerID, userID)
 	s.sudoMu.RLock()
-	allowed, found := s.sudoCache[cacheKey]
+	entry, found := s.sudoCache[cacheKey]
 	s.sudoMu.RUnlock()
 	if found {
-		return allowed
+		if time.Now().Before(entry.expiresAt) {
+			return entry.allowed
+		}
+		// Entri expired langsung dihapus dan dianggap cache miss
+		s.sudoMu.Lock()
+		if cur, ok := s.sudoCache[cacheKey]; ok && cur.expiresAt == entry.expiresAt {
+			delete(s.sudoCache, cacheKey)
+		}
+		s.sudoMu.Unlock()
 	}
 
-	var row sudoRecord
-	err := s.db.Collection("userbot_sudo").FindOne(ctx, bson.M{"owner_id": ownerID, "user_id": userID}).Decode(&row)
-	allowed = err == nil
+	var allowed bool
+	var queryErr error
+	if s.sqlite != nil {
+		allowed, queryErr = s.sqlite.IsSudo(ctx, ownerID, userID)
+	} else if s.db != nil {
+		var row sudoRecord
+		err := s.db.Collection("userbot_sudo").FindOne(ctx, bson.M{"owner_id": ownerID, "user_id": userID}).Decode(&row)
+		if err != nil {
+			if errors.Is(err, mongo.ErrNoDocuments) {
+				allowed = false
+			} else {
+				queryErr = err
+			}
+		} else {
+			allowed = true
+		}
+	}
+	if queryErr != nil {
+		log.Printf("[sudo %d:%d] Database query error: %v", ownerID, userID, queryErr)
+		return false
+	}
+
 	s.sudoMu.Lock()
-	s.sudoCache[cacheKey] = allowed
+	cur, exists := s.sudoCache[cacheKey]
+	if !exists || time.Now().After(cur.expiresAt) {
+		s.sudoCache[cacheKey] = sudoCacheEntry{
+			allowed:   allowed,
+			expiresAt: time.Now().Add(30 * time.Minute),
+		}
+	} else {
+		s.sudoMu.Unlock()
+		return cur.allowed
+	}
 	s.sudoMu.Unlock()
 	return allowed
 }
@@ -103,28 +143,41 @@ func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, targ
 	if err != nil || userID <= 0 {
 		return sendUserText(ctx, client, target, "User ID tidak valid. Gunakan ID numerik Telegram.")
 	}
-	collection := s.db.Collection("userbot_sudo")
 	cacheKey := fmt.Sprintf("%d:%d", ownerID, userID)
 	if add {
-		_, err = collection.UpdateOne(ctx, bson.M{"owner_id": ownerID, "user_id": userID}, bson.M{"$set": bson.M{"owner_id": ownerID, "user_id": userID}}, options.Update().SetUpsert(true))
+		if s.sqlite != nil {
+			err = s.sqlite.AddSudo(ctx, ownerID, userID)
+		}
+		if s.db != nil {
+			go func(oid, uid int64) {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = s.db.Collection("userbot_sudo").UpdateOne(bgCtx, bson.M{"owner_id": oid, "user_id": uid}, bson.M{"$set": bson.M{"owner_id": oid, "user_id": uid}}, options.Update().SetUpsert(true))
+			}(ownerID, userID)
+		}
 		if err == nil {
 			s.sudoMu.Lock()
-			s.sudoCache[cacheKey] = true
+			s.sudoCache[cacheKey] = sudoCacheEntry{allowed: true, expiresAt: time.Now().Add(30 * time.Minute)}
 			s.sudoMu.Unlock()
 			err = sendUserText(ctx, client, target, fmt.Sprintf("Sudo ditambahkan: %d", userID))
 		}
 		return err
 	}
-	result, removeErr := collection.DeleteOne(ctx, bson.M{"owner_id": ownerID, "user_id": userID})
-	if removeErr != nil {
-		return removeErr
+	if s.sqlite != nil {
+		err = s.sqlite.RemoveSudo(ctx, ownerID, userID)
+	}
+	if s.db != nil {
+		go func(oid, uid int64) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("userbot_sudo").DeleteOne(bgCtx, bson.M{"owner_id": oid, "user_id": uid})
+		}(ownerID, userID)
+	}
+	if err != nil {
+		return err
 	}
 	s.sudoMu.Lock()
-	s.sudoCache[cacheKey] = false
+	s.sudoCache[cacheKey] = sudoCacheEntry{allowed: false, expiresAt: time.Now().Add(30 * time.Minute)}
 	s.sudoMu.Unlock()
-	text := fmt.Sprintf("Sudo dihapus: %d", userID)
-	if result.DeletedCount == 0 {
-		text = "User tersebut tidak ada di daftar sudo."
-	}
-	return sendUserText(ctx, client, target, text)
+	return sendUserText(ctx, client, target, fmt.Sprintf("Sudo dihapus: %d", userID))
 }

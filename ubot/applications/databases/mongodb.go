@@ -4,39 +4,49 @@ import (
 	"context"
 	"log"
 	"net/url"
+	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type MongoClient struct {
-	Client     *mongo.Client
-	Database   *mongo.Database
-	Collection *mongo.Collection
+	Client   *mongo.Client
+	Database *mongo.Database
 }
 
 func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, error) {
+	if strings.TrimSpace(uri) == "" {
+		log.Println("☁️ MongoDB Backup URI is empty. Offsite backup disabled.")
+		return nil, nil
+	}
+
 	opt := options.Client().ApplyURI(uri)
-	opt.SetMaxPoolSize(20)
-	opt.SetMinPoolSize(5)
-	opt.SetRetryReads(false)
-	opt.SetRetryWrites(false)
+	opt.SetMaxPoolSize(10)
+	opt.SetMinPoolSize(2)
+	opt.SetConnectTimeout(5 * time.Second)
+	opt.SetServerSelectionTimeout(5 * time.Second)
 
 	c, err := mongo.Connect(ctx, opt)
 	if err != nil {
-		return nil, err
+		log.Printf("⚠️ MongoDB Backup connect warning: %v (bypassing offsite backup)", err)
+		return nil, nil
 	}
-	if err := c.Ping(ctx, nil); err != nil {
-		return nil, err
+
+	pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
+	defer pingCancel()
+	if err := c.Ping(pingCtx, nil); err != nil {
+		log.Printf("⚠️ MongoDB Backup ping failed: %v (bypassing offsite backup)", err)
+		return nil, nil
 	}
 
 	displayURI := uri
 	if parsed, parseErr := url.Parse(uri); parseErr == nil && parsed.User != nil {
-		// Never print the MongoDB password to application or Docker logs.
 		parsed.User = url.User(parsed.User.Username())
 		displayURI = parsed.String()
 	}
-	log.Println("Connected to Mongo:", displayURI)
+	log.Println("☁️ Connected to MongoDB Cloud Backup:", displayURI)
 
 	return &MongoClient{Client: c, Database: c.Database(dbName)}, nil
 }

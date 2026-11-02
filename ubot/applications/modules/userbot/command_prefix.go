@@ -49,7 +49,7 @@ func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, 
 		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: !setp <prefix> atau !setp none")
 		return err
 	}
-	store := &mongoStorage{collection: s.db.Collection("userbot_sessions"), chatID: chatID, key: s.key}
+	store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, key: s.key}
 	if err := store.setPrefix(ctx, value, true); err != nil {
 		return err
 	}

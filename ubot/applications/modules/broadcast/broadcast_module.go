@@ -9,7 +9,7 @@ import (
 
 type Init struct{}
 
-func (m *Init) Register(ctx context.Context, mongodb *mongo.Database, redis *databases.Redis) {
+func (m *Init) Register(ctx context.Context, sqlite *databases.SQLiteClient, mongodb *mongo.Database, redis *databases.Redis) {
 	repo := NewRepository(mongodb, redis)
 	svc := NewService(repo)
 

@@ -7,6 +7,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,9 +37,9 @@ import (
 // the reaper disconnects it. Override with IDLE_TIMEOUT_MINUTES env var.
 var idleTimeoutMinutes = 30
 
-// maxActiveSessions is the hard cap on simultaneously connected MTProto clients.
-// Override with MAX_ACTIVE_SESSIONS env var. When the cap is hit, the oldest
-// idle session is evicted before a new one connects.
+// maxActiveSessions is the admission limit on simultaneously active/connecting MTProto clients.
+// Override with MAX_ACTIVE_SESSIONS env var. When reached, new activations are rejected
+// to protect existing active sessions from eviction (admission control policy).
 var maxActiveSessions = 100
 
 func init() {
@@ -52,6 +53,7 @@ func init() {
 
 type Service struct {
 	root             context.Context
+	sqlite           *databases.SQLiteClient
 	db               *mongo.Database
 	redis            *databases.Redis
 	apiID            int
@@ -64,21 +66,34 @@ type Service struct {
 	mu               sync.Mutex
 	logins           map[int64]*login
 	active           map[int64]*telegram.Client
-	activeCancels    map[int64]context.CancelFunc // cancel func untuk idle disconnect
+	connecting       map[int64]uint64             // guard terhadap double activation & reservasi slot (chatID -> genID)
+	activeCancels    map[int64]context.CancelFunc // cancel func untuk graceful shutdown
+	accountCtxs      map[int64]context.Context    // chatID -> clientCtx (account lifecycle context)
+	accountGens      map[int64]uint64             // chatID -> token kepemilikan generasi lifecycle
+	nextGen          uint64                       // counter generasi unik untuk lifecycle
 	lastActive       map[int64]time.Time          // chatID -> waktu aktivitas terakhir
 	owners           map[int64]int64              // chatID -> ownerID
 	clientOwners     map[*telegram.Client]int64   // client -> ownerID
 	senderCache      map[*telegram.Client]*message.Sender // cached message.Sender per client
 	prefixes         map[int64]string
-	broadcasts       map[int64]context.CancelFunc
+	broadcasts       map[int64]*broadcastJob
 	sudoMu           sync.RWMutex
-	sudoCache        map[string]bool // "ownerID:userID" -> bool
-	broadcastSem     chan struct{}   // Semaphore untuk membatasi concurrent gcast
+	sudoCache        map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
+	broadcastSem     chan struct{}             // Semaphore untuk membatasi concurrent gcast
 }
 type login struct {
-	cancel   context.CancelFunc
-	otp      chan string
-	password chan string
+	cancel    context.CancelFunc
+	otp       chan string
+	password  chan string
+	createdAt time.Time
+}
+type broadcastJob struct {
+	id     string
+	cancel context.CancelFunc
+}
+type sudoCacheEntry struct {
+	allowed   bool
+	expiresAt time.Time
 }
 type record struct {
 	ChatID    int64     `bson:"_id"`
@@ -90,9 +105,10 @@ type record struct {
 	UpdatedAt time.Time `bson:"updated_at"`
 }
 
-func NewService(root context.Context, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken string) *Service {
+func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken string) *Service {
 	return &Service{
 		root:             root,
+		sqlite:           sqlite,
 		db:               db,
 		redis:            redis,
 		apiID:            apiID,
@@ -101,15 +117,18 @@ func NewService(root context.Context, db *mongo.Database, redis *databases.Redis
 		botToken:         botToken,
 		logins:           make(map[int64]*login),
 		active:           make(map[int64]*telegram.Client),
+		connecting:       make(map[int64]uint64),
 		activeCancels:    make(map[int64]context.CancelFunc),
+		accountCtxs:      make(map[int64]context.Context),
+		accountGens:      make(map[int64]uint64),
 		lastActive:       make(map[int64]time.Time),
 		owners:           make(map[int64]int64),
 		clientOwners:     make(map[*telegram.Client]int64),
 		senderCache:      make(map[*telegram.Client]*message.Sender),
 		prefixes:         make(map[int64]string),
-		broadcasts:       make(map[int64]context.CancelFunc),
+		broadcasts:       make(map[int64]*broadcastJob),
 		inlineBots:       make(map[*telegram.Client]*tg.InputUser),
-		sudoCache:        make(map[string]bool),
+		sudoCache:        make(map[string]sudoCacheEntry),
 		broadcastSem:     make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
 	}
 }
@@ -142,10 +161,10 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 			ownerID = job.UserID
 		}
 		s.mu.Lock()
-		cancel := s.broadcasts[ownerID]
+		bJob := s.broadcasts[ownerID]
 		s.mu.Unlock()
-		if cancel != nil {
-			cancel()
+		if bJob != nil {
+			bJob.cancel()
 		}
 		return
 	}
@@ -183,7 +202,9 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 	started := time.Now()
-	if err := client.Ping(ctx); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx); err != nil {
 		s.reply(ctx, job.ChatID, "Ping gagal. Periksa koneksi dan status sesi userbot.", "failed")
 		return
 	}
@@ -191,88 +212,105 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 }
 
 func (s *Service) Restore(ctx context.Context) {
-	cur, err := s.db.Collection("userbot_sessions").Find(ctx, bson.M{"account_id": bson.M{"$gt": 0}})
-	if err != nil {
-		return
-	}
-	defer cur.Close(ctx)
-	for cur.Next(ctx) {
-		var row record
-		if cur.Decode(&row) == nil {
-			prefix := row.Prefix
-			if !row.PrefixSet {
-				prefix = "!"
+	// Disaster Recovery: jika SQLite lokal kosong tapi MongoDB cloud tersedia, download backup
+	if s.db != nil && s.sqlite != nil {
+		count, _ := s.sqlite.CountSessions(ctx)
+		if count == 0 {
+			log.Println("🔄 SQLite lokal kosong. Mengambil salinan sesi dari MongoDB Cloud...")
+			cur, err := s.db.Collection("userbot_sessions").Find(ctx, bson.M{"account_id": bson.M{"$gt": 0}})
+			if err == nil {
+				defer cur.Close(ctx)
+				restored := 0
+				for cur.Next(ctx) {
+					var row record
+					if cur.Decode(&row) == nil {
+						_ = s.sqlite.SaveSession(ctx, row.ChatID, row.OwnerID, row.AccountID, row.Blob, row.Prefix, row.PrefixSet)
+						restored++
+					}
+				}
+				log.Printf("✅ Disaster Recovery selesai: %d sesi dipulihkan ke SQLite", restored)
 			}
-			s.mu.Lock()
-			s.prefixes[row.ChatID] = prefix
-			s.owners[row.ChatID] = row.AccountID
-			s.mu.Unlock()
-			s.activate(row.ChatID, row.AccountID)
 		}
 	}
-	// Jalankan reaper di background untuk mematikan sesi yang idle > 30 menit
+
+	if s.sqlite == nil {
+		return
+	}
+
+	sessions, err := s.sqlite.GetAllSessions(ctx)
+	if err != nil {
+		log.Printf("Gagal memuat sesi dari SQLite: %v", err)
+		return
+	}
+
+	for _, row := range sessions {
+		prefix := row.Prefix
+		if !row.PrefixSet {
+			prefix = "!"
+		}
+		s.mu.Lock()
+		s.prefixes[row.ChatID] = prefix
+		s.owners[row.ChatID] = row.AccountID
+		s.mu.Unlock()
+		s.activate(row.ChatID, row.AccountID)
+
+		// Staggered Startup Jitter (Anti-CPU-Starvation for 1 vCPU)
+		// Membuka 500 akun bertahap ~15 detik tanpa memicu CPU 100% starvation
+		time.Sleep(30 * time.Millisecond)
+	}
+	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
+	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
 	go s.startIdleReaper(ctx)
 }
 
 func (s *Service) startIdleReaper(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Minute) // Cek setiap 1 menit untuk respon lebih cepat
+	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.reapIdleSessions()
+			s.reapStaleResources()
 		}
 	}
 }
 
-func (s *Service) reapIdleSessions() {
-	timeout := time.Duration(idleTimeoutMinutes) * time.Minute
+// reapStaleResources bertugas membersihkan resource sementara yang sudah tidak digunakan,
+// TANPA memutus koneksi MTProto client aktif (Persistent MTProto 24/7).
+func (s *Service) reapStaleResources() {
+	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now()
-	for chatID, cancel := range s.activeCancels {
-		last, ok := s.lastActive[chatID]
-		// Jika tidak ada aktivitas lebih dari idle timeout dan sedang tidak menjalankan broadcast
-		if ok && now.Sub(last) > timeout {
-			ownerID := s.owners[chatID]
-			if s.broadcasts[ownerID] == nil && cancel != nil {
-				log.Printf("[IdleReaper] Menutup sesi idle chatID=%d (idle %dm) untuk hemat RAM", chatID, int(now.Sub(last).Minutes()))
-				cancel()
-				delete(s.activeCancels, chatID)
-			}
-		}
-	}
-}
 
-// evictOldestIdle forcefully disconnects the session with the oldest lastActive
-// timestamp to make room for a new connection. Must be called with s.mu held.
-func (s *Service) evictOldestIdle() {
-	var oldestChat int64
-	var oldestTime time.Time
-	first := true
-	for chatID, t := range s.lastActive {
-		if cancel, ok := s.activeCancels[chatID]; ok && cancel != nil {
-			// Jangan evict sesi yang sedang broadcast
-			ownerID := s.owners[chatID]
-			if s.broadcasts[ownerID] != nil {
-				continue
-			}
-			if first || t.Before(oldestTime) {
-				oldestChat = chatID
-				oldestTime = t
-				first = false
+	// 1. Membersihkan proses login OTP (/create) yang ditinggalkan user > 5 menit
+	for chatID, l := range s.logins {
+		if l != nil && !l.createdAt.IsZero() && now.Sub(l.createdAt) > 5*time.Minute {
+			l.cancel()
+			delete(s.logins, chatID)
+		}
+	}
+
+	// 2. Bounded Cache: Eviction bertahap berbasis TTL dan batas awal kapasitas (2.000)
+	s.sudoMu.Lock()
+	for k, entry := range s.sudoCache {
+		if now.After(entry.expiresAt) {
+			delete(s.sudoCache, k)
+		}
+	}
+	// Jika setelah pembersihan TTL ukuran masih melebihi batas konfigurasi awal (2.000),
+	// lakukan pemangkasan bertahap (maksimal 20% entri) untuk mencegah lonjakan cache miss serentak ke MongoDB
+	if len(s.sudoCache) > 2000 {
+		pruned := 0
+		for k := range s.sudoCache {
+			delete(s.sudoCache, k)
+			pruned++
+			if pruned >= 400 {
+				break
 			}
 		}
 	}
-	if !first {
-		if cancel, ok := s.activeCancels[oldestChat]; ok && cancel != nil {
-			log.Printf("[PoolCap] Evicting oldest idle session chatID=%d untuk buat ruang koneksi baru", oldestChat)
-			cancel()
-			delete(s.activeCancels, oldestChat)
-		}
-	}
+	s.sudoMu.Unlock()
 }
 
 func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
@@ -330,7 +368,7 @@ func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
 
 func (s *Service) start(parent context.Context, chatID, ownerID int64, phone string) {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
-	l := &login{cancel: cancel, otp: make(chan string, 1), password: make(chan string, 1)}
+	l := &login{cancel: cancel, otp: make(chan string, 1), password: make(chan string, 1), createdAt: time.Now()}
 	s.mu.Lock()
 	s.logins[chatID] = l
 	s.mu.Unlock()
@@ -344,7 +382,7 @@ func (s *Service) start(parent context.Context, chatID, ownerID int64, phone str
 }
 
 func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone string, l *login) error {
-	store := &mongoStorage{collection: s.db.Collection("userbot_sessions"), chatID: chatID, ownerID: ownerID, key: s.key}
+	store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, ownerID: ownerID, key: s.key}
 	client := telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, NoUpdates: true})
 	return client.Run(ctx, func(ctx context.Context) error {
 		sent, err := client.Auth().SendCode(ctx, phone, auth.SendCodeOptions{})
@@ -398,22 +436,10 @@ func (s *Service) reply(ctx context.Context, chatID int64, text, state string) {
 }
 
 func (s *Service) hasInstalledSession(ctx context.Context, chatID, ownerID int64) (bool, error) {
-	filters := []bson.M{{"_id": chatID}}
-	if ownerID > 0 {
-		filters = append(filters, bson.M{"owner_id": ownerID})
+	if s.sqlite != nil {
+		return s.sqlite.HasSession(ctx, chatID, ownerID)
 	}
-	var row record
-	err := s.db.Collection("userbot_sessions").FindOne(ctx, bson.M{
-		"$or":        filters,
-		"account_id": bson.M{"$gt": 0},
-	}).Decode(&row)
-	if errors.Is(err, mongo.ErrNoDocuments) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return row.AccountID > 0, nil
+	return false, nil
 }
 
 func (s *Service) remove(chatID int64) { s.mu.Lock(); delete(s.logins, chatID); s.mu.Unlock() }
@@ -424,6 +450,10 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		s.mu.Unlock()
 		return
 	}
+	if s.connecting[chatID] > 0 {
+		s.mu.Unlock()
+		return
+	}
 	var ownerID int64
 	if len(knownOwnerID) > 0 {
 		ownerID = knownOwnerID[0]
@@ -431,24 +461,41 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	if ownerID == 0 {
 		ownerID = s.owners[chatID]
 	}
-	// Hard cap: evict oldest idle session jika sudah di limit
-	activeCount := len(s.activeCancels)
-	if activeCount >= maxActiveSessions {
-		s.evictOldestIdle()
+	// Admission limit: tolak aktivasi baru jika kapasitas penuh, jangan pernah putus akun aktif
+	if len(s.active)+len(s.connecting) >= maxActiveSessions {
+		log.Printf("[PoolCap] Kapasitas maksimum tercapai (%d). Menolak aktivasi baru untuk chatID=%d", maxActiveSessions, chatID)
+		s.mu.Unlock()
+		return
 	}
-	// Reserve the key before starting the network client.
-	s.active[chatID] = nil
+	// Reservasi slot secara atomik dengan status connecting dan generation ID unik
+	s.nextGen++
+	genID := s.nextGen
+	s.connecting[chatID] = genID
+	s.accountGens[chatID] = genID
 	s.lastActive[chatID] = time.Now()
 	clientCtx, clientCancel := context.WithCancel(s.root)
 	s.activeCancels[chatID] = clientCancel
+	s.accountCtxs[chatID] = clientCtx
 	s.mu.Unlock()
 	go func() {
 		var client *telegram.Client
 		defer func() {
 			s.mu.Lock()
-			delete(s.active, chatID)
-			delete(s.activeCancels, chatID)
-			delete(s.lastActive, chatID)
+			// Ownership check: hanya bersihkan connecting jika token generasi masih cocok
+			if s.connecting[chatID] == genID {
+				delete(s.connecting, chatID)
+			}
+			// Ownership check: hanya bersihkan active jika client pointer masih cocok
+			if s.active[chatID] == client {
+				delete(s.active, chatID)
+				delete(s.lastActive, chatID)
+			}
+			// Ownership check: hanya bersihkan cancel, context, dan gen jika generasi masih milik lifecycle ini
+			if s.accountGens[chatID] == genID {
+				delete(s.activeCancels, chatID)
+				delete(s.accountCtxs, chatID)
+				delete(s.accountGens, chatID)
+			}
 			if client != nil {
 				delete(s.clientOwners, client)
 				delete(s.senderCache, client)
@@ -460,7 +507,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			}
 			s.inlineMu.Unlock()
 		}()
-		store := &mongoStorage{collection: s.db.Collection("userbot_sessions"), chatID: chatID, key: s.key}
+		store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, ownerID: ownerID, key: s.key}
 		dispatcher := tg.NewUpdateDispatcher()
 		dispatcher.OnNewMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
 			s.mu.Lock()
@@ -478,10 +525,15 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		})
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: dispatcher})
 		s.mu.Lock()
-		s.active[chatID] = client
-		if ownerID > 0 {
-			s.owners[chatID] = ownerID
-			s.clientOwners[client] = ownerID
+		if s.connecting[chatID] == genID {
+			delete(s.connecting, chatID)
+		}
+		if s.accountGens[chatID] == genID {
+			s.active[chatID] = client
+			if ownerID > 0 {
+				s.owners[chatID] = ownerID
+				s.clientOwners[client] = ownerID
+			}
 		}
 		s.mu.Unlock()
 		_ = client.Run(clientCtx, func(ctx context.Context) error {
@@ -490,8 +542,10 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				return err
 			}
 			s.mu.Lock()
-			s.owners[chatID] = self.ID
-			s.clientOwners[client] = self.ID
+			if s.accountGens[chatID] == genID {
+				s.owners[chatID] = self.ID
+				s.clientOwners[client] = self.ID
+			}
 			s.mu.Unlock()
 			<-ctx.Done()
 			return ctx.Err()
@@ -511,9 +565,26 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	s.mu.Unlock()
 
-	// Fast bailout: jika pesan tidak diawali prefix, tolak langsung sebelum pemrosesan parser
-	if prefix != "" && !strings.HasPrefix(msg.Message, prefix) {
-		return nil
+	// Fast bailout:
+	// 1. Jika prefix aktif dan pesan tidak diawali prefix, tolak langsung dalam < 10 nanodetik.
+	if prefix != "" {
+		if !strings.HasPrefix(msg.Message, prefix) {
+			return nil
+		}
+	} else {
+		// 2. Jika prefix == "none" (tanpa prefix):
+		// Pesan dari orang lain di grup (!msg.Out) WAJIB ditolak langsung kecuali pengirim terdaftar di Sudo.
+		// Ini mencegah obrolan ribuan orang di grup ramai memicu parser.
+		if !msg.Out {
+			ownerID := s.owners[chatID]
+			senderID := int64(0)
+			if sender, ok := msg.FromID.(*tg.PeerUser); ok {
+				senderID = sender.UserID
+			}
+			if senderID == 0 || !s.isSudo(ctx, ownerID, senderID) {
+				return nil
+			}
+		}
 	}
 	name, args, ok := parseUserCommand(msg.Message, prefix)
 	if !ok {
@@ -581,7 +652,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	started := time.Now()
 	text := "Ping gagal. Periksa koneksi dan status sesi userbot."
-	if err := client.Ping(ctx); err == nil {
+	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer pingCancel()
+	if err := client.Ping(pingCtx); err == nil {
 		latency := float64(time.Since(started).Microseconds()) / 1000
 		if name == "p" {
 			text = fmt.Sprintf("Pong! %.3f ms", latency)
@@ -592,9 +665,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	sender := s.getSender(client)
 	if strings.HasPrefix(text, "<code>") {
 		text = strings.TrimSuffix(strings.TrimPrefix(text, "<code>"), "</code>")
-		_, err = sender.To(peerID).StyledText(ctx, styling.Code(text))
+		_, err = sender.To(peerID).StyledText(pingCtx, styling.Code(text))
 	} else {
-		_, err = sender.To(peerID).Text(ctx, text)
+		_, err = sender.To(peerID).Text(pingCtx, text)
 	}
 	return err
 }
@@ -631,40 +704,86 @@ func safeError(err error) string {
 	}
 }
 
-type mongoStorage struct {
-	collection *mongo.Collection
-	chatID     int64
-	ownerID    int64
-	key        []byte
+type sqliteStorage struct {
+	sqlite  *databases.SQLiteClient
+	db      *mongo.Database // optional remote backup
+	chatID  int64
+	ownerID int64
+	key     []byte
 }
 
-func (m *mongoStorage) LoadSession(ctx context.Context) ([]byte, error) {
-	var row record
-	err := m.collection.FindOne(ctx, bson.M{"_id": m.chatID}).Decode(&row)
-	if err == mongo.ErrNoDocuments {
+func (s *sqliteStorage) LoadSession(ctx context.Context) ([]byte, error) {
+	if s.sqlite == nil {
+		return nil, session.ErrNotFound
+	}
+	row, err := s.sqlite.GetSessionByChat(ctx, s.chatID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, session.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
-	return decrypt(m.key, row.Blob)
+	return decrypt(s.key, row.Blob)
 }
-func (m *mongoStorage) StoreSession(ctx context.Context, data []byte) error {
-	blob, err := encrypt(m.key, data)
+
+func (s *sqliteStorage) StoreSession(ctx context.Context, data []byte) error {
+	blob, err := encrypt(s.key, data)
 	if err != nil {
 		return err
 	}
-	_, err = m.collection.UpdateByID(ctx, m.chatID, bson.M{"$set": bson.M{"owner_id": m.ownerID, "session": blob, "updated_at": time.Now().UTC()}}, options.Update().SetUpsert(true))
-	return err
-}
-func (m *mongoStorage) setAccount(ctx context.Context, id int64) error {
-	_, err := m.collection.UpdateByID(ctx, m.chatID, bson.M{"$set": bson.M{"account_id": id, "updated_at": time.Now().UTC()}})
-	return err
+	if s.sqlite != nil {
+		if err := s.sqlite.SaveSession(ctx, s.chatID, s.ownerID, 0, blob, "!", false); err != nil {
+			return err
+		}
+	}
+	// Asynchronous offsite backup to MongoDB
+	if s.db != nil {
+		go func(cid, oid int64, b string) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("userbot_sessions").UpdateByID(bgCtx, cid, bson.M{
+				"$set": bson.M{"owner_id": oid, "session": b, "updated_at": time.Now().UTC()},
+			}, options.Update().SetUpsert(true))
+		}(s.chatID, s.ownerID, blob)
+	}
+	return nil
 }
 
-func (m *mongoStorage) setPrefix(ctx context.Context, prefix string, configured bool) error {
-	_, err := m.collection.UpdateByID(ctx, m.chatID, bson.M{"$set": bson.M{"prefix": prefix, "prefix_configured": configured, "updated_at": time.Now().UTC()}})
-	return err
+func (s *sqliteStorage) setAccount(ctx context.Context, id int64) error {
+	if s.sqlite != nil {
+		row, err := s.sqlite.GetSessionByChat(ctx, s.chatID)
+		if err == nil && row != nil {
+			_ = s.sqlite.SaveSession(ctx, s.chatID, row.OwnerID, id, row.Blob, row.Prefix, row.PrefixSet)
+		}
+	}
+	if s.db != nil {
+		go func(cid, accID int64) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("userbot_sessions").UpdateByID(bgCtx, cid, bson.M{
+				"$set": bson.M{"account_id": accID, "updated_at": time.Now().UTC()},
+			})
+		}(s.chatID, id)
+	}
+	return nil
+}
+
+func (s *sqliteStorage) setPrefix(ctx context.Context, prefix string, configured bool) error {
+	if s.sqlite != nil {
+		if err := s.sqlite.UpdatePrefix(ctx, s.chatID, prefix); err != nil {
+			return err
+		}
+	}
+	if s.db != nil {
+		go func(cid int64, pfx string, conf bool) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("userbot_sessions").UpdateByID(bgCtx, cid, bson.M{
+				"$set": bson.M{"prefix": pfx, "prefix_configured": conf, "updated_at": time.Now().UTC()},
+			})
+		}(s.chatID, prefix, configured)
+	}
+	return nil
 }
 func encrypt(key, data []byte) (string, error) {
 	block, err := aes.NewCipher(key)
