@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -43,14 +44,17 @@ func Run(ctx context.Context) {
 		&controllers.Init{},
 	}
 
+	baseTransport := &http.Transport{
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 50,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  false,
+	}
+
 	httpClient := &http.Client{
-		Timeout: 65 * time.Second,
-		Transport: &http.Transport{
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 50,
-			IdleConnTimeout:     90 * time.Second,
-			DisableCompression:  false,
-		},
+		Timeout:   65 * time.Second,
+		Transport: newProtocolSpyTransport(baseTransport),
 	}
 
 	opts := []bot.Option{
@@ -77,6 +81,7 @@ func Run(ctx context.Context) {
 // by the supplied callback while all other updates use the library dispatcher.
 func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHandler func(context.Context, *bot.Bot, *t_models.Update)) {
 	offset := int64(0)
+	var protoLogged sync.Once
 	for {
 		select {
 		case <-ctx.Done():
@@ -105,6 +110,9 @@ func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHa
 			time.Sleep(2 * time.Second)
 			continue
 		}
+		protoLogged.Do(func() {
+			log.Printf("[gateway http] polling connected to %s using %s", req.URL.Host, resp.Proto)
+		})
 		var envelope struct {
 			OK     bool              `json:"ok"`
 			Result []json.RawMessage `json:"result"`
@@ -131,4 +139,23 @@ func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHa
 			go b.ProcessUpdate(ctx, &up)
 		}
 	}
+}
+
+type protocolSpyTransport struct {
+	base http.RoundTripper
+	once sync.Once
+}
+
+func newProtocolSpyTransport(base http.RoundTripper) *protocolSpyTransport {
+	return &protocolSpyTransport{base: base}
+}
+
+func (p *protocolSpyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := p.base.RoundTrip(req)
+	if err == nil && resp != nil {
+		p.once.Do(func() {
+			log.Printf("[gateway bot rpc] protocol=%s url=%s host=%s proto_major=%d", resp.Proto, req.URL.Path, req.URL.Host, resp.ProtoMajor)
+		})
+	}
+	return resp, err
 }

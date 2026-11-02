@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"net"
 	"runtime"
 	"strconv"
@@ -225,6 +226,42 @@ var (
 	}
 )
 
+type helpPageSnapshot struct {
+	text   string
+	markup *t_models.InlineKeyboardMarkup
+}
+
+var cachedHelpPages = map[string]helpPageSnapshot{
+	"assist_help:home": {
+		text:   "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.",
+		markup: cachedHelpHomeMarkup,
+	},
+	"assist_help:ping": {
+		text:   "<b>Ping</b>\n\n<code>!ping</code> mengukur latency koneksi MTProto userbot.\n<code>!p</code> adalah alias.",
+		markup: cachedHelpBackMarkup,
+	},
+	"assist_help:notes": {
+		text:   "<b>Notes</b>\n\nPerintah catatan:\n<code>!save &lt;nama&gt; [-cb|-pop]</code> — Simpan catatan\n<code>!get &lt;nama&gt;</code> atau <code>#&lt;nama&gt;</code> — Ambil catatan\n<code>!lsnote</code> — Daftar catatan\n<code>!delnote &lt;nama&gt;</code> — Hapus catatan\n<code>!clearnote</code> — Hapus semua catatan\n<code>!exportnote</code> — Ekspor catatan\n<code>!importnote</code> — Impor catatan",
+		markup: cachedHelpBackMarkup,
+	},
+	"assist_help:code": {
+		text:   "<b>Code</b>\n\nReply pesan dengan <code>!code</code> atau <code>!code go</code> untuk memformat kode melalui inline bot.",
+		markup: cachedHelpBackMarkup,
+	},
+	"assist_help:server": {
+		text:   "<b>Server</b>\n\n<code>!server</code> menampilkan status resource gateway dan tombol refresh.",
+		markup: cachedHelpBackMarkup,
+	},
+}
+
+func isMessageNotModifiedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "message is not modified") || strings.Contains(msg, "message_not_modified")
+}
+
 func buildHelpHomeKeyboard() *t_models.InlineKeyboardMarkup {
 	labels := []string{"Admin", "Broadcast", "Code", "Extra", "Global", "Info", "Logs", "Notes", "Ping", "PM Permit", "Prefixes", "Profile", "Server", "Sticker", "Sudo", "VC Tools"}
 	keys := []string{"admin", "broadcast", "code", "extra", "globalz", "info", "logs", "notes", "ping", "pmpermit", "prefixes", "profile", "server", "sticker", "sudo", "vctools"}
@@ -246,36 +283,58 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 	if update.CallbackQuery == nil {
 		return
 	}
+	start := time.Now()
 	data := update.CallbackQuery.Data
+
 	if strings.HasPrefix(data, "assist_server:") {
 		h.serverCallback(ctx, b, update)
 		return
 	}
-	text := "<b>" + strings.TrimPrefix(data, "assist_help:") + "</b>\n\nKategori ini tersedia pada menu bantuan."
-	if data == "assist_help:home" {
-		text = "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot."
-	} else if data == "assist_help:ping" {
-		text = "<b>Ping</b>\n\n<code>!ping</code> mengukur latency koneksi MTProto userbot.\n<code>!p</code> adalah alias."
-	} else if data == "assist_help:notes" {
-		text = "<b>Notes</b>\n\nModul Notes belum diaktifkan pada workspace GotdBot."
-	} else if data == "assist_help:code" {
-		text = "<b>Code</b>\n\nReply pesan dengan <code>!code</code> atau <code>!code go</code> untuk memformat kode melalui inline bot."
-	} else if data == "assist_help:server" {
-		text = "<b>Server</b>\n\n<code>!server</code> menampilkan status resource gateway dan tombol refresh."
-	}
-	markup := cachedHelpHomeMarkup
-	if data != "assist_help:home" {
-		markup = cachedHelpBackMarkup
-	}
-	// Jawab callback secara asynchronous di background agar loading spinner tombol langsung hilang tanpa memblokir edit tampilan pesan
-	go func(cbID string) {
-		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cbID})
-	}(update.CallbackQuery.ID)
 
+	var (
+		ackDispatch time.Duration
+		cacheDur    time.Duration
+		renderDur   time.Duration
+		editDur     time.Duration
+		rpcCount    = 0
+		cbErr       error
+	)
+
+	// Step 1: Dispatch ACK segera di background (menghilangkan loading spinner tombol di client Telegram)
+	ackStart := time.Now()
+	go func(cbID string) {
+		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ackNetStart := time.Now()
+		_, err := b.AnswerCallbackQuery(actx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cbID})
+		ackNetDur := time.Since(ackNetStart)
+		if err != nil {
+			log.Printf("[callback-ack] type=help cbID=%s net_dur=%v err=%v", cbID, ackNetDur, err)
+		} else {
+			log.Printf("[callback-ack] type=help cbID=%s net_dur=%v status=ok", cbID, ackNetDur)
+		}
+	}(update.CallbackQuery.ID)
+	ackDispatch = time.Since(ackStart)
+	rpcCount++
+
+	// Step 2: Ambil template halaman bantuan dari in-memory cache
+	cacheStart := time.Now()
+	page, ok := cachedHelpPages[data]
+	cacheDur = time.Since(cacheStart)
+
+	text := page.text
+	markup := page.markup
+	if !ok {
+		renderStart := time.Now()
+		category := strings.TrimPrefix(data, "assist_help:")
+		text = fmt.Sprintf("<b>%s</b>\n\nKategori ini tersedia pada menu bantuan.", html.EscapeString(category))
+		markup = cachedHelpBackMarkup
+		renderDur = time.Since(renderStart)
+	}
+
+	// Step 3: Edit pesan
 	edit := &bot.EditMessageTextParams{Text: text, ParseMode: "HTML", ReplyMarkup: markup}
 	if update.CallbackQuery.InlineMessageID != "" {
-		// Messages inserted through messages.sendInlineBotResult do not carry a
-		// chat/message object in callback_query; Telegram supplies this ID.
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
 	} else if update.CallbackQuery.Message.Message != nil {
 		edit.ChatID = update.CallbackQuery.Message.Message.Chat.ID
@@ -283,16 +342,58 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 	} else {
 		return
 	}
-	_, _ = b.EditMessageText(ctx, edit)
+
+	editStart := time.Now()
+	_, editErr := b.EditMessageText(ctx, edit)
+	editDur = time.Since(editStart)
+	rpcCount++
+
+	if editErr != nil && !isMessageNotModifiedErr(editErr) {
+		cbErr = editErr
+	}
+
+	totalDur := time.Since(start)
+	log.Printf("[callback] data=%q ack_dispatch=%v cache=%v db=0s render=%v edit=%v total=%v rpc_count=%d err=%v",
+		data, ackDispatch, cacheDur, renderDur, editDur, totalDur, rpcCount, cbErr)
 }
 
 func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
-	invokeStart := time.Now()
+	start := time.Now()
+	var (
+		ackDispatch time.Duration
+		renderDur   time.Duration
+		editDur     time.Duration
+		rpcCount    = 0
+		cbErr       error
+	)
+
+	// Step 1: Dispatch ACK segera di awal sebelum render/profiling CPU OS
+	ackStart := time.Now()
+	go func(cbID string) {
+		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ackNetStart := time.Now()
+		_, err := b.AnswerCallbackQuery(actx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: cbID,
+			Text:            "Status diperbarui",
+		})
+		ackNetDur := time.Since(ackNetStart)
+		if err != nil {
+			log.Printf("[callback-ack] type=server cbID=%s net_dur=%v err=%v", cbID, ackNetDur, err)
+		} else {
+			log.Printf("[callback-ack] type=server cbID=%s net_dur=%v status=ok", cbID, ackNetDur)
+		}
+	}(update.CallbackQuery.ID)
+	ackDispatch = time.Since(ackStart)
+	rpcCount++
+
+	// Step 2: Render status server
+	renderStart := time.Now()
 	var invokerID int64
 	if update.CallbackQuery != nil && update.CallbackQuery.From.ID > 0 {
 		invokerID = update.CallbackQuery.From.ID
 	}
-	text := serverStatusText(invokerID, time.Since(invokeStart))
+	text := serverStatusText(invokerID, time.Since(start))
 	edit := &bot.EditMessageTextParams{Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()}
 	if update.CallbackQuery.InlineMessageID != "" {
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
@@ -302,10 +403,21 @@ func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_mode
 	} else {
 		return
 	}
-	go func(cbID string) {
-		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cbID, Text: "Status diperbarui"})
-	}(update.CallbackQuery.ID)
-	_, _ = b.EditMessageText(ctx, edit)
+	renderDur = time.Since(renderStart)
+
+	// Step 3: Edit message
+	editStart := time.Now()
+	_, editErr := b.EditMessageText(ctx, edit)
+	editDur = time.Since(editStart)
+	rpcCount++
+
+	if editErr != nil && !isMessageNotModifiedErr(editErr) {
+		cbErr = editErr
+	}
+
+	totalDur := time.Since(start)
+	log.Printf("[callback] data=\"assist_server:refresh\" ack_dispatch=%v cache=0s db=0s render=%v edit=%v total=%v rpc_count=%d err=%v",
+		ackDispatch, renderDur, editDur, totalDur, rpcCount, cbErr)
 }
 
 func (h *Handler) HelpCommandMenu(ctx context.Context, b *bot.Bot, update *t_models.Update) {
@@ -675,22 +787,43 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 	if update.CallbackQuery == nil {
 		return
 	}
+	start := time.Now()
 	data := update.CallbackQuery.Data
+
+	var (
+		ackDispatch time.Duration
+		ackNetDur   time.Duration
+		redisDur    time.Duration
+		renderDur   time.Duration
+		editDur     time.Duration
+		rpcCount    = 0
+		cbErr       error
+	)
+
 	parts := strings.Split(data, ":")
 	if len(parts) < 4 {
-		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		// Single ACK untuk tombol tidak valid
+		ackStart := time.Now()
+		_, ackErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 			Text:            "Tombol catatan tidak valid.",
 			ShowAlert:       true,
 		})
+		ackNetDur = time.Since(ackStart)
+		rpcCount = 1
+		log.Printf("[callback] data=%q ack_net=%v cache=0s db=0s render=0s edit=0s total=%v rpc_count=%d err=%v",
+			data, ackNetDur, time.Since(start), rpcCount, ackErr)
 		return
 	}
+
 	action := parts[1] // "pop" or "show"
 	ownerID, _ := strconv.ParseInt(parts[2], 10, 64)
 	name := strings.ToLower(parts[3])
 
-	// 1. Jika action == "pop": Tampilkan popup alert modal di layar
+	// Case 1: action == "pop" (Modal Popup Alert)
+	// Single synchronous ACK modal alert (menghilangkan double-ACK bug)
 	if action == "pop" {
+		redisStart := time.Now()
 		var popText string
 		if inlineRedis != nil {
 			if recData, err := inlineRedis.Client.Get(ctx, fmt.Sprintf("note:record:%d:%s", ownerID, name)).Bytes(); err == nil {
@@ -703,28 +836,53 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 				popText, _ = inlineRedis.Client.Get(ctx, fmt.Sprintf("note:text:%d:%s", ownerID, name)).Result()
 			}
 		}
+		redisDur = time.Since(redisStart)
+
 		if popText == "" {
 			popText = fmt.Sprintf("Catatan: %s", name)
 		}
 		if len(popText) > 200 {
 			popText = popText[:197] + "..."
 		}
-		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+
+		ackStart := time.Now()
+		_, ackErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 			Text:            popText,
 			ShowAlert:       true,
 		})
+		ackNetDur = time.Since(ackStart)
+		rpcCount = 1
+		cbErr = ackErr
+
+		totalDur := time.Since(start)
+		log.Printf("[callback] data=%q ack_net=%v cache=0s db=%v render=0s edit=0s total=%v rpc_count=%d err=%v",
+			data, ackNetDur, redisDur, totalDur, rpcCount, cbErr)
 		return
 	}
 
-	// 2. action == "show" (Callback): Ganti page pesan (edit message text & buttons) sesuai callbacknya
-	// Hilangkan loading spinner pada tombol tanpa menampilkan alert text
+	// Case 2: action == "show" (Navigasi / Ganti Halaman Catatan)
+	// Step 1: Dispatch ACK segera di awal (menghilangkan spinner pada tombol)
+	ackStart := time.Now()
 	go func(cbID string) {
-		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ackNetStart := time.Now()
+		_, err := b.AnswerCallbackQuery(actx, &bot.AnswerCallbackQueryParams{
 			CallbackQueryID: cbID,
 		})
+		netDur := time.Since(ackNetStart)
+		if err != nil {
+			log.Printf("[callback-ack] type=note_show cbID=%s net_dur=%v err=%v", cbID, netDur, err)
+		} else {
+			log.Printf("[callback-ack] type=note_show cbID=%s net_dur=%v status=ok", cbID, netDur)
+		}
 	}(update.CallbackQuery.ID)
+	ackDispatch = time.Since(ackStart)
+	rpcCount++
 
+	// Step 2: Ambil data catatan terbaru dari Redis (menjamin data tidak usang)
+	redisStart := time.Now()
 	var p NoteInlinePayload
 	found := false
 	if inlineRedis != nil {
@@ -745,22 +903,27 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 			}
 		}
 	}
+	redisDur = time.Since(redisStart)
 
+	// Step 3: Render keyboard & text
+	renderStart := time.Now()
+	var (
+		markup  *t_models.InlineKeyboardMarkup
+		msgText string
+	)
 	if !found {
-		_, _ = b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
-			CallbackQueryID: update.CallbackQuery.ID,
-			Text:            fmt.Sprintf("Catatan %s tidak ditemukan.", name),
-			ShowAlert:       true,
-		})
-		return
+		msgText = fmt.Sprintf("Catatan <b>%s</b> tidak ditemukan.", html.EscapeString(name))
+		markup = nil
+	} else {
+		markup = buildNoteInlineKeyboard(p)
+		msgText = p.Text
+		if strings.TrimSpace(msgText) == "" {
+			msgText = fmt.Sprintf("Catatan: <b>%s</b>", html.EscapeString(p.Name))
+		}
 	}
+	renderDur = time.Since(renderStart)
 
-	markup := buildNoteInlineKeyboard(p)
-	msgText := p.Text
-	if strings.TrimSpace(msgText) == "" {
-		msgText = fmt.Sprintf("Catatan: <b>%s</b>", html.EscapeString(p.Name))
-	}
-
+	// Step 4: Edit message
 	edit := &bot.EditMessageTextParams{
 		Text:        msgText,
 		ParseMode:   "HTML",
@@ -776,5 +939,16 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 		return
 	}
 
-	_, _ = b.EditMessageText(ctx, edit)
+	editStart := time.Now()
+	_, editErr := b.EditMessageText(ctx, edit)
+	editDur = time.Since(editStart)
+	rpcCount++
+
+	if editErr != nil && !isMessageNotModifiedErr(editErr) {
+		cbErr = editErr
+	}
+
+	totalDur := time.Since(start)
+	log.Printf("[callback] data=%q ack_dispatch=%v cache=0s db=%v render=%v edit=%v total=%v rpc_count=%d err=%v",
+		data, ackDispatch, redisDur, renderDur, editDur, totalDur, rpcCount, cbErr)
 }
