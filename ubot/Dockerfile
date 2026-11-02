@@ -9,6 +9,7 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ubot ./main
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
-COPY --from=build /ubot /app/ubot
+RUN mkdir -p /app/data && chmod 777 /app/data && chown -R 65532:65532 /app
+COPY --from=build --chown=65532:65532 /ubot /app/ubot
 USER 65532:65532
 ENTRYPOINT ["/app/ubot"]

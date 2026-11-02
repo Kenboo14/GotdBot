@@ -24,6 +24,7 @@ services:
 
   ubot:
     image: ghcr.io/kenboo14/gotdbot-ubot:latest
+    user: "0:0"
     mem_limit: 1250m
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
