@@ -309,11 +309,34 @@ func (s *Service) Restore(ctx context.Context) {
 				log.Printf("✅ Disaster Recovery selesai: %d catatan dipulihkan ke SQLite", restoredNotes)
 			}
 		}
+
+		// 3. Sinkronisasi Sudo dari MongoDB Cloud Atlas ke SQLite lokal
+		curSudo, err := s.db.Collection("userbot_sudo").Find(ctx, bson.M{})
+		if err == nil {
+			defer curSudo.Close(ctx)
+			restoredSudo := 0
+			for curSudo.Next(ctx) {
+				var row sudoRecord
+				if curSudo.Decode(&row) == nil && row.OwnerID > 0 && row.UserID > 0 {
+					if s.sqlite.AddSudo(ctx, row.OwnerID, row.UserID) == nil {
+						restoredSudo++
+					}
+				}
+			}
+			if restoredSudo > 0 {
+				log.Printf("✅ Sinkronisasi Startup: %d akses sudo dipulihkan dari MongoDB ke SQLite", restoredSudo)
+			}
+		} else {
+			log.Printf("⚠️ Gagal membaca userbot_sudo dari MongoDB: %v", err)
+		}
 	}
 
 	if s.sqlite == nil {
 		return
 	}
+
+	// Muat seluruh catatan dari SQLite ke Redis cache untuk navigasi inline instan
+	s.syncAllNotesToRedis(ctx)
 
 	sessions, err := s.sqlite.GetAllSessions(ctx)
 	if err != nil {
@@ -346,6 +369,38 @@ func (s *Service) Restore(ctx context.Context) {
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
 	go s.startIdleReaper(ctx)
+}
+
+func (s *Service) syncAllNotesToRedis(ctx context.Context) {
+	if s.redis == nil || s.sqlite == nil {
+		return
+	}
+	notes, err := s.sqlite.ListAllNotes(ctx)
+	if err != nil || len(notes) == 0 {
+		return
+	}
+	synced := 0
+	for _, n := range notes {
+		var buttons []NoteButton
+		if n.Buttons != "" {
+			_ = json.Unmarshal([]byte(n.Buttons), &buttons)
+		}
+		payload := NoteInlinePayload{
+			OwnerID: n.OwnerID,
+			Name:    n.Name,
+			Text:    n.Text,
+			Buttons: buttons,
+			Mode:    n.Mode,
+		}
+		if pBytes, err := json.Marshal(payload); err == nil {
+			_ = s.redis.Client.Set(ctx, fmt.Sprintf("note:record:%d:%s", n.OwnerID, n.Name), pBytes, 7*24*time.Hour).Err()
+		}
+		_ = s.redis.Client.Set(ctx, fmt.Sprintf("note:text:%d:%s", n.OwnerID, n.Name), n.Text, 7*24*time.Hour).Err()
+		synced++
+	}
+	if synced > 0 {
+		log.Printf("🚀 Sinkronisasi Redis Notes: %d catatan aktif dimuat ke Redis cache", synced)
+	}
 }
 
 func (s *Service) startIdleReaper(ctx context.Context) {

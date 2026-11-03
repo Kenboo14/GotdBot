@@ -47,7 +47,7 @@ var (
 	noteNameRe       = regexp.MustCompile(`^[\w-]{1,32}$`)
 	urlButtonRe      = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|\[(?:https?://[^\]]+)\]\((https?://[^)]+)\)\]`)
 	urlButtonSimpRe  = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|(https?://[^\]\s]+)\]`)
-	cbButtonRe       = regexp.MustCompile(`(?i)\[(Callback|Back)#([\w-]{1,32})\]`)
+	cbButtonRe       = regexp.MustCompile(`\[([^\[\]#]{1,40})#([\w-]{1,32})\]`)
 	popButtonRe      = regexp.MustCompile(`\[([^\[\]$]{1,40})\$([\w-]{1,32})\]`)
 	htmlTagRe        = regexp.MustCompile(`(?i)</?(?:b|strong|i|em|u|s|strike|code|pre|blockquote|a|tg-spoiler)(?:\s|>)`)
 )
@@ -235,7 +235,7 @@ func extractNoteButtons(rawText string) (string, []NoteButton) {
 	for _, m := range cbButtonRe.FindAllStringSubmatchIndex(rawText, -1) {
 		spans = append(spans, span{
 			start: m[0], end: m[1],
-			btn: NoteButton{Kind: "callback", Label: rawText[m[2]:m[3]], Target: strings.ToLower(rawText[m[4]:m[5]])},
+			btn: NoteButton{Kind: "callback", Label: strings.TrimSpace(rawText[m[2]:m[3]]), Target: strings.ToLower(rawText[m[4]:m[5]])},
 		})
 	}
 	for _, m := range popButtonRe.FindAllStringSubmatchIndex(rawText, -1) {
@@ -515,10 +515,11 @@ func (s *Service) showNote(ctx context.Context, client *telegram.Client, target 
 	// 1. Jika catatan memiliki tombol ATAU disimpan dengan -cb / -pop:
 	// Tampilkan via Inline Query bot resmi agar tombol inline muncul (seperti menu !help)
 	if len(buttons) > 0 || note.Mode == "callback" || note.Mode == "popup" {
-		if err := s.sendInlineNote(ctx, client, target, ownerID, note, buttons); err == nil {
+		if inlineErr := s.sendInlineNote(ctx, client, target, ownerID, note, buttons); inlineErr == nil {
 			return nil
+		} else {
+			log.Printf("[NOTES INLINE] gagal kirim note inline: %v, beralih ke fallback pengiriman langsung", inlineErr)
 		}
-		log.Printf("[NOTES INLINE] gagal kirim note inline: %v, beralih ke fallback pengiriman langsung", err)
 	}
 
 	// 2. Jika pesan tersimpan di cache @GROUP_CACHE (tanpa tombol inline), salin langsung dari cache

@@ -388,3 +388,23 @@ func (s *SQLiteClient) CountAllNotes(ctx context.Context) (int, error) {
 	err := s.DB.QueryRowContext(ctx, query).Scan(&count)
 	return count, err
 }
+
+func (s *SQLiteClient) ListAllNotes(ctx context.Context) ([]NoteRecord, error) {
+	query := `SELECT owner_id, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at
+		FROM userbot_notes ORDER BY name ASC;`
+	rows, err := s.DB.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []NoteRecord
+	for rows.Next() {
+		var n NoteRecord
+		if err := rows.Scan(&n.OwnerID, &n.Name, &n.Text, &n.Entities, &n.Buttons, &n.Mode, &n.MediaType, &n.MediaData, &n.CacheMessageID, &n.CacheChannel, &n.UpdatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, n)
+	}
+	return records, rows.Err()
+}
