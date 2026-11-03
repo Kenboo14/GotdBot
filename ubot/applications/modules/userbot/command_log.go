@@ -423,8 +423,58 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 	var fileID string
 	var mediaSent bool
 
-	// Coba kirim media jika ada dan bisa di-download
-	if mInfo != nil && mInfo.downloadable && mInfo.fileSize > 0 && mInfo.fileSize <= maxLogMediaSize {
+	// ─── Flow 1: Forward-to-LogBot (Zero Download & Zero Upload) ─────────
+	// Userbot memforward pesan ke LogBot via MTProto -> LogBot mengambil file_id
+	// -> Disimpan di MongoDB -> Dikirimkan ke userbot owner sebagai media
+	if mInfo != nil && mInfo.downloadable {
+		var sourcePeer tg.InputPeerClass
+		switch p := msg.PeerID.(type) {
+		case *tg.PeerUser:
+			sourcePeer = &tg.InputPeerUser{UserID: p.UserID, AccessHash: peerAccessHash}
+		case *tg.PeerChat:
+			sourcePeer = &tg.InputPeerChat{ChatID: p.ChatID}
+		case *tg.PeerChannel:
+			sourcePeer = &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: peerAccessHash}
+		}
+
+		logBotUser, botResolveErr := s.resolveLogBotInputUser(ctx, client)
+		if botResolveErr == nil && logBotUser != nil && sourcePeer != nil {
+			forwardedID, fwdErr := s.forwardMediaToLogBot(ctx, client, sourcePeer, msg.ID, logBotUser)
+			if fwdErr == nil && forwardedID > 0 {
+				// Ambil file_id dari getUpdates LogBot
+				time.Sleep(150 * time.Millisecond)
+				fid, _ := s.logFetchFileIDFromBotUpdates(ctx, token, ownerID, forwardedID)
+				if fid != "" {
+					fileID = fid
+				}
+
+				// Kirim media ke owner menggunakan file_id jika tersedia
+				if fileID != "" && mInfo.fieldName != "sticker" && mInfo.fieldName != "video_note" {
+					mid, sendErr := s.logSendMediaViaFileID(ctx, token, ownerID, fileID, mInfo.apiMethod, mInfo.fieldName, logText, chatURL)
+					if sendErr == nil {
+						logMsgID = mid
+						mediaSent = true
+						go s.logDeleteMessageViaBot(context.Background(), token, ownerID, forwardedID)
+					}
+				}
+
+				// Jika pengiriman via file_id belum berhasil, gunakan copyMessage (zero download juga)
+				if !mediaSent {
+					mid, copyErr := s.logCopyMessageViaBot(ctx, token, ownerID, ownerID, forwardedID, logText, chatURL)
+					if copyErr == nil {
+						logMsgID = mid
+						mediaSent = true
+						go s.logDeleteMessageViaBot(context.Background(), token, ownerID, forwardedID)
+					}
+				}
+			} else {
+				log.Printf("[LogBot] Forwarding media ke LogBot gagal: %v, mencoba download fallback", fwdErr)
+			}
+		}
+	}
+
+	// ─── Flow 2: Fallback Download/Upload (hanya jika Forwarding gagal) ────
+	if !mediaSent && mInfo != nil && mInfo.downloadable && mInfo.fileSize > 0 && mInfo.fileSize <= maxLogMediaSize {
 		data, dlErr := logDownloadMediaFile(ctx, client, msg, maxLogMediaSize)
 		if dlErr == nil && len(data) > 0 {
 			supportsCaption := mInfo.fieldName != "sticker" && mInfo.fieldName != "video_note"
@@ -432,18 +482,15 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 				mid, fid, sendErr := s.logSendMediaViaBot(ctx, token, ownerID, data, mInfo.fileName, mInfo.apiMethod, mInfo.fieldName, logText, chatURL)
 				if sendErr == nil {
 					logMsgID = mid
-					fileID = fid
+					if fid != "" {
+						fileID = fid
+					}
 					mediaSent = true
-				} else {
-					log.Printf("[LogBot] Media upload gagal, fallback teks: %v", sendErr)
 				}
 			} else {
-				// Sticker/video_note: kirim media dulu (tanpa caption), lalu teks terpisah
-				_, fid, sendErr := s.logSendMediaViaBot(ctx, token, ownerID, data, mInfo.fileName, mInfo.apiMethod, mInfo.fieldName, "", "")
-				if sendErr == nil {
+				_, fid, _ := s.logSendMediaViaBot(ctx, token, ownerID, data, mInfo.fileName, mInfo.apiMethod, mInfo.fieldName, "", "")
+				if fid != "" {
 					fileID = fid
-				} else {
-					log.Printf("[LogBot] Kirim sticker/videonote gagal: %v", sendErr)
 				}
 				mid, textErr := s.logSendTextViaBot(ctx, token, ownerID, logText, chatURL)
 				if textErr == nil {
@@ -451,12 +498,10 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 					mediaSent = true
 				}
 			}
-		} else if dlErr != nil {
-			log.Printf("[LogBot] Download media gagal: %v", dlErr)
 		}
 	}
 
-	// Fallback ke teks biasa
+	// ─── Flow 3: Fallback ke Teks Biasa ──────────────────────────────────
 	if !mediaSent {
 		mid, textErr := s.logSendTextViaBot(ctx, token, ownerID, logText, chatURL)
 		if textErr != nil {
@@ -757,6 +802,223 @@ func logDownloadChunks(ctx context.Context, client *telegram.Client, location tg
 }
 
 // ─── Bot API Helpers ─────────────────────────────────────────────────
+
+// resolveLogBotInputUser mengembalikan *tg.InputPeerUser untuk LogBot
+func (s *Service) resolveLogBotInputUser(ctx context.Context, client *telegram.Client) (*tg.InputPeerUser, error) {
+	_, logBotUsername, err := s.resolveLogBotInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: logBotUsername})
+	if err != nil {
+		return nil, err
+	}
+	botPeer, err := peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
+	if err != nil {
+		return nil, err
+	}
+	inputUser, ok := botPeer.(*tg.InputPeerUser)
+	if !ok {
+		return nil, fmt.Errorf("peer bukan User")
+	}
+	return inputUser, nil
+}
+
+// forwardMediaToLogBot mem-forward pesan media ke LogBot via MTProto (zero download & zero upload)
+func (s *Service) forwardMediaToLogBot(ctx context.Context, client *telegram.Client, sourcePeer tg.InputPeerClass, msgID int, logBotUser *tg.InputPeerUser) (int, error) {
+	rndID := inlineRandomID()
+	updates, err := client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+		FromPeer: sourcePeer,
+		ID:       []int{msgID},
+		ToPeer:   logBotUser,
+		RandomID: []int64{rndID},
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	var forwardedID int
+	switch u := updates.(type) {
+	case *tg.Updates:
+		for _, upd := range u.Updates {
+			if nm, ok := upd.(*tg.UpdateNewMessage); ok {
+				if m, ok := nm.Message.(*tg.Message); ok {
+					forwardedID = m.ID
+					break
+				}
+			}
+		}
+	case *tg.UpdatesCombined:
+		for _, upd := range u.Updates {
+			if nm, ok := upd.(*tg.UpdateNewMessage); ok {
+				if m, ok := nm.Message.(*tg.Message); ok {
+					forwardedID = m.ID
+					break
+				}
+			}
+		}
+	case *tg.UpdateShortSentMessage:
+		forwardedID = u.ID
+	}
+	return forwardedID, nil
+}
+
+// logFetchFileIDFromBotUpdates mengambil file_id dari update terbaru LogBot
+func (s *Service) logFetchFileIDFromBotUpdates(ctx context.Context, token string, ownerID int64, targetMsgID int) (string, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?limit=20", token), nil)
+	if err != nil {
+		return "", ""
+	}
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return "", ""
+	}
+	defer resp.Body.Close()
+
+	var res struct {
+		OK     bool `json:"ok"`
+		Result []struct {
+			UpdateID int                    `json:"update_id"`
+			Message  map[string]interface{} `json:"message"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil || !res.OK {
+		return "", ""
+	}
+
+	for i := len(res.Result) - 1; i >= 0; i-- {
+		upd := res.Result[i]
+		if upd.Message == nil {
+			continue
+		}
+		from, _ := upd.Message["from"].(map[string]interface{})
+		if from != nil {
+			fromID, _ := from["id"].(float64)
+			if int64(fromID) == ownerID {
+				for _, field := range []string{"photo", "video", "document", "voice", "audio", "animation", "sticker", "video_note"} {
+					if fid := logExtractFileID(upd.Message, field); fid != "" {
+						return fid, field
+					}
+				}
+			}
+		}
+	}
+	return "", ""
+}
+
+// logCopyMessageViaBot menyalin pesan media di chat bot dengan caption dan inline keyboard baru
+func (s *Service) logCopyMessageViaBot(ctx context.Context, token string, toChatID, fromChatID int64, messageID int, caption, chatURL string) (int, error) {
+	payload := map[string]interface{}{
+		"chat_id":      toChatID,
+		"from_chat_id": fromChatID,
+		"message_id":   messageID,
+		"caption":      caption,
+		"parse_mode":   "HTML",
+	}
+	if strings.HasPrefix(chatURL, "https://") || strings.HasPrefix(chatURL, "http://") {
+		payload["reply_markup"] = map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{
+				{
+					{"text": "Buka Chat", "url": chatURL},
+				},
+			},
+		}
+	}
+
+	pBytes, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.telegram.org/bot"+token+"/copyMessage", bytes.NewReader(pBytes))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("copyMessage HTTP error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var res struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return 0, fmt.Errorf("decode copyMessage response: %w", err)
+	}
+	if !res.OK {
+		return 0, fmt.Errorf("copyMessage API error: %s", res.Description)
+	}
+	return res.Result.MessageID, nil
+}
+
+// logDeleteMessageViaBot menghapus pesan sementara di chat bot
+func (s *Service) logDeleteMessageViaBot(ctx context.Context, token string, chatID int64, messageID int) {
+	payload := map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	pBytes, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.telegram.org/bot"+token+"/deleteMessage", bytes.NewReader(pBytes))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		if resp, err := sharedHTTPClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}
+}
+
+// logSendMediaViaFileID mengirim media menggunakan file_id langsung tanpa download/upload
+func (s *Service) logSendMediaViaFileID(ctx context.Context, token string, ownerID int64, fileID, apiMethod, fieldName, caption, chatURL string) (int, error) {
+	payload := map[string]interface{}{
+		"chat_id":    ownerID,
+		fieldName:    fileID,
+		"caption":    caption,
+		"parse_mode": "HTML",
+	}
+	if strings.HasPrefix(chatURL, "https://") || strings.HasPrefix(chatURL, "http://") {
+		payload["reply_markup"] = map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{
+				{
+					{"text": "Buka Chat", "url": chatURL},
+				},
+			},
+		}
+	}
+	pBytes, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.telegram.org/bot"+token+"/"+apiMethod, bytes.NewReader(pBytes))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("%s HTTP error: %w", apiMethod, err)
+	}
+	defer resp.Body.Close()
+
+	var res struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return 0, fmt.Errorf("decode %s response: %w", apiMethod, err)
+	}
+	if !res.OK {
+		return 0, fmt.Errorf("%s API error: %s", apiMethod, res.Description)
+	}
+	return res.Result.MessageID, nil
+}
 
 // logSendTextViaBot mengirim pesan teks log ke pemilik via Bot API sendMessage
 func (s *Service) logSendTextViaBot(ctx context.Context, token string, ownerID int64, text, chatURL string) (int, error) {
