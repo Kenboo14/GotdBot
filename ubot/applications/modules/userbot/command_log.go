@@ -537,15 +537,18 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 
 	// Simpan routing ke sqlite dan MongoDB agar bisa dibalas (reply-to-log)
 	if logMsgID > 0 {
-		err := s.sqlite.SaveLogRoute(ctx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
+		dbCtx, dbCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer dbCancel()
+
+		err := s.sqlite.SaveLogRoute(dbCtx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 		if err != nil {
 			log.Printf("[LogBot] Gagal simpan log route di SQLite: %v", err)
 		} else {
 			log.Printf("[LogBot] Log route tersimpan di SQLite: logMsgID=%d -> chatID=%d msgID=%d", logMsgID, sourceChatID, msg.ID)
 		}
 
-		// Backup route ke MongoDB juga
-		go s.saveLogRouteMongo(context.Background(), logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
+		// Simpan rute ke MongoDB juga langsung agar rute permanen
+		s.saveLogRouteMongo(dbCtx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 
 		// Backup media ke MongoDB (async)
 		if mInfo != nil && (fileID != "" || mInfo.mediaRawID != 0) {
@@ -1417,6 +1420,7 @@ func (s *Service) logSaveMediaMongo(ctx context.Context, ownerID, logBotID int64
 // saveLogRouteMongo menyimpan rute log (logMsgID -> sourceChatID) ke MongoDB sebagai backup
 func (s *Service) saveLogRouteMongo(ctx context.Context, logBotID int64, logMsgID int, userID, sourceChatID int64, sourceMsgID int, peerType string, accessHash int64) {
 	if s.db == nil {
+		log.Printf("[LogBot] Gagal simpan route ke MongoDB: koneksi MongoDB nil")
 		return
 	}
 	col := s.db.Collection("userbot_log_routes")
@@ -1437,6 +1441,8 @@ func (s *Service) saveLogRouteMongo(ctx context.Context, logBotID int64, logMsgI
 	_, err := col.UpdateOne(ctx, filter, update, opts)
 	if err != nil {
 		log.Printf("[LogBot] Gagal simpan log route ke MongoDB: %v", err)
+	} else {
+		log.Printf("[LogBot] Log route tersimpan di MongoDB: logMsgID=%d -> chatID=%d msgID=%d", logMsgID, sourceChatID, sourceMsgID)
 	}
 }
 
