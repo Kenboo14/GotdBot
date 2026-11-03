@@ -17,6 +17,7 @@ import (
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const maxLogMediaSize = 20 * 1024 * 1024 // 20 MB
@@ -40,6 +41,7 @@ func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client,
 		return sendUserText(ctx, client, target, "Gagal memperbarui status log: "+err.Error())
 	}
 	s.logStatusCache.Store(ownerID, enabled)
+	go s.logSaveStatusMongo(context.Background(), ownerID, enabled)
 
 	if enabled {
 		// Pastikan logbot di-unblock dan di-start secara otomatis (hanya sekali per lifecycle)
@@ -222,15 +224,30 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 	// Kasus: User membalas pesan logbot di chat private -> balas ke chat sumber
 	if msg.Out {
 		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && logBotID != 0 && peerUser.UserID == logBotID {
-			log.Printf("[LogBot] Terdeteksi pesan keluar ke LogBot (ID %d): msgID=%d text=%q", logBotID, msg.ID, msg.Message)
+			log.Printf("[LogBot] Terdeteksi pesan keluar ke LogBot (ID %d): msgID=%d text=%q flags=%v", logBotID, msg.ID, msg.Message, msg.Flags)
+
+			// Cari replyToMsgID dari dua sumber (GetReplyTo + fallback ReplyTo langsung)
+			var replyToID int
 			if rh, hasReply := msg.GetReplyTo(); hasReply {
 				if rHeader, ok := rh.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
-					go func(replyToID int, replyText string) {
-						bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-						defer cancel()
-						s.replyToLoggedMessage(bgCtx, client, ownerID, logBotID, replyToID, replyText)
-					}(rHeader.ReplyToMsgID, msg.Message)
+					replyToID = rHeader.ReplyToMsgID
 				}
+			}
+			if replyToID == 0 && msg.ReplyTo != nil {
+				if rHeader, ok := msg.ReplyTo.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
+					replyToID = rHeader.ReplyToMsgID
+				}
+			}
+
+			if replyToID > 0 {
+				log.Printf("[LogBot] Reply terdeteksi: replyToMsgID=%d, memproses balasan...", replyToID)
+				go func(rid int, rText string) {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+					defer cancel()
+					s.replyToLoggedMessage(bgCtx, client, ownerID, logBotID, rid, rText)
+				}(replyToID, msg.Message)
+			} else {
+				log.Printf("[LogBot] Pesan keluar ke LogBot tanpa reply: msgID=%d replyTo=%v", msg.ID, msg.ReplyTo)
 			}
 		}
 		return // Semua pesan keluar (outgoing) tidak di-log
@@ -536,7 +553,7 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Client, ownerID, logBotID int64, replyToID int, text string) {
 	log.Printf("[LogBot] Memproses balasan log: logBotID=%d replyToID=%d text=%q", logBotID, replyToID, text)
 	route, err := s.sqlite.GetLogRoute(ctx, logBotID, replyToID)
-	if err != nil || route == nil || route.UserID != ownerID {
+	if err != nil || route == nil || (route.UserID != 0 && ownerID != 0 && route.UserID != ownerID) {
 		log.Printf("[LogBot] Route tidak ditemukan di sqlite: botID=%d replyToID=%d ownerID=%d err=%v route=%+v", logBotID, replyToID, ownerID, err, route)
 		return
 	}
@@ -550,6 +567,19 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 		if accessHash == 0 {
 			if val, ok := s.channelAccessHashes.Load(route.SourceChatID); ok {
 				accessHash = val.(int64)
+			}
+		}
+		if accessHash == 0 {
+			// Coba via MessagesGetChats (cepat & direct)
+			chats, cErr := client.API().MessagesGetChats(ctx, []int64{route.SourceChatID})
+			if cErr == nil {
+				for _, c := range chats.GetChats() {
+					if ch, ok := c.(*tg.Channel); ok && ch.ID == route.SourceChatID {
+						accessHash = ch.AccessHash
+						s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+						break
+					}
+				}
 			}
 		}
 		if accessHash == 0 {
@@ -596,24 +626,31 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 		targetPeer = &tg.InputPeerUser{UserID: route.SourceChatID, AccessHash: accessHash}
 	}
 
-	rndID := inlineRandomID()
-
-	var replyTo tg.InputReplyToClass
-	if route.SourceMessageID > 0 {
-		replyTo = &tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID}
-	}
-
-	_, err = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+	req := &tg.MessagesSendMessageRequest{
 		Peer:     targetPeer,
 		Message:  text,
-		RandomID: rndID,
-		ReplyTo:  replyTo,
-	})
+		RandomID: inlineRandomID(),
+	}
+	if route.SourceMessageID > 0 {
+		req.SetReplyTo(&tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID})
+	}
+
+	_, err = client.API().MessagesSendMessage(ctx, req)
+	if err != nil {
+		// Jika gagal karena pesan sumber sudah dihapus di chat, coba kirim tanpa reply
+		if strings.Contains(err.Error(), "REPLY_MESSAGE_ID_INVALID") || strings.Contains(err.Error(), "MESSAGE_ID_INVALID") {
+			req.ReplyTo = nil
+			req.Flags.Zero()
+			req.SetFlags()
+			req.RandomID = inlineRandomID()
+			_, err = client.API().MessagesSendMessage(ctx, req)
+		}
+	}
 	if err != nil {
 		log.Printf("[LogBot] Gagal mengirim balasan ke %s %d: %v", route.PeerType, route.SourceChatID, err)
 		return
 	}
-	log.Printf("[LogBot] Balasan sukses dikirim ke %s %d (msg %d)", route.PeerType, route.SourceChatID, route.SourceMessageID)
+	log.Printf("[LogBot] Balasan sukses dikirim ke %s %d (reply to msg %d)", route.PeerType, route.SourceChatID, route.SourceMessageID)
 }
 
 // ─── Media Helpers ───────────────────────────────────────────────────
@@ -1257,6 +1294,8 @@ func logFormatText(content, senderName, senderUsername, chatType, chatTitle stri
 }
 
 // logBuildChatURL membuat URL deep link ke chat sumber
+// PENTING: Telegram Bot API menolak tg://user?id= di inline_keyboard URL (BUTTON_URL_INVALID)
+// Hanya kembalikan URL https:// yang valid, atau "" jika tidak tersedia
 func logBuildChatURL(msg *tg.Message, senderID int64, senderUsername, chatType string) string {
 	if chatType == "Group" || chatType == "Channel" {
 		if ch, ok := msg.PeerID.(*tg.PeerChannel); ok {
@@ -1266,10 +1305,65 @@ func logBuildChatURL(msg *tg.Message, senderID int64, senderUsername, chatType s
 	if senderUsername != "" {
 		return "https://t.me/" + senderUsername
 	}
-	return fmt.Sprintf("tg://user?id=%d", senderID)
+	return "" // NEVER return tg://user?id= — Telegram Bot API menolaknya di inline button
 }
 
 // ─── MongoDB Backup ──────────────────────────────────────────────────
+
+// logSaveStatusMongo menyimpan status log (on/off) ke MongoDB sebagai backup
+func (s *Service) logSaveStatusMongo(ctx context.Context, ownerID int64, enabled bool) {
+	if s.db == nil {
+		return
+	}
+	col := s.db.Collection("userbot_log_status")
+	filter := bson.M{"owner_id": ownerID}
+	update := bson.M{
+		"$set": bson.M{
+			"owner_id":   ownerID,
+			"enabled":    enabled,
+			"updated_at": time.Now(),
+		},
+	}
+	opts := options.Update().SetUpsert(true)
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		log.Printf("[LogBot] Gagal simpan status log ke MongoDB: %v", err)
+	}
+}
+
+// logLoadStatusFromMongo memuat semua status log dari MongoDB ke SQLite (dipanggil sekali saat startup)
+func (s *Service) logLoadStatusFromMongo(ctx context.Context) {
+	if s.db == nil || s.sqlite == nil {
+		return
+	}
+	col := s.db.Collection("userbot_log_status")
+	cursor, err := col.Find(ctx, bson.M{})
+	if err != nil {
+		log.Printf("[LogBot] Gagal membaca status log dari MongoDB: %v", err)
+		return
+	}
+	defer cursor.Close(ctx)
+
+	synced := 0
+	for cursor.Next(ctx) {
+		var doc struct {
+			OwnerID int64 `bson:"owner_id"`
+			Enabled bool  `bson:"enabled"`
+		}
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+		if doc.OwnerID == 0 {
+			continue
+		}
+		_ = s.sqlite.SetLogStatus(ctx, doc.OwnerID, doc.Enabled)
+		s.logStatusCache.Store(doc.OwnerID, doc.Enabled)
+		synced++
+	}
+	if synced > 0 {
+		log.Printf("📋 Sinkronisasi MongoDB → SQLite: %d status log dimuat", synced)
+	}
+}
 
 // logSaveMediaMongo menyimpan metadata media MTProto + file_id ke MongoDB untuk backup
 func (s *Service) logSaveMediaMongo(ctx context.Context, ownerID, logBotID int64, logMsgID int, sourceChatID int64, sourceMsgID int, mInfo *logMediaInfo, fileID, caption string) {

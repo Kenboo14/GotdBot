@@ -49,4 +49,8 @@ func ensureMongoIndexes(ctx context.Context, db *mongo.Database) {
 		{Keys: bson.D{{Key: "log_bot_id", Value: 1}, {Key: "log_message_id", Value: 1}}},
 		{Keys: bson.D{{Key: "source_chat_id", Value: 1}, {Key: "source_message_id", Value: 1}}},
 	})
+	_, _ = db.Collection("userbot_log_status").Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "owner_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	})
 }

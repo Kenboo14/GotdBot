@@ -477,13 +477,27 @@ func (s *SQLiteClient) SaveLogRoute(ctx context.Context, logBotID int64, logMsgI
 
 func (s *SQLiteClient) GetLogRoute(ctx context.Context, logBotID int64, logMsgID int) (*LogRouteRecord, error) {
 	query := `SELECT log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, COALESCE(peer_type, 'user'), COALESCE(access_hash, 0), created_at
-		FROM log_routes WHERE log_bot_id = ? AND log_message_id = ?;`
+		FROM log_routes WHERE (log_bot_id = ? OR ? = 0) AND log_message_id = ?
+		ORDER BY created_at DESC LIMIT 1;`
 	var r LogRouteRecord
-	err := s.DB.QueryRowContext(ctx, query, logBotID, logMsgID).Scan(
+	err := s.DB.QueryRowContext(ctx, query, logBotID, logBotID, logMsgID).Scan(
 		&r.LogBotID, &r.LogMessageID, &r.UserID, &r.SourceChatID, &r.SourceMessageID, &r.PeerType, &r.AccessHash, &r.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		// Fallback: cari berdasarkan log_message_id saja jika ID bot berbeda
+		query2 := `SELECT log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, COALESCE(peer_type, 'user'), COALESCE(access_hash, 0), created_at
+			FROM log_routes WHERE log_message_id = ?
+			ORDER BY created_at DESC LIMIT 1;`
+		err2 := s.DB.QueryRowContext(ctx, query2, logMsgID).Scan(
+			&r.LogBotID, &r.LogMessageID, &r.UserID, &r.SourceChatID, &r.SourceMessageID, &r.PeerType, &r.AccessHash, &r.CreatedAt,
+		)
+		if err2 == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err2 != nil {
+			return nil, err2
+		}
+		return &r, nil
 	}
 	if err != nil {
 		return nil, err

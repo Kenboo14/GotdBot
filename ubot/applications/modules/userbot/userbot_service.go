@@ -338,6 +338,9 @@ func (s *Service) Restore(ctx context.Context) {
 		} else {
 			log.Printf("⚠️ Gagal membaca userbot_sudo dari MongoDB: %v", err)
 		}
+
+		// 4. Sinkronisasi Log Status dari MongoDB Cloud Atlas ke SQLite lokal (dipanggil sekali saat startup)
+		s.logLoadStatusFromMongo(ctx)
 	}
 
 	if s.sqlite == nil {
@@ -1123,6 +1126,7 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 		}
 
 		msg := &tg.Message{
+			Flags:       upd.Flags,
 			Out:         upd.Out,
 			Mentioned:   upd.Mentioned,
 			MediaUnread: upd.MediaUnread,
@@ -1137,6 +1141,9 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 			ReplyTo:     upd.ReplyTo,
 			Entities:    upd.Entities,
 			TTLPeriod:   upd.TTLPeriod,
+		}
+		if upd.ReplyTo != nil {
+			msg.SetReplyTo(upd.ReplyTo)
 		}
 
 		return h.dispatcher.Handle(ctx, &tg.Updates{
@@ -1162,6 +1169,7 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 		}
 
 		msg := &tg.Message{
+			Flags:       upd.Flags,
 			Out:         upd.Out,
 			Mentioned:   upd.Mentioned,
 			MediaUnread: upd.MediaUnread,
@@ -1176,6 +1184,9 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 			ReplyTo:     upd.ReplyTo,
 			Entities:    upd.Entities,
 			TTLPeriod:   upd.TTLPeriod,
+		}
+		if upd.ReplyTo != nil {
+			msg.SetReplyTo(upd.ReplyTo)
 		}
 
 		return h.dispatcher.Handle(ctx, &tg.Updates{
