@@ -213,14 +213,20 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 	}
 
 	logBotID, _, _ := s.resolveLogBotInfo(ctx)
+	if logBotID == 0 {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		logBotID, _, _ = s.resolveLogBotInfo(bgCtx)
+		cancel()
+	}
 
 	// Kasus: User membalas pesan logbot di chat private -> balas ke chat sumber
 	if msg.Out {
 		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && logBotID != 0 && peerUser.UserID == logBotID {
+			log.Printf("[LogBot] Terdeteksi pesan keluar ke LogBot (ID %d): msgID=%d text=%q", logBotID, msg.ID, msg.Message)
 			if rh, hasReply := msg.GetReplyTo(); hasReply {
 				if rHeader, ok := rh.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
 					go func(replyToID int, replyText string) {
-						bgCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+						bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 						defer cancel()
 						s.replyToLoggedMessage(bgCtx, client, ownerID, logBotID, replyToID, replyText)
 					}(rHeader.ReplyToMsgID, msg.Message)
@@ -528,11 +534,13 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 
 // replyToLoggedMessage membalas pesan sumber saat pemilik membalas log di chat bot
 func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Client, ownerID, logBotID int64, replyToID int, text string) {
+	log.Printf("[LogBot] Memproses balasan log: logBotID=%d replyToID=%d text=%q", logBotID, replyToID, text)
 	route, err := s.sqlite.GetLogRoute(ctx, logBotID, replyToID)
 	if err != nil || route == nil || route.UserID != ownerID {
-		log.Printf("[LogBot] Route tidak ditemukan: botID=%d replyTo=%d err=%v", logBotID, replyToID, err)
+		log.Printf("[LogBot] Route tidak ditemukan di sqlite: botID=%d replyToID=%d ownerID=%d err=%v route=%+v", logBotID, replyToID, ownerID, err, route)
 		return
 	}
+	log.Printf("[LogBot] Route ditemukan: Target=%s ChatID=%d MsgID=%d", route.PeerType, route.SourceChatID, route.SourceMessageID)
 
 	// Resolve target peer berdasarkan peer_type dan access_hash tersimpan
 	var targetPeer tg.InputPeerClass
@@ -542,6 +550,22 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 		if accessHash == 0 {
 			if val, ok := s.channelAccessHashes.Load(route.SourceChatID); ok {
 				accessHash = val.(int64)
+			}
+		}
+		if accessHash == 0 {
+			// Resolve channel via Dialogs jika belum ada di cache
+			dialogs, dErr := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{Limit: 100})
+			if dErr == nil {
+				if mod, ok := dialogs.AsModified(); ok {
+					for _, c := range mod.GetChats() {
+						if ch, ok := c.(*tg.Channel); ok {
+							s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+							if ch.ID == route.SourceChatID {
+								accessHash = ch.AccessHash
+							}
+						}
+					}
+				}
 			}
 		}
 		targetPeer = &tg.InputPeerChannel{ChannelID: route.SourceChatID, AccessHash: accessHash}
@@ -574,9 +598,8 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 
 	rndID := inlineRandomID()
 
-	// Untuk private chat, kirim langsung; untuk grup/channel, reply ke pesan asli
 	var replyTo tg.InputReplyToClass
-	if route.PeerType != "user" {
+	if route.SourceMessageID > 0 {
 		replyTo = &tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID}
 	}
 

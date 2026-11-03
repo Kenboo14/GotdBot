@@ -696,7 +696,13 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			}
 			return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
 		})
-		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: dispatcher})
+		updateHandler := &userbotUpdateHandler{
+			dispatcher: dispatcher,
+			s:          s,
+			chatID:     chatID,
+			clientRef:  &client,
+		}
+		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: updateHandler})
 		s.mu.Lock()
 		if s.connecting[chatID] == genID {
 			delete(s.connecting, chatID)
@@ -1092,5 +1098,97 @@ func (s *Service) cacheEntities(entities tg.Entities) {
 		if ch != nil && ch.ID != 0 && ch.AccessHash != 0 {
 			s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
 		}
+	}
+}
+
+type userbotUpdateHandler struct {
+	dispatcher tg.UpdateDispatcher
+	s          *Service
+	chatID     int64
+	clientRef  **telegram.Client
+}
+
+func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) error {
+	switch upd := u.(type) {
+	case *tg.UpdateShortMessage:
+		h.s.mu.Lock()
+		ownerID := h.s.owners[h.chatID]
+		h.s.mu.Unlock()
+
+		var fromPeer tg.PeerClass
+		if upd.Out {
+			fromPeer = &tg.PeerUser{UserID: ownerID}
+		} else {
+			fromPeer = &tg.PeerUser{UserID: upd.UserID}
+		}
+
+		msg := &tg.Message{
+			Out:         upd.Out,
+			Mentioned:   upd.Mentioned,
+			MediaUnread: upd.MediaUnread,
+			Silent:      upd.Silent,
+			ID:          upd.ID,
+			FromID:      fromPeer,
+			PeerID:      &tg.PeerUser{UserID: upd.UserID},
+			Message:     upd.Message,
+			Date:        upd.Date,
+			FwdFrom:     upd.FwdFrom,
+			ViaBotID:    upd.ViaBotID,
+			ReplyTo:     upd.ReplyTo,
+			Entities:    upd.Entities,
+			TTLPeriod:   upd.TTLPeriod,
+		}
+
+		return h.dispatcher.Handle(ctx, &tg.Updates{
+			Updates: []tg.UpdateClass{
+				&tg.UpdateNewMessage{
+					Message:  msg,
+					Pts:      upd.Pts,
+					PtsCount: upd.PtsCount,
+				},
+			},
+		})
+
+	case *tg.UpdateShortChatMessage:
+		h.s.mu.Lock()
+		ownerID := h.s.owners[h.chatID]
+		h.s.mu.Unlock()
+
+		var fromPeer tg.PeerClass
+		if upd.Out {
+			fromPeer = &tg.PeerUser{UserID: ownerID}
+		} else {
+			fromPeer = &tg.PeerUser{UserID: upd.FromID}
+		}
+
+		msg := &tg.Message{
+			Out:         upd.Out,
+			Mentioned:   upd.Mentioned,
+			MediaUnread: upd.MediaUnread,
+			Silent:      upd.Silent,
+			ID:          upd.ID,
+			FromID:      fromPeer,
+			PeerID:      &tg.PeerChat{ChatID: upd.ChatID},
+			Message:     upd.Message,
+			Date:        upd.Date,
+			FwdFrom:     upd.FwdFrom,
+			ViaBotID:    upd.ViaBotID,
+			ReplyTo:     upd.ReplyTo,
+			Entities:    upd.Entities,
+			TTLPeriod:   upd.TTLPeriod,
+		}
+
+		return h.dispatcher.Handle(ctx, &tg.Updates{
+			Updates: []tg.UpdateClass{
+				&tg.UpdateNewMessage{
+					Message:  msg,
+					Pts:      upd.Pts,
+					PtsCount: upd.PtsCount,
+				},
+			},
+		})
+
+	default:
+		return h.dispatcher.Handle(ctx, u)
 	}
 }
