@@ -41,7 +41,7 @@ func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client,
 			defer cancel()
 			_ = s.ensureLogBotStarted(bgCtx, client, ownerID)
 		}()
-		return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Aktif</code>\nPesan pribadi masuk akan diteruskan ke Log Bot.")
+		return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Aktif</code>\nPesan masuk pribadi dan mention/reply di grup akan diteruskan ke Log Bot.")
 	}
 	return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Nonaktif</code>")
 }
@@ -172,20 +172,29 @@ func (s *Service) ensureLogBotStarted(ctx context.Context, client *telegram.Clie
 	return nil
 }
 
-// interceptLogMessage mengecek pesan masuk dan memicu forward log jika PM atau reply ke LogBot
+// interceptLogMessage mengecek pesan masuk: PM atau grup (jika mention/reply ke userbot)
 func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, msg *tg.Message) {
 	if msg == nil {
 		return
 	}
 
 	ownerID := s.owners[chatID]
-	if ownerID == 0 {
+	var ownerUsername string
+	if val, ok := s.ownerUsernames.Load(ownerID); ok {
+		ownerUsername = val.(string)
+	}
+
+	if ownerID == 0 || ownerUsername == "" {
 		self, err := client.Self(ctx)
 		if err == nil && self != nil {
 			ownerID = self.ID
 			s.mu.Lock()
 			s.owners[chatID] = ownerID
 			s.mu.Unlock()
+			if self.Username != "" {
+				ownerUsername = strings.ToLower(self.Username)
+				s.ownerUsernames.Store(ownerID, ownerUsername)
+			}
 		}
 	}
 	if ownerID == 0 {
@@ -210,14 +219,8 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
-	// Kasus 2: Pesan masuk dari orang lain di Private Chat (PM) -> Forward ke LogBot
-	peerUser, isPrivate := msg.PeerID.(*tg.PeerUser)
-	if !isPrivate || peerUser == nil {
-		return // Hanya tangani pesan Private Message (PM)
-	}
-
-	// Jangan log pesan dari log bot itu sendiri
-	if logBotID != 0 && peerUser.UserID == logBotID {
+	// Abaikan pesan yang dikirim sendiri oleh userbot
+	if msg.Out {
 		return
 	}
 
@@ -226,17 +229,126 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
-	// Salin data dan jalankan forwarding secara async tanpa memblokir dispatcher
+	// Identifikasi tipe chat
+	chatType := "Private"
+	chatTitle := ""
+	var sourceChatID int64
+	isPrivate := false
+
+	switch p := msg.PeerID.(type) {
+	case *tg.PeerUser:
+		isPrivate = true
+		sourceChatID = p.UserID
+		// Jangan log pesan dari log bot itu sendiri
+		if logBotID != 0 && p.UserID == logBotID {
+			return
+		}
+	case *tg.PeerChat:
+		chatType = "Group"
+		sourceChatID = p.ChatID
+		for _, c := range entities.Chats {
+			if c.ID == p.ChatID {
+				chatTitle = c.Title
+				break
+			}
+		}
+	case *tg.PeerChannel:
+		chatType = "Group"
+		sourceChatID = p.ChannelID
+		for _, ch := range entities.Channels {
+			if ch.ID == p.ChannelID {
+				chatTitle = ch.Title
+				if ch.Broadcast {
+					chatType = "Channel"
+				}
+				break
+			}
+		}
+	default:
+		return
+	}
+
+	// Evaluasi apakah pesan harus di-log:
+	// 1. Jika Private Chat (PM) -> Selalu di-log
+	// 2. Jika Grup / Channel -> HANYA di-log jika pesan me-reply pesan userbot ATAU me-mention userbot
+	shouldLog := false
+
+	if isPrivate {
+		shouldLog = true
+	} else {
+		// A. Cek apakah me-reply userbot (via entities atau target reply)
+		if rh, ok := msg.GetReplyTo(); ok {
+			if rHeader, ok := rh.(*tg.MessageReplyHeader); ok {
+				// Cek jika ReplyToPeerID mengarah ke userbot
+				if rHeader.ReplyToPeerID != nil {
+					if rUser, ok := rHeader.ReplyToPeerID.(*tg.PeerUser); ok && rUser.UserID == ownerID {
+						shouldLog = true
+					}
+				}
+				// Cek jika ReplyFrom berasal dari userbot
+				if !shouldLog && rHeader.ReplyFrom.FromID != nil {
+					if rUser, ok := rHeader.ReplyFrom.FromID.(*tg.PeerUser); ok && rUser.UserID == ownerID {
+						shouldLog = true
+					}
+				}
+				// Cek isi pesan yang di-reply jika belum terdeteksi dari header langsung
+				if !shouldLog && rHeader.ReplyToMsgID > 0 {
+					targetPeer, err := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
+					if err == nil {
+						origMsg, err := s.replyMessage(ctx, client, msg, targetPeer)
+						if err == nil && origMsg != nil {
+							if origFrom, ok := origMsg.FromID.(*tg.PeerUser); ok && origFrom.UserID == ownerID {
+								shouldLog = true
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// B. Cek apakah me-mention userbot (via entity mention atau text)
+		if !shouldLog {
+			for _, ent := range msg.Entities {
+				switch e := ent.(type) {
+				case *tg.MessageEntityMentionName:
+					if e.UserID == ownerID {
+						shouldLog = true
+						break
+					}
+				case *tg.MessageEntityMention:
+					if ownerUsername != "" {
+						msgRunes := []rune(msg.Message)
+						if e.Offset >= 0 && e.Offset+e.Length <= len(msgRunes) {
+							mentionStr := strings.ToLower(string(msgRunes[e.Offset : e.Offset+e.Length]))
+							if strings.TrimPrefix(mentionStr, "@") == ownerUsername {
+								shouldLog = true
+								break
+							}
+						}
+					}
+				}
+				if shouldLog {
+					break
+				}
+			}
+		}
+	}
+
+	if !shouldLog {
+		return
+	}
+
+	// Salin data dan jalankan forwarding secara async tanpa memblokir dispatcher update
 	msgCopy := *msg
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		s.forwardLogs(bgCtx, client, ownerID, entities, &msgCopy)
+		s.forwardLogs(bgCtx, client, ownerID, entities, &msgCopy, chatType, chatTitle, sourceChatID)
 	}()
 }
 
 // forwardLogs memformat dan mengirim log ke private chat pemilik via bot log Telegram
-func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, ownerID int64, entities tg.Entities, msg *tg.Message) {
+func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, ownerID int64, entities tg.Entities, msg *tg.Message, chatType, chatTitle string, sourceChatID int64) {
 	logBotID, _, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
 		return
@@ -249,7 +361,19 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 	senderUsername := ""
 	var senderID int64
 
-	if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
+	if fromUser, ok := msg.FromID.(*tg.PeerUser); ok {
+		senderID = fromUser.UserID
+		for _, u := range entities.Users {
+			if u.ID == fromUser.UserID {
+				senderName = strings.TrimSpace(u.FirstName + " " + u.LastName)
+				if senderName == "" {
+					senderName = u.Username
+				}
+				senderUsername = u.Username
+				break
+			}
+		}
+	} else if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
 		senderID = peerUser.UserID
 		for _, u := range entities.Users {
 			if u.ID == peerUser.UserID {
@@ -274,8 +398,8 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 	// Format text persis referensi python:
 	// <blockquote><code>preview</code></blockquote>
 	// <b>Dari :</b> <code>sender_name</code> (@username)
-	// <b>Chat :</b> <code>Private</code>
-	// <b>Tipe :</b> <code>Private</code>
+	// <b>Chat :</b> <code>chatTitle / Private</code>
+	// <b>Tipe :</b> <code>Private / Group</code>
 	// <pre language="Note:">Balas log untuk membalas pesan tanpa membuka pesan.</pre>
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<blockquote expandable><code>%s</code></blockquote>\n\n", html.EscapeString(content)))
@@ -284,13 +408,24 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		safeUser := html.EscapeString(senderUsername)
 		sb.WriteString(fmt.Sprintf(" (<a href=\"https://t.me/%s\">@%s</a>)", safeUser, safeUser))
 	}
-	sb.WriteString("\n<b>Chat :</b> <code>Private</code>\n")
-	sb.WriteString("<b>Tipe :</b> <code>Private</code>\n\n")
+	if chatTitle != "" {
+		sb.WriteString(fmt.Sprintf("\n<b>Chat :</b> <code>%s</code>", html.EscapeString(chatTitle)))
+	} else {
+		sb.WriteString("\n<b>Chat :</b> <code>Private</code>")
+	}
+	sb.WriteString(fmt.Sprintf("\n<b>Tipe :</b> <code>%s</code>\n\n", html.EscapeString(chatType)))
 	sb.WriteString("<pre language=\"Note:\">Balas log untuk membalas pesan tanpa membuka pesan.</pre>")
 
 	chatURL := fmt.Sprintf("tg://user?id=%d", senderID)
 	if senderUsername != "" {
 		chatURL = "https://t.me/" + senderUsername
+	}
+	if chatType == "Group" || chatType == "Channel" {
+		if msg.PeerID != nil {
+			if ch, ok := msg.PeerID.(*tg.PeerChannel); ok {
+				chatURL = fmt.Sprintf("https://t.me/c/%d/%d", ch.ChannelID, msg.ID)
+			}
+		}
 	}
 
 	token := s.logBotToken
@@ -335,7 +470,7 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&res); err == nil && res.OK && res.Result.MessageID > 0 {
 		// Simpan routing ke sqlite agar bisa dibalas (reply-to-log)
-		_ = s.sqlite.SaveLogRoute(ctx, logBotID, res.Result.MessageID, ownerID, senderID, msg.ID)
+		_ = s.sqlite.SaveLogRoute(ctx, logBotID, res.Result.MessageID, ownerID, sourceChatID, msg.ID)
 	}
 }
 
@@ -346,16 +481,19 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 		return
 	}
 
-	targetPeer := &tg.InputPeerUser{UserID: route.SourceChatID}
 	rndID := inlineRandomID()
 
-	// Kirim pesan balasan dari akun userbot ke target chat dengan reply_to_msg_id asli
-	_, err = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-		Peer:     targetPeer,
-		Message:  text,
-		RandomID: rndID,
-		ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID},
-	})
+	// Kirim pesan balasan dari akun userbot ke target chat (bisa user atau grup)
+	_, err = s.getSender(client).To(&tg.InputPeerUser{UserID: route.SourceChatID}).Text(ctx, text)
+	if err != nil {
+		// Coba fallback jika targetnya adalah channel/supergroup
+		_, err = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     &tg.InputPeerChannel{ChannelID: route.SourceChatID},
+			Message:  text,
+			RandomID: rndID,
+			ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID},
+		})
+	}
 	if err != nil {
 		log.Printf("[LogBot] Gagal mengirim balasan ke sumber (%d): %v", route.SourceChatID, err)
 		return

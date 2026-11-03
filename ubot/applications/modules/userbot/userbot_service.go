@@ -64,6 +64,7 @@ type Service struct {
 	logBotUsername   string
 	startedLogBots   sync.Map // key: [2]int64{userbotID, logBotID} -> true
 	logStatusCache   sync.Map // key: int64 (ownerID) -> bool
+	ownerUsernames   sync.Map // key: int64 (ownerID) -> lowercase username without @
 	inlineMu         sync.RWMutex
 	botUsernameCache string
 	inlineBots       map[*telegram.Client]*tg.InputUser
@@ -686,6 +687,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.mu.Lock()
 			s.lastActive[chatID] = time.Now()
 			s.mu.Unlock()
+			if msg, ok := update.Message.(*tg.Message); ok {
+				s.interceptLogMessage(ctx, chatID, client, entities, msg)
+			}
 			return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
 		})
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: dispatcher})
