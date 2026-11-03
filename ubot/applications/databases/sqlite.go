@@ -121,6 +121,23 @@ func (s *SQLiteClient) initTables() error {
 			PRIMARY KEY (owner_id, name)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_notes_owner ON userbot_notes(owner_id);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_logs (
+			owner_id INTEGER PRIMARY KEY,
+			enabled INTEGER DEFAULT 0,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS log_routes (
+			log_bot_id INTEGER NOT NULL,
+			log_message_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			source_chat_id INTEGER NOT NULL,
+			source_message_id INTEGER NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (log_bot_id, log_message_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_log_routes_user ON log_routes(user_id);`,
 	}
 
 	for _, query := range queries {
@@ -407,4 +424,60 @@ func (s *SQLiteClient) ListAllNotes(ctx context.Context) ([]NoteRecord, error) {
 		records = append(records, n)
 	}
 	return records, rows.Err()
+}
+
+type LogRouteRecord struct {
+	LogBotID        int64
+	LogMessageID    int
+	UserID          int64
+	SourceChatID    int64
+	SourceMessageID int
+	CreatedAt       time.Time
+}
+
+func (s *SQLiteClient) GetLogStatus(ctx context.Context, ownerID int64) (bool, error) {
+	var enabled int
+	query := `SELECT enabled FROM userbot_logs WHERE owner_id = ?;`
+	err := s.DB.QueryRowContext(ctx, query, ownerID).Scan(&enabled)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return enabled == 1, nil
+}
+
+func (s *SQLiteClient) SetLogStatus(ctx context.Context, ownerID int64, enabled bool) error {
+	val := 0
+	if enabled {
+		val = 1
+	}
+	query := `INSERT INTO userbot_logs (owner_id, enabled, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(owner_id) DO UPDATE SET enabled = excluded.enabled, updated_at = CURRENT_TIMESTAMP;`
+	_, err := s.DB.ExecContext(ctx, query, ownerID, val)
+	return err
+}
+
+func (s *SQLiteClient) SaveLogRoute(ctx context.Context, logBotID int64, logMsgID int, userID, sourceChatID int64, sourceMsgID int) error {
+	query := `INSERT OR REPLACE INTO log_routes (log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, created_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`
+	_, err := s.DB.ExecContext(ctx, query, logBotID, logMsgID, userID, sourceChatID, sourceMsgID)
+	return err
+}
+
+func (s *SQLiteClient) GetLogRoute(ctx context.Context, logBotID int64, logMsgID int) (*LogRouteRecord, error) {
+	query := `SELECT log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, created_at
+		FROM log_routes WHERE log_bot_id = ? AND log_message_id = ?;`
+	var r LogRouteRecord
+	err := s.DB.QueryRowContext(ctx, query, logBotID, logMsgID).Scan(
+		&r.LogBotID, &r.LogMessageID, &r.UserID, &r.SourceChatID, &r.SourceMessageID, &r.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }

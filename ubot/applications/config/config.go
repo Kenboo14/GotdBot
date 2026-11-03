@@ -12,7 +12,8 @@ import (
 
 type Config struct {
 	Telegram struct {
-		BotToken string `yaml:"bot_token"`
+		BotToken    string `yaml:"bot_token"`
+		LogBotToken string `yaml:"logbot_token"`
 	} `yaml:"telegram"`
 
 	Sqlite struct {
@@ -106,6 +107,9 @@ func applyEnv(cfg *Config) {
 
 	if value := os.Getenv("BOT_TOKEN"); value != "" {
 		cfg.Telegram.BotToken = value
+	}
+	if value := os.Getenv("LOGBOT_TOKEN"); value != "" {
+		cfg.Telegram.LogBotToken = value
 	}
 	if value := os.Getenv("REDIS_ADDR"); value != "" {
 		cfg.Redis.Address = value

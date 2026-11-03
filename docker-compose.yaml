@@ -34,6 +34,7 @@ services:
     mem_limit: 1250m
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
+      LOGBOT_TOKEN: ${LOGBOT_TOKEN:-}
       REDIS_ADDR: redis:6379
       REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
 

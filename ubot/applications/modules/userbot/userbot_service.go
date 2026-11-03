@@ -59,6 +59,11 @@ type Service struct {
 	apiHash          string
 	key              []byte
 	botToken         string
+	logBotToken      string
+	logBotID         int64
+	logBotUsername   string
+	startedLogBots   sync.Map // key: [2]int64{userbotID, logBotID} -> true
+	logStatusCache   sync.Map // key: int64 (ownerID) -> bool
 	inlineMu         sync.RWMutex
 	botUsernameCache string
 	inlineBots       map[*telegram.Client]*tg.InputUser
@@ -104,7 +109,7 @@ type record struct {
 	UpdatedAt time.Time `bson:"updated_at"`
 }
 
-func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken string) *Service {
+func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken, logBotToken string) *Service {
 	return &Service{
 		root:             root,
 		sqlite:           sqlite,
@@ -114,6 +119,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		apiHash:          apiHash,
 		key:              key,
 		botToken:         botToken,
+		logBotToken:      logBotToken,
 		logins:           make(map[int64]*login),
 		active:           make(map[int64]*telegram.Client),
 		connecting:       make(map[int64]uint64),
@@ -669,6 +675,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.mu.Lock()
 			s.lastActive[chatID] = time.Now()
 			s.mu.Unlock()
+			if msg, ok := update.Message.(*tg.Message); ok {
+				s.interceptLogMessage(ctx, chatID, client, entities, msg)
+			}
 			return s.handleUserbotMessage(ctx, chatID, client, entities, update)
 		})
 		dispatcher.OnNewChannelMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
@@ -818,6 +827,12 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	if name == "save" {
 		return s.saveNoteCommand(ctx, client, peerID, msg, args)
+	}
+	if name == "log" {
+		return s.handleLogCommand(ctx, client, peerID, args)
+	}
+	if name == "statuslog" {
+		return s.handleStatusLogCommand(ctx, client, peerID)
 	}
 	if name == "get" {
 		fields := strings.Fields(args)
