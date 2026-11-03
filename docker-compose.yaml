@@ -1,6 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     command: redis-server --appendonly yes --requirepass ${REDIS_PASS:-change-me-for-local-dev}
     mem_limit: 80m
     volumes:
@@ -13,11 +14,14 @@ services:
 
   gateway:
     image: ghcr.io/kenboo14/gotdbot-gateway:latest
+    restart: unless-stopped
     mem_limit: 80m
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
       REDIS_ADDR: redis:6379
       REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
+      GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-65MiB}
+      GOGC: ${GATEWAY_GOGC:-50}
 
     depends_on:
       redis:
@@ -25,6 +29,7 @@ services:
 
   ubot:
     image: ghcr.io/kenboo14/gotdbot-ubot:latest
+    restart: unless-stopped
     user: "0:0"
     mem_limit: 1250m
     environment:

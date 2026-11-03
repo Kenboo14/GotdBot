@@ -183,28 +183,34 @@ func (r *Redis) Listener(ctx context.Context, b *bot.Bot, group string, worker s
 	}
 }
 
+var rateLimitLua = redis.NewScript(`
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+    redis.call('PEXPIRE', KEYS[1], ARGV[1])
+end
+local limit = tonumber(ARGV[2])
+if current > limit then
+    local ttl = redis.call('PTTL', KEYS[1])
+    return {0, ttl}
+end
+return {1, 0}
+`)
+
 func (r *Redis) CheckLimit(ctx context.Context, identifier string, limit int, window time.Duration) (bool, time.Duration, error) {
 	key := "rate_limit:" + identifier
+	windowMs := window.Milliseconds()
 
-	count, err := r.Client.Incr(ctx, key).Result()
+	res, err := rateLimitLua.Run(ctx, r.Client, []string{key}, windowMs, limit).Slice()
 	if err != nil {
-		utils.LogError("RateLimit Incr failed", err, map[string]interface{}{"key": key})
+		utils.LogError("RateLimit Lua script failed", err, map[string]interface{}{"key": key})
 		return false, 0, err
 	}
 
-	if count == 1 {
-		if err := r.Client.Expire(ctx, key, window).Err(); err != nil {
-			return false, 0, err
-		}
-	}
+	allowed, _ := res[0].(int64)
+	ttlMs, _ := res[1].(int64)
 
-	if count > int64(limit) {
-		ttl, err := r.Client.TTL(ctx, key).Result()
-		if err != nil {
-			return false, 0, err
-		}
-		return false, ttl, nil
+	if allowed == 1 {
+		return true, 0, nil
 	}
-
-	return true, 0, nil
+	return false, time.Duration(ttlMs) * time.Millisecond, nil
 }

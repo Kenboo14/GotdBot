@@ -7,9 +7,10 @@ import (
 	"strconv"
 )
 
+var publicKeyRe = regexp.MustCompile(`"publicKey":"(.+?)","keyId":(\d+?)\}\}`)
+
 func GetPublicKey(data string) (publicKey string, keyID int, err error) {
-	re := regexp.MustCompile(`"publicKey":"(.+?)","keyId":(\d+?)\}\}`)
-	matches := re.FindStringSubmatch(data)
+	matches := publicKeyRe.FindStringSubmatch(data)
 
 	if len(matches) != 3 {
 		return "", 0, errors.New("publicKey or keyId not found")

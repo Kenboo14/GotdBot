@@ -608,9 +608,9 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	// Latency / Ping Server (TCP connect ke DNS 1.1.1.1:53)
+	// Latency / Ping Server (TCP connect ke DNS 1.1.1.1:53 dengan timeout ketat 350ms agar responsif)
 	pingServerStart := time.Now()
-	conn, err := net.DialTimeout("tcp", "1.1.1.1:53", 1500*time.Millisecond)
+	conn, err := net.DialTimeout("tcp", "1.1.1.1:53", 350*time.Millisecond)
 	pingServerMs := float64(time.Since(pingServerStart).Microseconds()) / 1000.0
 	if err == nil {
 		_ = conn.Close()

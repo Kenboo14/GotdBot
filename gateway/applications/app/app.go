@@ -82,6 +82,11 @@ func Run(ctx context.Context) {
 func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHandler func(context.Context, *bot.Bot, *t_models.Update)) {
 	offset := int64(0)
 	var protoLogged sync.Once
+
+	// Bounded worker semaphore: cegah unbounded goroutine fan-out saat burst traffic / spam
+	const maxConcurrentUpdates = 100
+	updateSem := make(chan struct{}, maxConcurrentUpdates)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -132,11 +137,25 @@ func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHa
 				offset = update.ID + 1
 			}
 			up := update
+
+			// Akuisisi slot semaphore sebelum spawn goroutine
+			select {
+			case updateSem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+
 			if up.InlineQuery != nil && inlineHandler != nil {
-				go inlineHandler(ctx, b, &up)
+				go func(u t_models.Update) {
+					defer func() { <-updateSem }()
+					inlineHandler(ctx, b, &u)
+				}(up)
 				continue
 			}
-			go b.ProcessUpdate(ctx, &up)
+			go func(u t_models.Update) {
+				defer func() { <-updateSem }()
+				b.ProcessUpdate(ctx, &u)
+			}(up)
 		}
 	}
 }
