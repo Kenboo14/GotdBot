@@ -435,7 +435,7 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		}
 	}
 
-	logText := logFormatText(content, senderName, senderUsername, chatType, chatTitle, senderID)
+	logText := logFormatText(content, senderName, senderUsername, chatType, chatTitle, senderID, msg.ID)
 	chatURL := logBuildChatURL(msg, senderID, senderUsername, chatType)
 
 	token := s.logBotToken
@@ -564,6 +564,12 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 // replyToLoggedMessage membalas pesan sumber saat pemilik membalas log di chat bot
 func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Client, ownerID, logBotID int64, replyToID int, text string) {
 	log.Printf("[LogBot] Memproses balasan log: logBotID=%d replyToID=%d text=%q", logBotID, replyToID, text)
+
+	token := s.logBotToken
+	if strings.TrimSpace(token) == "" {
+		token = s.botToken
+	}
+
 	route, err := s.sqlite.GetLogRoute(ctx, logBotID, replyToID)
 	if route == nil {
 		// Fallback ke MongoDB jika di SQLite tidak ditemukan
@@ -574,6 +580,9 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 	}
 	if route == nil || (route.UserID != 0 && ownerID != 0 && route.UserID != ownerID) {
 		log.Printf("[LogBot] Route tidak ditemukan di sqlite/mongo: botID=%d replyToID=%d ownerID=%d err=%v route=%+v", logBotID, replyToID, ownerID, err, route)
+		if token != "" && ownerID > 0 {
+			_, _ = s.logSendTextViaBot(ctx, token, ownerID, "⚠️ <b>Gagal membalas:</b> Rute pesan sumber tidak ditemukan atau bot belum menyimpan pesan tersebut.", "")
+		}
 		return
 	}
 	log.Printf("[LogBot] Route ditemukan: Target=%s ChatID=%d MsgID=%d", route.PeerType, route.SourceChatID, route.SourceMessageID)
@@ -667,9 +676,15 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 	}
 	if err != nil {
 		log.Printf("[LogBot] Gagal mengirim balasan ke %s %d: %v", route.PeerType, route.SourceChatID, err)
+		if token != "" && ownerID > 0 {
+			_, _ = s.logSendTextViaBot(ctx, token, ownerID, "❌ <b>Gagal mengirim balasan ke chat sumber:</b> "+html.EscapeString(err.Error()), "")
+		}
 		return
 	}
 	log.Printf("[LogBot] Balasan sukses dikirim ke %s %d (reply to msg %d)", route.PeerType, route.SourceChatID, route.SourceMessageID)
+	if token != "" && ownerID > 0 {
+		_, _ = s.logSendTextViaBot(ctx, token, ownerID, "✅ <b>Pesan terkirim ke chat sumber.</b>", "")
+	}
 }
 
 // ─── Media Helpers ───────────────────────────────────────────────────
@@ -995,7 +1010,7 @@ func (s *Service) logCopyMessageViaBot(ctx context.Context, token string, toChat
 		"caption":      caption,
 		"parse_mode":   "HTML",
 	}
-	if strings.HasPrefix(chatURL, "https://") || strings.HasPrefix(chatURL, "http://") {
+	if strings.HasPrefix(chatURL, "https://") || strings.HasPrefix(chatURL, "http://") || strings.HasPrefix(chatURL, "tg://") {
 		payload["reply_markup"] = map[string]interface{}{
 			"inline_keyboard": [][]map[string]string{
 				{
@@ -1060,7 +1075,7 @@ func (s *Service) logSendMediaViaFileID(ctx context.Context, token string, owner
 		"caption":    caption,
 		"parse_mode": "HTML",
 	}
-	if strings.HasPrefix(chatURL, "https://") || strings.HasPrefix(chatURL, "http://") {
+	if strings.HasPrefix(chatURL, "https://") || strings.HasPrefix(chatURL, "http://") || strings.HasPrefix(chatURL, "tg://") {
 		payload["reply_markup"] = map[string]interface{}{
 			"inline_keyboard": [][]map[string]string{
 				{
@@ -1294,7 +1309,7 @@ func logExtractSenderInfo(msg *tg.Message, entities tg.Entities) (name, username
 }
 
 // logFormatText memformat teks log HTML (blockquote + sender + chat info + note)
-func logFormatText(content, senderName, senderUsername, chatType, chatTitle string, senderID int64) string {
+func logFormatText(content, senderName, senderUsername, chatType, chatTitle string, senderID int64, sourceMsgID int) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<blockquote expandable><code>%s</code></blockquote>\n\n", html.EscapeString(content)))
 	if senderID > 0 {
@@ -1305,6 +1320,12 @@ func logFormatText(content, senderName, senderUsername, chatType, chatTitle stri
 	if senderUsername != "" {
 		safe := html.EscapeString(senderUsername)
 		sb.WriteString(fmt.Sprintf(` (<a href="https://t.me/%s">@%s</a>)`, safe, safe))
+	}
+	if senderID > 0 {
+		sb.WriteString(fmt.Sprintf("\n<b>ID Pengguna :</b> <code>%d</code>", senderID))
+	}
+	if sourceMsgID > 0 {
+		sb.WriteString(fmt.Sprintf("\n<b>ID Pesan :</b> <code>%d</code>", sourceMsgID))
 	}
 	if chatTitle != "" {
 		sb.WriteString(fmt.Sprintf("\n<b>Chat :</b> <code>%s</code>", html.EscapeString(chatTitle)))
@@ -1317,18 +1338,21 @@ func logFormatText(content, senderName, senderUsername, chatType, chatTitle stri
 }
 
 // logBuildChatURL membuat URL deep link ke chat sumber
-// PENTING: Telegram Bot API menolak tg://user?id= di inline_keyboard URL (BUTTON_URL_INVALID)
-// Hanya kembalikan URL https:// yang valid, atau "" jika tidak tersedia
+// Untuk grup/channel memakai https://t.me/c/...
+// Untuk PM memakai tg://openmessage?user_id=...&message_id=...
 func logBuildChatURL(msg *tg.Message, senderID int64, senderUsername, chatType string) string {
 	if chatType == "Group" || chatType == "Channel" {
 		if ch, ok := msg.PeerID.(*tg.PeerChannel); ok {
 			return fmt.Sprintf("https://t.me/c/%d/%d", ch.ChannelID, msg.ID)
 		}
 	}
+	if senderID > 0 {
+		return fmt.Sprintf("tg://openmessage?user_id=%d&message_id=%d", senderID, msg.ID)
+	}
 	if senderUsername != "" {
 		return "https://t.me/" + senderUsername
 	}
-	return "" // NEVER return tg://user?id= — Telegram Bot API menolaknya di inline button
+	return ""
 }
 
 // ─── MongoDB Backup ──────────────────────────────────────────────────
