@@ -3,6 +3,7 @@ package userbot
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -470,11 +471,11 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		_ = s.sqlite.SaveLogRoute(ctx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 
 		// Backup media ke MongoDB (async)
-		if fileID != "" && mInfo != nil {
+		if mInfo != nil && (fileID != "" || mInfo.mediaRawID != 0) {
 			go func() {
 				bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				s.logSaveMediaMongo(bgCtx, ownerID, logBotID, logMsgID, sourceChatID, msg.ID, mInfo.label, fileID, msg.Message)
+				s.logSaveMediaMongo(bgCtx, ownerID, logBotID, logMsgID, sourceChatID, msg.ID, mInfo, fileID, msg.Message)
 			}()
 		}
 	}
@@ -550,12 +551,16 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 // ─── Media Helpers ───────────────────────────────────────────────────
 
 type logMediaInfo struct {
-	label        string // display: "Foto", "Video", "GIF", "Sticker", dll
-	apiMethod    string // Bot API method: "sendPhoto", "sendVideo", dll
-	fieldName    string // multipart field: "photo", "video", dll
-	fileName     string // filename untuk upload
-	fileSize     int64
-	downloadable bool
+	label         string // display: "Foto", "Video", "GIF", "Sticker", dll
+	apiMethod     string // Bot API method: "sendPhoto", "sendVideo", dll
+	fieldName     string // multipart field: "photo", "video", dll
+	fileName      string // filename untuk upload
+	fileSize      int64
+	mimeType      string
+	mediaRawID    int64
+	accessHash    int64
+	fileReference []byte
+	downloadable  bool
 }
 
 func logExtractMediaInfo(msg *tg.Message) *logMediaInfo {
@@ -571,8 +576,16 @@ func logExtractMediaInfo(msg *tg.Message) *logMediaInfo {
 		}
 		_, size := logBestPhotoSize(photo)
 		return &logMediaInfo{
-			label: "Foto", apiMethod: "sendPhoto", fieldName: "photo",
-			fileName: "photo.jpg", fileSize: size, downloadable: true,
+			label:         "Foto",
+			apiMethod:     "sendPhoto",
+			fieldName:     "photo",
+			fileName:      "photo.jpg",
+			fileSize:      size,
+			mimeType:      "image/jpeg",
+			mediaRawID:    photo.ID,
+			accessHash:    photo.AccessHash,
+			fileReference: photo.FileReference,
+			downloadable:  true,
 		}
 
 	case *tg.MessageMediaDocument:
@@ -581,8 +594,16 @@ func logExtractMediaInfo(msg *tg.Message) *logMediaInfo {
 			return nil
 		}
 		info := &logMediaInfo{
-			label: "Dokumen", apiMethod: "sendDocument", fieldName: "document",
-			fileName: "file", fileSize: doc.Size, downloadable: true,
+			label:         "Dokumen",
+			apiMethod:     "sendDocument",
+			fieldName:     "document",
+			fileName:      "file",
+			fileSize:      doc.Size,
+			mimeType:      doc.MimeType,
+			mediaRawID:    doc.ID,
+			accessHash:    doc.AccessHash,
+			fileReference: doc.FileReference,
+			downloadable:  true,
 		}
 		for _, attr := range doc.Attributes {
 			switch a := attr.(type) {
@@ -965,23 +986,30 @@ func logBuildChatURL(msg *tg.Message, senderID int64, senderUsername, chatType s
 
 // ─── MongoDB Backup ──────────────────────────────────────────────────
 
-// logSaveMediaMongo menyimpan metadata media log ke MongoDB untuk backup
-func (s *Service) logSaveMediaMongo(ctx context.Context, ownerID, logBotID int64, logMsgID int, sourceChatID int64, sourceMsgID int, mediaType, fileID, caption string) {
-	if s.db == nil {
+// logSaveMediaMongo menyimpan metadata media MTProto + file_id ke MongoDB untuk backup
+func (s *Service) logSaveMediaMongo(ctx context.Context, ownerID, logBotID int64, logMsgID int, sourceChatID int64, sourceMsgID int, mInfo *logMediaInfo, fileID, caption string) {
+	if s.db == nil || mInfo == nil {
 		return
 	}
 	col := s.db.Collection("userbot_log_media")
-	_, err := col.InsertOne(ctx, bson.M{
+	doc := bson.M{
 		"owner_id":          ownerID,
 		"log_bot_id":        logBotID,
 		"log_message_id":    logMsgID,
 		"source_chat_id":    sourceChatID,
 		"source_message_id": sourceMsgID,
-		"media_type":        mediaType,
-		"file_id":           fileID,
+		"media_type":        mInfo.label,
+		"file_id":           fileID, // Telegram Bot API file_id jika ada
+		"raw_id":            mInfo.mediaRawID,
+		"access_hash":       mInfo.accessHash,
+		"file_reference":    base64.StdEncoding.EncodeToString(mInfo.fileReference),
+		"file_name":         mInfo.fileName,
+		"mime_type":         mInfo.mimeType,
+		"file_size":         mInfo.fileSize,
 		"caption":           caption,
 		"created_at":        time.Now(),
-	})
+	}
+	_, err := col.InsertOne(ctx, doc)
 	if err != nil {
 		log.Printf("[LogBot] Gagal simpan media ke MongoDB: %v", err)
 	}
