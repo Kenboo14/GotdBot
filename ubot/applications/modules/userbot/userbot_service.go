@@ -62,9 +62,11 @@ type Service struct {
 	logBotToken      string
 	logBotID         int64
 	logBotUsername   string
-	startedLogBots   sync.Map // key: [2]int64{userbotID, logBotID} -> true
-	logStatusCache   sync.Map // key: int64 (ownerID) -> bool
-	ownerUsernames   sync.Map // key: int64 (ownerID) -> lowercase username without @
+	startedLogBots      sync.Map // key: [2]int64{userbotID, logBotID} -> true
+	logStatusCache      sync.Map // key: int64 (ownerID) -> bool
+	ownerUsernames      sync.Map // key: int64 (ownerID) -> lowercase username without @
+	userAccessHashes    sync.Map // key: int64 (userID) -> int64 (accessHash)
+	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
 	inlineMu         sync.RWMutex
 	botUsernameCache string
 	inlineBots       map[*telegram.Client]*tg.InputUser
@@ -676,6 +678,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.mu.Lock()
 			s.lastActive[chatID] = time.Now()
 			s.mu.Unlock()
+			s.cacheEntities(entities)
 			if msg, ok := update.Message.(*tg.Message); ok {
 				s.interceptLogMessage(ctx, chatID, client, entities, msg)
 			}
@@ -687,6 +690,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.mu.Lock()
 			s.lastActive[chatID] = time.Now()
 			s.mu.Unlock()
+			s.cacheEntities(entities)
 			if msg, ok := update.Message.(*tg.Message); ok {
 				s.interceptLogMessage(ctx, chatID, client, entities, msg)
 			}
@@ -1076,4 +1080,17 @@ func decrypt(key []byte, input string) ([]byte, error) {
 		return nil, fmt.Errorf("session terenkripsi tidak valid")
 	}
 	return gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
+}
+
+func (s *Service) cacheEntities(entities tg.Entities) {
+	for _, u := range entities.Users {
+		if u != nil && u.ID != 0 && u.AccessHash != 0 {
+			s.userAccessHashes.Store(u.ID, u.AccessHash)
+		}
+	}
+	for _, ch := range entities.Channels {
+		if ch != nil && ch.ID != 0 && ch.AccessHash != 0 {
+			s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+		}
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -14,7 +15,12 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/tg"
+	"go.mongodb.org/mongo-driver/bson"
 )
+
+const maxLogMediaSize = 20 * 1024 * 1024 // 20 MB
+
+// ─── Command Handlers ────────────────────────────────────────────────
 
 // handleLogCommand menangani !log on / !log off
 func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string) error {
@@ -35,7 +41,7 @@ func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client,
 	s.logStatusCache.Store(ownerID, enabled)
 
 	if enabled {
-		// Pastikan logbot di-unblock dan di-start secara otomatis (hanya sekali jika belum)
+		// Pastikan logbot di-unblock dan di-start secara otomatis (hanya sekali per lifecycle)
 		go func() {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -61,7 +67,7 @@ func (s *Service) handleStatusLogCommand(ctx context.Context, client *telegram.C
 	return sendUserText(ctx, client, target, fmt.Sprintf("<b>Status Log Bot:</b> <code>%s</code>", statusText))
 }
 
-// isLogEnabled mengecek apakah log aktif untuk ownerID (memanfaatkan sync.Map cache)
+// isLogEnabled mengecek apakah log aktif untuk ownerID (cache via sync.Map)
 func (s *Service) isLogEnabled(ctx context.Context, ownerID int64) bool {
 	if val, ok := s.logStatusCache.Load(ownerID); ok {
 		return val.(bool)
@@ -73,6 +79,8 @@ func (s *Service) isLogEnabled(ctx context.Context, ownerID int64) bool {
 	s.logStatusCache.Store(ownerID, enabled)
 	return enabled
 }
+
+// ─── LogBot Info ─────────────────────────────────────────────────────
 
 // resolveLogBotInfo mengambil UserID & Username dari LOGBOT_TOKEN via getMe (cached)
 func (s *Service) resolveLogBotInfo(ctx context.Context) (int64, string, error) {
@@ -86,7 +94,7 @@ func (s *Service) resolveLogBotInfo(ctx context.Context) (int64, string, error) 
 
 	token := s.logBotToken
 	if strings.TrimSpace(token) == "" {
-		token = s.botToken // fallback jika logbot tidak diset khusus
+		token = s.botToken // fallback
 	}
 	if strings.TrimSpace(token) == "" {
 		return 0, "", fmt.Errorf("LOGBOT_TOKEN belum diset")
@@ -125,7 +133,7 @@ func (s *Service) resolveLogBotInfo(ctx context.Context) (int64, string, error) 
 	return id, username, nil
 }
 
-// ensureLogBotStarted memastikan userbot unblock dan /start logbot (dicegah berjalan berulang via sync.Map)
+// ensureLogBotStarted memastikan userbot unblock dan /start logbot (sekali per lifecycle)
 func (s *Service) ensureLogBotStarted(ctx context.Context, client *telegram.Client, userbotID int64) error {
 	logBotID, logBotUsername, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
@@ -151,7 +159,7 @@ func (s *Service) ensureLogBotStarted(ctx context.Context, client *telegram.Clie
 		return fmt.Errorf("log bot peer bukan User")
 	}
 
-	// 2. Unblock bot (jika sebelumnya terblokir)
+	// 2. Unblock bot (jika terblokir)
 	_, _ = client.API().ContactsUnblock(ctx, &tg.ContactsUnblockRequest{
 		ID: &tg.InputPeerUser{UserID: inputUser.UserID, AccessHash: inputUser.AccessHash},
 	})
@@ -172,7 +180,9 @@ func (s *Service) ensureLogBotStarted(ctx context.Context, client *telegram.Clie
 	return nil
 }
 
-// interceptLogMessage mengecek pesan masuk: PM atau grup (jika mention/reply ke userbot)
+// ─── Core Log Flow ───────────────────────────────────────────────────
+
+// interceptLogMessage mengecek pesan masuk dan mem-forward ke logbot jika perlu
 func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, msg *tg.Message) {
 	if msg == nil {
 		return
@@ -203,7 +213,7 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 
 	logBotID, _, _ := s.resolveLogBotInfo(ctx)
 
-	// Kasus 1: User membalas pesan logbot di chat private bot log -> Balas ke chat sumber
+	// Kasus: User membalas pesan logbot di chat private -> balas ke chat sumber
 	if msg.Out {
 		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && logBotID != 0 && peerUser.UserID == logBotID {
 			if rh, hasReply := msg.GetReplyTo(); hasReply {
@@ -216,12 +226,7 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 				}
 			}
 		}
-		return
-	}
-
-	// Abaikan pesan yang dikirim sendiri oleh userbot
-	if msg.Out {
-		return
+		return // Semua pesan keluar (outgoing) tidak di-log
 	}
 
 	// Cek status aktif fitur log
@@ -269,34 +274,33 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 	}
 
 	// Evaluasi apakah pesan harus di-log:
-	// 1. Jika Private Chat (PM) -> Selalu di-log
-	// 2. Jika Grup / Channel -> HANYA di-log jika pesan me-reply pesan userbot ATAU me-mention userbot
+	// 1. Private Chat (PM) -> Selalu di-log
+	// 2. Grup / Channel -> HANYA jika pesan me-reply userbot ATAU me-mention userbot
 	shouldLog := false
 
 	if isPrivate {
 		shouldLog = true
 	} else {
-		// A. Cek apakah me-reply userbot (via entities atau target reply)
+		// A. Cek apakah me-reply userbot
 		if rh, ok := msg.GetReplyTo(); ok {
 			if rHeader, ok := rh.(*tg.MessageReplyHeader); ok {
-				// Cek jika ReplyToPeerID mengarah ke userbot
 				if rHeader.ReplyToPeerID != nil {
 					if rUser, ok := rHeader.ReplyToPeerID.(*tg.PeerUser); ok && rUser.UserID == ownerID {
 						shouldLog = true
 					}
 				}
-				// Cek jika ReplyFrom berasal dari userbot
-				if !shouldLog && rHeader.ReplyFrom.FromID != nil {
-					if rUser, ok := rHeader.ReplyFrom.FromID.(*tg.PeerUser); ok && rUser.UserID == ownerID {
-						shouldLog = true
+				if !shouldLog {
+					if fwd, fwdOk := rHeader.GetReplyFrom(); fwdOk && fwd.FromID != nil {
+						if rUser, ok := fwd.FromID.(*tg.PeerUser); ok && rUser.UserID == ownerID {
+							shouldLog = true
+						}
 					}
 				}
-				// Cek isi pesan yang di-reply jika belum terdeteksi dari header langsung
 				if !shouldLog && rHeader.ReplyToMsgID > 0 {
-					targetPeer, err := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
-					if err == nil {
-						origMsg, err := s.replyMessage(ctx, client, msg, targetPeer)
-						if err == nil && origMsg != nil {
+					targetPeer, peerErr := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
+					if peerErr == nil {
+						origMsg, origErr := s.replyMessage(ctx, client, msg, targetPeer)
+						if origErr == nil && origMsg != nil {
 							if origFrom, ok := origMsg.FromID.(*tg.PeerUser); ok && origFrom.UserID == ownerID {
 								shouldLog = true
 							}
@@ -306,14 +310,13 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 			}
 		}
 
-		// B. Cek apakah me-mention userbot (via entity mention atau text)
+		// B. Cek apakah me-mention userbot
 		if !shouldLog {
 			for _, ent := range msg.Entities {
 				switch e := ent.(type) {
 				case *tg.MessageEntityMentionName:
 					if e.UserID == ownerID {
 						shouldLog = true
-						break
 					}
 				case *tg.MessageEntityMention:
 					if ownerUsername != "" {
@@ -322,7 +325,6 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 							mentionStr := strings.ToLower(string(msgRunes[e.Offset : e.Offset+e.Length]))
 							if strings.TrimPrefix(mentionStr, "@") == ownerUsername {
 								shouldLog = true
-								break
 							}
 						}
 					}
@@ -338,7 +340,7 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
-	// Salin data dan jalankan forwarding secara async tanpa memblokir dispatcher update
+	// Salin data dan jalankan forwarding secara async
 	msgCopy := *msg
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -347,130 +349,134 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 	}()
 }
 
-// forwardLogs memformat dan mengirim log ke private chat pemilik via bot log Telegram
+// forwardLogs memformat dan mengirim log (teks + media) ke pemilik via Bot API
 func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, ownerID int64, entities tg.Entities, msg *tg.Message, chatType, chatTitle string, sourceChatID int64) {
 	logBotID, _, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
+		log.Printf("[LogBot] resolveLogBotInfo gagal: %v", err)
 		return
 	}
 
-	// Pastikan bot sudah di-unblock & di-start (di-cache per lifecycle)
+	// Pastikan bot sudah di-unblock & di-start
 	_ = s.ensureLogBotStarted(ctx, client, ownerID)
 
-	senderName := "Pengguna tidak dikenal"
-	senderUsername := ""
-	var senderID int64
+	// Ekstrak info pengirim
+	senderName, senderUsername, senderID := logExtractSenderInfo(msg, entities)
 
-	if fromUser, ok := msg.FromID.(*tg.PeerUser); ok {
-		senderID = fromUser.UserID
-		for _, u := range entities.Users {
-			if u.ID == fromUser.UserID {
-				senderName = strings.TrimSpace(u.FirstName + " " + u.LastName)
-				if senderName == "" {
-					senderName = u.Username
+	// Tentukan peer type & access hash untuk log_routes (dipakai saat reply-to-log)
+	peerType := "user"
+	var peerAccessHash int64
+	switch p := msg.PeerID.(type) {
+	case *tg.PeerUser:
+		peerType = "user"
+		if val, ok := s.userAccessHashes.Load(p.UserID); ok {
+			peerAccessHash = val.(int64)
+		}
+		if peerAccessHash == 0 {
+			for _, u := range entities.Users {
+				if u.ID == p.UserID {
+					peerAccessHash = u.AccessHash
+					break
 				}
-				senderUsername = u.Username
-				break
 			}
 		}
-	} else if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
-		senderID = peerUser.UserID
-		for _, u := range entities.Users {
-			if u.ID == peerUser.UserID {
-				senderName = strings.TrimSpace(u.FirstName + " " + u.LastName)
-				if senderName == "" {
-					senderName = u.Username
+	case *tg.PeerChat:
+		peerType = "chat"
+	case *tg.PeerChannel:
+		peerType = "channel"
+		if val, ok := s.channelAccessHashes.Load(p.ChannelID); ok {
+			peerAccessHash = val.(int64)
+		}
+		if peerAccessHash == 0 {
+			for _, ch := range entities.Channels {
+				if ch.ID == p.ChannelID {
+					peerAccessHash = ch.AccessHash
+					break
 				}
-				senderUsername = u.Username
-				break
 			}
 		}
 	}
-	if senderName == "" {
-		senderName = fmt.Sprintf("User #%d", senderID)
-	}
 
+	// Deteksi media
+	mInfo := logExtractMediaInfo(msg)
+
+	// Konten teks (pesan asli atau label media)
 	content := msg.Message
 	if strings.TrimSpace(content) == "" {
-		content = "[Media / Non-teks]"
-	}
-
-	// Format text persis referensi python:
-	// <blockquote><code>preview</code></blockquote>
-	// <b>Dari :</b> <code>sender_name</code> (@username)
-	// <b>Chat :</b> <code>chatTitle / Private</code>
-	// <b>Tipe :</b> <code>Private / Group</code>
-	// <pre language="Note:">Balas log untuk membalas pesan tanpa membuka pesan.</pre>
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<blockquote expandable><code>%s</code></blockquote>\n\n", html.EscapeString(content)))
-	sb.WriteString(fmt.Sprintf("<b>Dari :</b> <code>%s</code>", html.EscapeString(senderName)))
-	if senderUsername != "" {
-		safeUser := html.EscapeString(senderUsername)
-		sb.WriteString(fmt.Sprintf(" (<a href=\"https://t.me/%s\">@%s</a>)", safeUser, safeUser))
-	}
-	if chatTitle != "" {
-		sb.WriteString(fmt.Sprintf("\n<b>Chat :</b> <code>%s</code>", html.EscapeString(chatTitle)))
-	} else {
-		sb.WriteString("\n<b>Chat :</b> <code>Private</code>")
-	}
-	sb.WriteString(fmt.Sprintf("\n<b>Tipe :</b> <code>%s</code>\n\n", html.EscapeString(chatType)))
-	sb.WriteString("<pre language=\"Note:\">Balas log untuk membalas pesan tanpa membuka pesan.</pre>")
-
-	chatURL := fmt.Sprintf("tg://user?id=%d", senderID)
-	if senderUsername != "" {
-		chatURL = "https://t.me/" + senderUsername
-	}
-	if chatType == "Group" || chatType == "Channel" {
-		if msg.PeerID != nil {
-			if ch, ok := msg.PeerID.(*tg.PeerChannel); ok {
-				chatURL = fmt.Sprintf("https://t.me/c/%d/%d", ch.ChannelID, msg.ID)
-			}
+		if mInfo != nil {
+			content = "[" + mInfo.label + "]"
+		} else {
+			content = "[Media / Non-teks]"
 		}
 	}
+
+	logText := logFormatText(content, senderName, senderUsername, chatType, chatTitle)
+	chatURL := logBuildChatURL(msg, senderID, senderUsername, chatType)
 
 	token := s.logBotToken
 	if strings.TrimSpace(token) == "" {
 		token = s.botToken
 	}
 
-	payload := map[string]interface{}{
-		"chat_id":                  ownerID,
-		"text":                     sb.String(),
-		"parse_mode":               "HTML",
-		"disable_web_page_preview": true,
-		"reply_markup": map[string]interface{}{
-			"inline_keyboard": [][]map[string]string{
-				{
-					{"text": "Buka Chat", "url": chatURL},
-				},
-			},
-		},
+	var logMsgID int
+	var fileID string
+	var mediaSent bool
+
+	// Coba kirim media jika ada dan bisa di-download
+	if mInfo != nil && mInfo.downloadable && mInfo.fileSize > 0 && mInfo.fileSize <= maxLogMediaSize {
+		data, dlErr := logDownloadMediaFile(ctx, client, msg, maxLogMediaSize)
+		if dlErr == nil && len(data) > 0 {
+			supportsCaption := mInfo.fieldName != "sticker" && mInfo.fieldName != "video_note"
+			if supportsCaption {
+				mid, fid, sendErr := s.logSendMediaViaBot(ctx, token, ownerID, data, mInfo.fileName, mInfo.apiMethod, mInfo.fieldName, logText, chatURL)
+				if sendErr == nil {
+					logMsgID = mid
+					fileID = fid
+					mediaSent = true
+				} else {
+					log.Printf("[LogBot] Media upload gagal, fallback teks: %v", sendErr)
+				}
+			} else {
+				// Sticker/video_note: kirim media dulu (tanpa caption), lalu teks terpisah
+				_, fid, sendErr := s.logSendMediaViaBot(ctx, token, ownerID, data, mInfo.fileName, mInfo.apiMethod, mInfo.fieldName, "", "")
+				if sendErr == nil {
+					fileID = fid
+				} else {
+					log.Printf("[LogBot] Kirim sticker/videonote gagal: %v", sendErr)
+				}
+				mid, textErr := s.logSendTextViaBot(ctx, token, ownerID, logText, chatURL)
+				if textErr == nil {
+					logMsgID = mid
+					mediaSent = true
+				}
+			}
+		} else if dlErr != nil {
+			log.Printf("[LogBot] Download media gagal: %v", dlErr)
+		}
 	}
 
-	pBytes, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"https://api.telegram.org/bot"+token+"/sendMessage", bytes.NewReader(pBytes))
-	if err != nil {
-		return
+	// Fallback ke teks biasa
+	if !mediaSent {
+		mid, textErr := s.logSendTextViaBot(ctx, token, ownerID, logText, chatURL)
+		if textErr != nil {
+			log.Printf("[LogBot] Gagal kirim log ke %d: %v", ownerID, textErr)
+			return
+		}
+		logMsgID = mid
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := sharedHTTPClient.Do(req)
-	if err != nil {
-		log.Printf("[LogBot] Gagal kirim pesan log ke %d: %v", ownerID, err)
-		return
-	}
-	defer resp.Body.Close()
+	// Simpan routing ke sqlite agar bisa dibalas (reply-to-log)
+	if logMsgID > 0 {
+		_ = s.sqlite.SaveLogRoute(ctx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 
-	var res struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			MessageID int `json:"message_id"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&res); err == nil && res.OK && res.Result.MessageID > 0 {
-		// Simpan routing ke sqlite agar bisa dibalas (reply-to-log)
-		_ = s.sqlite.SaveLogRoute(ctx, logBotID, res.Result.MessageID, ownerID, sourceChatID, msg.ID)
+		// Backup media ke MongoDB (async)
+		if fileID != "" && mInfo != nil {
+			go func() {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				s.logSaveMediaMongo(bgCtx, ownerID, logBotID, logMsgID, sourceChatID, msg.ID, mInfo.label, fileID, msg.Message)
+			}()
+		}
 	}
 }
 
@@ -478,25 +484,505 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Client, ownerID, logBotID int64, replyToID int, text string) {
 	route, err := s.sqlite.GetLogRoute(ctx, logBotID, replyToID)
 	if err != nil || route == nil || route.UserID != ownerID {
+		log.Printf("[LogBot] Route tidak ditemukan: botID=%d replyTo=%d err=%v", logBotID, replyToID, err)
 		return
+	}
+
+	// Resolve target peer berdasarkan peer_type dan access_hash tersimpan
+	var targetPeer tg.InputPeerClass
+	switch route.PeerType {
+	case "channel":
+		accessHash := route.AccessHash
+		if accessHash == 0 {
+			if val, ok := s.channelAccessHashes.Load(route.SourceChatID); ok {
+				accessHash = val.(int64)
+			}
+		}
+		targetPeer = &tg.InputPeerChannel{ChannelID: route.SourceChatID, AccessHash: accessHash}
+	case "chat":
+		targetPeer = &tg.InputPeerChat{ChatID: route.SourceChatID}
+	default: // "user"
+		accessHash := route.AccessHash
+		if accessHash == 0 {
+			if val, ok := s.userAccessHashes.Load(route.SourceChatID); ok {
+				accessHash = val.(int64)
+			}
+		}
+		if accessHash == 0 {
+			// Coba resolve via API jika cache kosong
+			users, resolveErr := client.API().UsersGetUsers(ctx, []tg.InputUserClass{
+				&tg.InputUser{UserID: route.SourceChatID},
+			})
+			if resolveErr == nil {
+				for _, u := range users {
+					if user, ok := u.(*tg.User); ok && user.ID == route.SourceChatID {
+						accessHash = user.AccessHash
+						s.userAccessHashes.Store(user.ID, user.AccessHash)
+						break
+					}
+				}
+			}
+		}
+		targetPeer = &tg.InputPeerUser{UserID: route.SourceChatID, AccessHash: accessHash}
 	}
 
 	rndID := inlineRandomID()
 
-	// Kirim pesan balasan dari akun userbot ke target chat (bisa user atau grup)
-	_, err = s.getSender(client).To(&tg.InputPeerUser{UserID: route.SourceChatID}).Text(ctx, text)
-	if err != nil {
-		// Coba fallback jika targetnya adalah channel/supergroup
-		_, err = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-			Peer:     &tg.InputPeerChannel{ChannelID: route.SourceChatID},
-			Message:  text,
-			RandomID: rndID,
-			ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID},
-		})
+	// Untuk private chat, kirim langsung; untuk grup/channel, reply ke pesan asli
+	var replyTo tg.InputReplyToClass
+	if route.PeerType != "user" {
+		replyTo = &tg.InputReplyToMessage{ReplyToMsgID: route.SourceMessageID}
 	}
+
+	_, err = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+		Peer:     targetPeer,
+		Message:  text,
+		RandomID: rndID,
+		ReplyTo:  replyTo,
+	})
 	if err != nil {
-		log.Printf("[LogBot] Gagal mengirim balasan ke sumber (%d): %v", route.SourceChatID, err)
+		log.Printf("[LogBot] Gagal mengirim balasan ke %s %d: %v", route.PeerType, route.SourceChatID, err)
 		return
 	}
-	log.Printf("[LogBot] Balasan sukses dikirim ke chat %d (reply to %d)", route.SourceChatID, route.SourceMessageID)
+	log.Printf("[LogBot] Balasan sukses dikirim ke %s %d (msg %d)", route.PeerType, route.SourceChatID, route.SourceMessageID)
+}
+
+// ─── Media Helpers ───────────────────────────────────────────────────
+
+type logMediaInfo struct {
+	label        string // display: "Foto", "Video", "GIF", "Sticker", dll
+	apiMethod    string // Bot API method: "sendPhoto", "sendVideo", dll
+	fieldName    string // multipart field: "photo", "video", dll
+	fileName     string // filename untuk upload
+	fileSize     int64
+	downloadable bool
+}
+
+func logExtractMediaInfo(msg *tg.Message) *logMediaInfo {
+	if msg.Media == nil {
+		return nil
+	}
+
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		photo, ok := media.Photo.(*tg.Photo)
+		if !ok || photo == nil {
+			return nil
+		}
+		_, size := logBestPhotoSize(photo)
+		return &logMediaInfo{
+			label: "Foto", apiMethod: "sendPhoto", fieldName: "photo",
+			fileName: "photo.jpg", fileSize: size, downloadable: true,
+		}
+
+	case *tg.MessageMediaDocument:
+		doc, ok := media.Document.(*tg.Document)
+		if !ok || doc == nil {
+			return nil
+		}
+		info := &logMediaInfo{
+			label: "Dokumen", apiMethod: "sendDocument", fieldName: "document",
+			fileName: "file", fileSize: doc.Size, downloadable: true,
+		}
+		for _, attr := range doc.Attributes {
+			switch a := attr.(type) {
+			case *tg.DocumentAttributeFilename:
+				info.fileName = a.FileName
+			case *tg.DocumentAttributeVideo:
+				if a.RoundMessage {
+					info.label = "Video note"
+					info.apiMethod = "sendVideoNote"
+					info.fieldName = "video_note"
+				} else {
+					info.label = "Video"
+					info.apiMethod = "sendVideo"
+					info.fieldName = "video"
+				}
+			case *tg.DocumentAttributeAnimated:
+				info.label = "GIF"
+				info.apiMethod = "sendAnimation"
+				info.fieldName = "animation"
+			case *tg.DocumentAttributeAudio:
+				if a.Voice {
+					info.label = "Voice"
+					info.apiMethod = "sendVoice"
+					info.fieldName = "voice"
+				} else {
+					info.label = "Audio"
+					info.apiMethod = "sendAudio"
+					info.fieldName = "audio"
+				}
+			case *tg.DocumentAttributeSticker:
+				info.label = "Sticker"
+				info.apiMethod = "sendSticker"
+				info.fieldName = "sticker"
+			}
+		}
+		return info
+
+	case *tg.MessageMediaContact:
+		return &logMediaInfo{label: "Kontak"}
+	case *tg.MessageMediaGeo:
+		return &logMediaInfo{label: "Lokasi"}
+	case *tg.MessageMediaGeoLive:
+		return &logMediaInfo{label: "Lokasi"}
+	case *tg.MessageMediaVenue:
+		return &logMediaInfo{label: "Lokasi"}
+	case *tg.MessageMediaPoll:
+		return &logMediaInfo{label: "Poll"}
+	default:
+		return &logMediaInfo{label: "Media"}
+	}
+}
+
+// logBestPhotoSize memilih ukuran foto terbesar yang tersedia
+func logBestPhotoSize(photo *tg.Photo) (thumbSize string, fileSize int64) {
+	order := map[string]int{"s": 1, "m": 2, "x": 3, "y": 4, "w": 5}
+	bestOrder := 0
+	for _, sz := range photo.Sizes {
+		switch s := sz.(type) {
+		case *tg.PhotoSize:
+			if order[s.Type] > bestOrder {
+				thumbSize = s.Type
+				fileSize = int64(s.Size)
+				bestOrder = order[s.Type]
+			}
+		case *tg.PhotoSizeProgressive:
+			totalSize := int64(0)
+			if len(s.Sizes) > 0 {
+				totalSize = int64(s.Sizes[len(s.Sizes)-1])
+			}
+			if order[s.Type] > bestOrder {
+				thumbSize = s.Type
+				fileSize = totalSize
+				bestOrder = order[s.Type]
+			}
+		}
+	}
+	if thumbSize == "" {
+		thumbSize = "x" // fallback
+	}
+	return
+}
+
+// logDownloadMediaFile mengunduh file media dari MTProto (foto atau dokumen)
+func logDownloadMediaFile(ctx context.Context, client *telegram.Client, msg *tg.Message, maxSize int64) ([]byte, error) {
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		photo, ok := media.Photo.(*tg.Photo)
+		if !ok || photo == nil {
+			return nil, fmt.Errorf("foto kosong")
+		}
+		thumbType, fSize := logBestPhotoSize(photo)
+		if fSize > maxSize {
+			return nil, fmt.Errorf("foto terlalu besar: %d bytes", fSize)
+		}
+		location := &tg.InputPhotoFileLocation{
+			ID:            photo.ID,
+			AccessHash:    photo.AccessHash,
+			FileReference: photo.FileReference,
+			ThumbSize:     thumbType,
+		}
+		return logDownloadChunks(ctx, client, location, fSize)
+
+	case *tg.MessageMediaDocument:
+		doc, ok := media.Document.(*tg.Document)
+		if !ok || doc == nil {
+			return nil, fmt.Errorf("dokumen kosong")
+		}
+		if doc.Size > maxSize {
+			return nil, fmt.Errorf("dokumen terlalu besar: %d bytes", doc.Size)
+		}
+		location := &tg.InputDocumentFileLocation{
+			ID:            doc.ID,
+			AccessHash:    doc.AccessHash,
+			FileReference: doc.FileReference,
+		}
+		return logDownloadChunks(ctx, client, location, doc.Size)
+
+	default:
+		return nil, fmt.Errorf("tipe media tidak didukung untuk download")
+	}
+}
+
+// logDownloadChunks mengunduh file dari MTProto secara chunked
+func logDownloadChunks(ctx context.Context, client *telegram.Client, location tg.InputFileLocationClass, expectedSize int64) ([]byte, error) {
+	var buf bytes.Buffer
+	if expectedSize > 0 {
+		buf.Grow(int(expectedSize))
+	}
+	offset := int64(0)
+	limit := 1024 * 1024 // 1 MB chunks
+	for {
+		res, err := client.API().UploadGetFile(ctx, &tg.UploadGetFileRequest{
+			Location: location,
+			Offset:   offset,
+			Limit:    limit,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("UploadGetFile offset=%d: %w", offset, err)
+		}
+		switch f := res.(type) {
+		case *tg.UploadFile:
+			buf.Write(f.Bytes)
+			offset += int64(len(f.Bytes))
+			if len(f.Bytes) < limit {
+				return buf.Bytes(), nil
+			}
+		default:
+			return buf.Bytes(), nil
+		}
+	}
+}
+
+// ─── Bot API Helpers ─────────────────────────────────────────────────
+
+// logSendTextViaBot mengirim pesan teks log ke pemilik via Bot API sendMessage
+func (s *Service) logSendTextViaBot(ctx context.Context, token string, ownerID int64, text, chatURL string) (int, error) {
+	payload := map[string]interface{}{
+		"chat_id":                  ownerID,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+	}
+	if chatURL != "" {
+		payload["reply_markup"] = map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{
+				{
+					{"text": "Buka Chat", "url": chatURL},
+				},
+			},
+		}
+	}
+
+	pBytes, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.telegram.org/bot"+token+"/sendMessage", bytes.NewReader(pBytes))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("sendMessage HTTP error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var res struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return 0, fmt.Errorf("decode sendMessage response: %w", err)
+	}
+	if !res.OK {
+		return 0, fmt.Errorf("sendMessage API error: %s", res.Description)
+	}
+	return res.Result.MessageID, nil
+}
+
+// logSendMediaViaBot mengirim media log ke pemilik via Bot API multipart upload
+func (s *Service) logSendMediaViaBot(ctx context.Context, token string, ownerID int64, data []byte, fileName, apiMethod, fieldName, caption, chatURL string) (msgID int, fileID string, err error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+
+	_ = w.WriteField("chat_id", fmt.Sprintf("%d", ownerID))
+	if caption != "" {
+		_ = w.WriteField("caption", caption)
+		_ = w.WriteField("parse_mode", "HTML")
+	}
+
+	if chatURL != "" {
+		markup, _ := json.Marshal(map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{
+				{
+					{"text": "Buka Chat", "url": chatURL},
+				},
+			},
+		})
+		_ = w.WriteField("reply_markup", string(markup))
+	}
+
+	part, partErr := w.CreateFormFile(fieldName, fileName)
+	if partErr != nil {
+		return 0, "", partErr
+	}
+	if _, writeErr := part.Write(data); writeErr != nil {
+		return 0, "", writeErr
+	}
+	if closeErr := w.Close(); closeErr != nil {
+		return 0, "", closeErr
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"https://api.telegram.org/bot"+token+"/"+apiMethod, &body)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return 0, "", fmt.Errorf("%s HTTP error: %w", apiMethod, err)
+	}
+	defer resp.Body.Close()
+
+	var raw struct {
+		OK          bool                   `json:"ok"`
+		Description string                 `json:"description"`
+		Result      map[string]interface{} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return 0, "", fmt.Errorf("decode %s response: %w", apiMethod, err)
+	}
+	if !raw.OK {
+		return 0, "", fmt.Errorf("%s API error: %s", apiMethod, raw.Description)
+	}
+
+	if mid, ok := raw.Result["message_id"].(float64); ok {
+		msgID = int(mid)
+	}
+
+	// Ekstrak file_id dari response
+	fileID = logExtractFileID(raw.Result, fieldName)
+
+	return msgID, fileID, nil
+}
+
+// logExtractFileID mengekstrak file_id dari response Bot API
+func logExtractFileID(result map[string]interface{}, fieldName string) string {
+	mediaField := result[fieldName]
+	if mediaField == nil {
+		return ""
+	}
+
+	// Photo: array of PhotoSize, ambil yang terakhir (terbesar)
+	if arr, ok := mediaField.([]interface{}); ok && len(arr) > 0 {
+		last := arr[len(arr)-1]
+		if m, ok := last.(map[string]interface{}); ok {
+			if fid, ok := m["file_id"].(string); ok {
+				return fid
+			}
+		}
+		return ""
+	}
+
+	// Media lain: object langsung
+	if m, ok := mediaField.(map[string]interface{}); ok {
+		if fid, ok := m["file_id"].(string); ok {
+			return fid
+		}
+	}
+
+	return ""
+}
+
+// ─── Formatting Helpers ──────────────────────────────────────────────
+
+// logExtractSenderInfo mengekstrak nama, username, dan ID pengirim dari entities
+func logExtractSenderInfo(msg *tg.Message, entities tg.Entities) (name, username string, id int64) {
+	name = "Pengguna tidak dikenal"
+
+	// Cek FromID (pengirim asli)
+	if fromUser, ok := msg.FromID.(*tg.PeerUser); ok {
+		id = fromUser.UserID
+	} else if fromChannel, ok := msg.FromID.(*tg.PeerChannel); ok {
+		// Pesan dikirim atas nama channel
+		id = fromChannel.ChannelID
+		for _, ch := range entities.Channels {
+			if ch.ID == id {
+				name = ch.Title
+				username = ch.Username
+				return
+			}
+		}
+		name = fmt.Sprintf("Channel #%d", id)
+		return
+	} else if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
+		// Fallback untuk PM tanpa FromID
+		id = peerUser.UserID
+	}
+
+	if id == 0 {
+		return
+	}
+
+	for _, u := range entities.Users {
+		if u.ID == id {
+			first := strings.TrimSpace(u.FirstName)
+			last := strings.TrimSpace(u.LastName)
+			name = strings.TrimSpace(first + " " + last)
+			if name == "" {
+				name = u.Username
+			}
+			if name == "" {
+				name = fmt.Sprintf("User #%d", id)
+			}
+			username = u.Username
+			return
+		}
+	}
+
+	name = fmt.Sprintf("User #%d", id)
+	return
+}
+
+// logFormatText memformat teks log HTML (blockquote + sender + chat info + note)
+func logFormatText(content, senderName, senderUsername, chatType, chatTitle string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("<blockquote expandable><code>%s</code></blockquote>\n\n", html.EscapeString(content)))
+	sb.WriteString(fmt.Sprintf("<b>Dari :</b> <code>%s</code>", html.EscapeString(senderName)))
+	if senderUsername != "" {
+		safe := html.EscapeString(senderUsername)
+		sb.WriteString(fmt.Sprintf(` (<a href="https://t.me/%s">@%s</a>)`, safe, safe))
+	}
+	if chatTitle != "" {
+		sb.WriteString(fmt.Sprintf("\n<b>Chat :</b> <code>%s</code>", html.EscapeString(chatTitle)))
+	} else {
+		sb.WriteString("\n<b>Chat :</b> <code>Private</code>")
+	}
+	sb.WriteString(fmt.Sprintf("\n<b>Tipe :</b> <code>%s</code>\n\n", html.EscapeString(chatType)))
+	sb.WriteString(`<pre language="Note:">Balas log untuk membalas pesan tanpa membuka pesan.</pre>`)
+	return sb.String()
+}
+
+// logBuildChatURL membuat URL deep link ke chat sumber
+func logBuildChatURL(msg *tg.Message, senderID int64, senderUsername, chatType string) string {
+	if chatType == "Group" || chatType == "Channel" {
+		if ch, ok := msg.PeerID.(*tg.PeerChannel); ok {
+			return fmt.Sprintf("https://t.me/c/%d/%d", ch.ChannelID, msg.ID)
+		}
+	}
+	if senderUsername != "" {
+		return "https://t.me/" + senderUsername
+	}
+	return fmt.Sprintf("tg://user?id=%d", senderID)
+}
+
+// ─── MongoDB Backup ──────────────────────────────────────────────────
+
+// logSaveMediaMongo menyimpan metadata media log ke MongoDB untuk backup
+func (s *Service) logSaveMediaMongo(ctx context.Context, ownerID, logBotID int64, logMsgID int, sourceChatID int64, sourceMsgID int, mediaType, fileID, caption string) {
+	if s.db == nil {
+		return
+	}
+	col := s.db.Collection("userbot_log_media")
+	_, err := col.InsertOne(ctx, bson.M{
+		"owner_id":          ownerID,
+		"log_bot_id":        logBotID,
+		"log_message_id":    logMsgID,
+		"source_chat_id":    sourceChatID,
+		"source_message_id": sourceMsgID,
+		"media_type":        mediaType,
+		"file_id":           fileID,
+		"caption":           caption,
+		"created_at":        time.Now(),
+	})
+	if err != nil {
+		log.Printf("[LogBot] Gagal simpan media ke MongoDB: %v", err)
+	}
 }

@@ -134,6 +134,8 @@ func (s *SQLiteClient) initTables() error {
 			user_id INTEGER NOT NULL,
 			source_chat_id INTEGER NOT NULL,
 			source_message_id INTEGER NOT NULL,
+			peer_type TEXT DEFAULT 'user',
+			access_hash INTEGER DEFAULT 0,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (log_bot_id, log_message_id)
 		);`,
@@ -149,6 +151,8 @@ func (s *SQLiteClient) initTables() error {
 	// Safe column migration for existing userbot_notes tables
 	_, _ = s.DB.Exec(`ALTER TABLE userbot_notes ADD COLUMN cache_message_id INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE userbot_notes ADD COLUMN cache_channel TEXT DEFAULT '';`)
+	_, _ = s.DB.Exec(`ALTER TABLE log_routes ADD COLUMN peer_type TEXT DEFAULT 'user';`)
+	_, _ = s.DB.Exec(`ALTER TABLE log_routes ADD COLUMN access_hash INTEGER DEFAULT 0;`)
 
 	return nil
 }
@@ -432,6 +436,8 @@ type LogRouteRecord struct {
 	UserID          int64
 	SourceChatID    int64
 	SourceMessageID int
+	PeerType        string
+	AccessHash      int64
 	CreatedAt       time.Time
 }
 
@@ -459,19 +465,22 @@ func (s *SQLiteClient) SetLogStatus(ctx context.Context, ownerID int64, enabled 
 	return err
 }
 
-func (s *SQLiteClient) SaveLogRoute(ctx context.Context, logBotID int64, logMsgID int, userID, sourceChatID int64, sourceMsgID int) error {
-	query := `INSERT OR REPLACE INTO log_routes (log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, created_at)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`
-	_, err := s.DB.ExecContext(ctx, query, logBotID, logMsgID, userID, sourceChatID, sourceMsgID)
+func (s *SQLiteClient) SaveLogRoute(ctx context.Context, logBotID int64, logMsgID int, userID, sourceChatID int64, sourceMsgID int, peerType string, accessHash int64) error {
+	if peerType == "" {
+		peerType = "user"
+	}
+	query := `INSERT OR REPLACE INTO log_routes (log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, peer_type, access_hash, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP);`
+	_, err := s.DB.ExecContext(ctx, query, logBotID, logMsgID, userID, sourceChatID, sourceMsgID, peerType, accessHash)
 	return err
 }
 
 func (s *SQLiteClient) GetLogRoute(ctx context.Context, logBotID int64, logMsgID int) (*LogRouteRecord, error) {
-	query := `SELECT log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, created_at
+	query := `SELECT log_bot_id, log_message_id, user_id, source_chat_id, source_message_id, COALESCE(peer_type, 'user'), COALESCE(access_hash, 0), created_at
 		FROM log_routes WHERE log_bot_id = ? AND log_message_id = ?;`
 	var r LogRouteRecord
 	err := s.DB.QueryRowContext(ctx, query, logBotID, logMsgID).Scan(
-		&r.LogBotID, &r.LogMessageID, &r.UserID, &r.SourceChatID, &r.SourceMessageID, &r.CreatedAt,
+		&r.LogBotID, &r.LogMessageID, &r.UserID, &r.SourceChatID, &r.SourceMessageID, &r.PeerType, &r.AccessHash, &r.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
