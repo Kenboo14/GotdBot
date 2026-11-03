@@ -2,13 +2,13 @@ package broadcast
 
 import (
 	"assterisk/ubot/applications/databases"
+	"context"
+	"errors"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
-
-	"context"
-	"time"
 )
 
 type Models struct {
@@ -25,14 +25,21 @@ type Repository struct {
 	redis      *databases.Redis
 }
 
-func NewRepository(mongo *mongo.Database, redis *databases.Redis) *Repository {
+func NewRepository(mongoDB *mongo.Database, redis *databases.Redis) *Repository {
+	var col *mongo.Collection
+	if mongoDB != nil {
+		col = mongoDB.Collection("users")
+	}
 	return &Repository{
-		collection: mongo.Collection("users"),
+		collection: col,
 		redis:      redis,
 	}
 }
 
 func (r *Repository) GetAll(c context.Context) ([]Models, error) {
+	if r.collection == nil {
+		return nil, errors.New("mongodb not connected")
+	}
 	ctx, cancel := context.WithTimeout(c, 5*time.Second)
 	defer cancel()
 
@@ -51,6 +58,9 @@ func (r *Repository) GetAll(c context.Context) ([]Models, error) {
 }
 
 func (r *Repository) GetByID(c context.Context, id string) (*Models, error) {
+	if r.collection == nil {
+		return nil, errors.New("mongodb not connected")
+	}
 	ctx, cancel := context.WithTimeout(c, 5*time.Second)
 	defer cancel()
 

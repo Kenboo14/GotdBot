@@ -259,7 +259,9 @@ func isMessageNotModifiedErr(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "message is not modified") || strings.Contains(msg, "message_not_modified")
+	return strings.Contains(msg, "message is not modified") ||
+		strings.Contains(msg, "message_not_modified") ||
+		strings.Contains(msg, "cannot unmarshal bool into go value of type models.message")
 }
 
 func buildHelpHomeKeyboard() *t_models.InlineKeyboardMarkup {
