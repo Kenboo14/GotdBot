@@ -341,6 +341,9 @@ func (s *Service) Restore(ctx context.Context) {
 
 		// 4. Sinkronisasi Log Status dari MongoDB Cloud Atlas ke SQLite lokal (dipanggil sekali saat startup)
 		s.logLoadStatusFromMongo(ctx)
+
+		// 5. Sinkronisasi Riwayat Rute Balasan Log dari MongoDB Cloud Atlas ke SQLite lokal
+		s.logLoadRoutesFromMongo(ctx)
 	}
 
 	if s.sqlite == nil {

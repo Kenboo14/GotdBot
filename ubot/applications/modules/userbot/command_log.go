@@ -1446,6 +1446,13 @@ func (s *Service) getLogRouteMongo(ctx context.Context, logBotID int64, logMsgID
 		return nil
 	}
 	col := s.db.Collection("userbot_log_routes")
+	filter := bson.M{
+		"$or": []bson.M{
+			{"log_message_id": logMsgID},
+			{"log_message_id": int64(logMsgID)},
+			{"log_message_id": int32(logMsgID)},
+		},
+	}
 	var doc struct {
 		LogBotID        int64     `bson:"log_bot_id"`
 		LogMessageID    int       `bson:"log_message_id"`
@@ -1456,7 +1463,7 @@ func (s *Service) getLogRouteMongo(ctx context.Context, logBotID int64, logMsgID
 		AccessHash      int64     `bson:"access_hash"`
 		UpdatedAt       time.Time `bson:"updated_at"`
 	}
-	err := col.FindOne(ctx, bson.M{"log_message_id": logMsgID}).Decode(&doc)
+	err := col.FindOne(ctx, filter).Decode(&doc)
 	if err != nil {
 		return nil
 	}
@@ -1469,5 +1476,40 @@ func (s *Service) getLogRouteMongo(ctx context.Context, logBotID int64, logMsgID
 		PeerType:        doc.PeerType,
 		AccessHash:      doc.AccessHash,
 		CreatedAt:       doc.UpdatedAt,
+	}
+}
+
+// logLoadRoutesFromMongo memuat riwayat rute log terbaru dari MongoDB ke SQLite saat startup
+func (s *Service) logLoadRoutesFromMongo(ctx context.Context) {
+	if s.db == nil || s.sqlite == nil {
+		return
+	}
+	col := s.db.Collection("userbot_log_routes")
+	opts := options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}).SetLimit(500)
+	cursor, err := col.Find(ctx, bson.M{}, opts)
+	if err != nil {
+		return
+	}
+	defer cursor.Close(ctx)
+
+	synced := 0
+	for cursor.Next(ctx) {
+		var doc struct {
+			LogBotID        int64  `bson:"log_bot_id"`
+			LogMessageID    int    `bson:"log_message_id"`
+			UserID          int64  `bson:"user_id"`
+			SourceChatID    int64  `bson:"source_chat_id"`
+			SourceMessageID int    `bson:"source_message_id"`
+			PeerType        string `bson:"peer_type"`
+			AccessHash      int64  `bson:"access_hash"`
+		}
+		if err := cursor.Decode(&doc); err != nil || doc.LogMessageID == 0 {
+			continue
+		}
+		_ = s.sqlite.SaveLogRoute(ctx, doc.LogBotID, doc.LogMessageID, doc.UserID, doc.SourceChatID, doc.SourceMessageID, doc.PeerType, doc.AccessHash)
+		synced++
+	}
+	if synced > 0 {
+		log.Printf("📋 Sinkronisasi MongoDB → SQLite: %d rute balasan log dimuat", synced)
 	}
 }
