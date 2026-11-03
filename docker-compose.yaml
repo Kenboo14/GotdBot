@@ -13,6 +13,9 @@ services:
       retries: 10
 
   gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
     image: ghcr.io/kenboo14/gotdbot-gateway:latest
     restart: unless-stopped
     mem_limit: 80m
@@ -28,6 +31,9 @@ services:
         condition: service_healthy
 
   ubot:
+    build:
+      context: ./ubot
+      dockerfile: Dockerfile
     image: ghcr.io/kenboo14/gotdbot-ubot:latest
     restart: unless-stopped
     user: "0:0"
