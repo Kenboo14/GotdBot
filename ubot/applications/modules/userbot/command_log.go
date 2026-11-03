@@ -1,6 +1,7 @@
 package userbot
 
 import (
+	"assterisk/ubot/applications/databases"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -434,7 +435,7 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		}
 	}
 
-	logText := logFormatText(content, senderName, senderUsername, chatType, chatTitle)
+	logText := logFormatText(content, senderName, senderUsername, chatType, chatTitle, senderID)
 	chatURL := logBuildChatURL(msg, senderID, senderUsername, chatType)
 
 	token := s.logBotToken
@@ -534,9 +535,17 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		logMsgID = mid
 	}
 
-	// Simpan routing ke sqlite agar bisa dibalas (reply-to-log)
+	// Simpan routing ke sqlite dan MongoDB agar bisa dibalas (reply-to-log)
 	if logMsgID > 0 {
-		_ = s.sqlite.SaveLogRoute(ctx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
+		err := s.sqlite.SaveLogRoute(ctx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
+		if err != nil {
+			log.Printf("[LogBot] Gagal simpan log route di SQLite: %v", err)
+		} else {
+			log.Printf("[LogBot] Log route tersimpan di SQLite: logMsgID=%d -> chatID=%d msgID=%d", logMsgID, sourceChatID, msg.ID)
+		}
+
+		// Backup route ke MongoDB juga
+		go s.saveLogRouteMongo(context.Background(), logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 
 		// Backup media ke MongoDB (async)
 		if mInfo != nil && (fileID != "" || mInfo.mediaRawID != 0) {
@@ -553,8 +562,15 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Client, ownerID, logBotID int64, replyToID int, text string) {
 	log.Printf("[LogBot] Memproses balasan log: logBotID=%d replyToID=%d text=%q", logBotID, replyToID, text)
 	route, err := s.sqlite.GetLogRoute(ctx, logBotID, replyToID)
-	if err != nil || route == nil || (route.UserID != 0 && ownerID != 0 && route.UserID != ownerID) {
-		log.Printf("[LogBot] Route tidak ditemukan di sqlite: botID=%d replyToID=%d ownerID=%d err=%v route=%+v", logBotID, replyToID, ownerID, err, route)
+	if route == nil {
+		// Fallback ke MongoDB jika di SQLite tidak ditemukan
+		route = s.getLogRouteMongo(ctx, logBotID, replyToID)
+		if route != nil {
+			log.Printf("[LogBot] Route ditemukan dari MongoDB: Target=%s ChatID=%d MsgID=%d", route.PeerType, route.SourceChatID, route.SourceMessageID)
+		}
+	}
+	if route == nil || (route.UserID != 0 && ownerID != 0 && route.UserID != ownerID) {
+		log.Printf("[LogBot] Route tidak ditemukan di sqlite/mongo: botID=%d replyToID=%d ownerID=%d err=%v route=%+v", logBotID, replyToID, ownerID, err, route)
 		return
 	}
 	log.Printf("[LogBot] Route ditemukan: Target=%s ChatID=%d MsgID=%d", route.PeerType, route.SourceChatID, route.SourceMessageID)
@@ -1275,10 +1291,14 @@ func logExtractSenderInfo(msg *tg.Message, entities tg.Entities) (name, username
 }
 
 // logFormatText memformat teks log HTML (blockquote + sender + chat info + note)
-func logFormatText(content, senderName, senderUsername, chatType, chatTitle string) string {
+func logFormatText(content, senderName, senderUsername, chatType, chatTitle string, senderID int64) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("<blockquote expandable><code>%s</code></blockquote>\n\n", html.EscapeString(content)))
-	sb.WriteString(fmt.Sprintf("<b>Dari :</b> <code>%s</code>", html.EscapeString(senderName)))
+	if senderID > 0 {
+		sb.WriteString(fmt.Sprintf(`<b>Dari :</b> <a href="tg://user?id=%d">%s</a>`, senderID, html.EscapeString(senderName)))
+	} else {
+		sb.WriteString(fmt.Sprintf("<b>Dari :</b> <code>%s</code>", html.EscapeString(senderName)))
+	}
 	if senderUsername != "" {
 		safe := html.EscapeString(senderUsername)
 		sb.WriteString(fmt.Sprintf(` (<a href="https://t.me/%s">@%s</a>)`, safe, safe))
@@ -1391,5 +1411,63 @@ func (s *Service) logSaveMediaMongo(ctx context.Context, ownerID, logBotID int64
 	_, err := col.InsertOne(ctx, doc)
 	if err != nil {
 		log.Printf("[LogBot] Gagal simpan media ke MongoDB: %v", err)
+	}
+}
+
+// saveLogRouteMongo menyimpan rute log (logMsgID -> sourceChatID) ke MongoDB sebagai backup
+func (s *Service) saveLogRouteMongo(ctx context.Context, logBotID int64, logMsgID int, userID, sourceChatID int64, sourceMsgID int, peerType string, accessHash int64) {
+	if s.db == nil {
+		return
+	}
+	col := s.db.Collection("userbot_log_routes")
+	filter := bson.M{"log_message_id": logMsgID}
+	update := bson.M{
+		"$set": bson.M{
+			"log_bot_id":        logBotID,
+			"log_message_id":    logMsgID,
+			"user_id":           userID,
+			"source_chat_id":    sourceChatID,
+			"source_message_id": sourceMsgID,
+			"peer_type":         peerType,
+			"access_hash":       accessHash,
+			"updated_at":        time.Now(),
+		},
+	}
+	opts := options.Update().SetUpsert(true)
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	if err != nil {
+		log.Printf("[LogBot] Gagal simpan log route ke MongoDB: %v", err)
+	}
+}
+
+// getLogRouteMongo mengambil rute log dari MongoDB sebagai fallback jika SQLite belum memiliki rutenya
+func (s *Service) getLogRouteMongo(ctx context.Context, logBotID int64, logMsgID int) *databases.LogRouteRecord {
+	if s.db == nil {
+		return nil
+	}
+	col := s.db.Collection("userbot_log_routes")
+	var doc struct {
+		LogBotID        int64     `bson:"log_bot_id"`
+		LogMessageID    int       `bson:"log_message_id"`
+		UserID          int64     `bson:"user_id"`
+		SourceChatID    int64     `bson:"source_chat_id"`
+		SourceMessageID int       `bson:"source_message_id"`
+		PeerType        string    `bson:"peer_type"`
+		AccessHash      int64     `bson:"access_hash"`
+		UpdatedAt       time.Time `bson:"updated_at"`
+	}
+	err := col.FindOne(ctx, bson.M{"log_message_id": logMsgID}).Decode(&doc)
+	if err != nil {
+		return nil
+	}
+	return &databases.LogRouteRecord{
+		LogBotID:        doc.LogBotID,
+		LogMessageID:    doc.LogMessageID,
+		UserID:          doc.UserID,
+		SourceChatID:    doc.SourceChatID,
+		SourceMessageID: doc.SourceMessageID,
+		PeerType:        doc.PeerType,
+		AccessHash:      doc.AccessHash,
+		CreatedAt:       doc.UpdatedAt,
 	}
 }
