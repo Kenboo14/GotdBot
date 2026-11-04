@@ -269,8 +269,12 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 	case *tg.PeerUser:
 		isPrivate = true
 		sourceChatID = p.UserID
-		// Jangan log pesan dari log bot itu sendiri
+		// Pesan masuk dari LogBot: tangkap MTProto msg ID untuk route lookup
 		if logBotID != 0 && p.UserID == logBotID {
+			if !msg.Out && msg.ID > 0 {
+				s.lastLogBotMsgID.Store(ownerID, msg.ID)
+				log.Printf("[LogBot] Incoming dari LogBot ditangkap: MTProto msgID=%d ownerID=%d", msg.ID, ownerID)
+			}
 			return
 		}
 	case *tg.PeerChat:
@@ -541,15 +545,33 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		defer dbCancel()
 
 		// Bot API message ID ≠ MTProto message ID di private chat.
-		// Bot API mengembalikan ID dari perspektif bot, tapi userbot (MTProto)
-		// melihat pesan yang sama dengan ID berbeda. Kita perlu ID MTProto
-		// karena replyToMsgID saat user membalas menggunakan ID MTProto.
-		routeLogMsgID := s.resolveLogMTProtoMsgID(ctx, client)
+		// Bot API mengembalikan ID dari perspektif bot (misal 92),
+		// tapi userbot melihat pesan yang sama dengan ID berbeda (misal 1298).
+		// Kita perlu ID MTProto karena replyToMsgID saat user membalas
+		// menggunakan ID MTProto dari sisi userbot.
+
+		// Tunggu sebentar agar update handler sempat menangkap incoming msg dari LogBot
+		time.Sleep(500 * time.Millisecond)
+
+		// Prioritas 1: Ambil dari update handler (paling akurat)
+		var routeLogMsgID int
+		if val, ok := s.lastLogBotMsgID.LoadAndDelete(ownerID); ok {
+			routeLogMsgID = val.(int)
+			log.Printf("[LogBot] MTProto msg ID dari update handler: %d (Bot API ID: %d)", routeLogMsgID, logMsgID)
+		}
+
+		// Prioritas 2: Fallback via MessagesGetHistory
 		if routeLogMsgID == 0 {
-			routeLogMsgID = logMsgID // fallback ke Bot API ID
-			log.Printf("[LogBot] Tidak bisa resolve MTProto msg ID, menggunakan Bot API ID: %d", logMsgID)
-		} else {
-			log.Printf("[LogBot] MTProto msg ID: %d (Bot API ID: %d)", routeLogMsgID, logMsgID)
+			routeLogMsgID = s.resolveLogMTProtoMsgID(ctx, client)
+			if routeLogMsgID > 0 {
+				log.Printf("[LogBot] MTProto msg ID dari GetHistory: %d (Bot API ID: %d)", routeLogMsgID, logMsgID)
+			}
+		}
+
+		// Prioritas 3: Fallback ke Bot API ID (terakhir, kemungkinan gagal saat reply)
+		if routeLogMsgID == 0 {
+			routeLogMsgID = logMsgID
+			log.Printf("[LogBot] ⚠️ Tidak bisa resolve MTProto msg ID, fallback ke Bot API ID: %d", logMsgID)
 		}
 
 		err := s.sqlite.SaveLogRoute(dbCtx, logBotID, routeLogMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)

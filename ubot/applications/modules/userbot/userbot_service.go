@@ -67,6 +67,7 @@ type Service struct {
 	ownerUsernames      sync.Map // key: int64 (ownerID) -> lowercase username without @
 	userAccessHashes    sync.Map // key: int64 (userID) -> int64 (accessHash)
 	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
+	lastLogBotMsgID     sync.Map // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
 	inlineMu         sync.RWMutex
 	botUsernameCache string
 	inlineBots       map[*telegram.Client]*tg.InputUser
