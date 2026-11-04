@@ -29,7 +29,6 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -87,6 +86,7 @@ type Service struct {
 	senderCache      map[*telegram.Client]*message.Sender // cached message.Sender per client
 	prefixes         map[int64]string
 	broadcasts       map[int64]*broadcastJob
+	panelBroadcasts  map[int64]*panelBroadcastJob
 	sudoMu           sync.RWMutex
 	sudoCache        map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
 	broadcastSem     chan struct{}             // Semaphore untuk membatasi concurrent gcast
@@ -138,6 +138,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		senderCache:      make(map[*telegram.Client]*message.Sender),
 		prefixes:         make(map[int64]string),
 		broadcasts:       make(map[int64]*broadcastJob),
+		panelBroadcasts:  make(map[int64]*panelBroadcastJob),
 		inlineBots:       make(map[*telegram.Client]*tg.InputUser),
 		sudoCache:        make(map[string]sudoCacheEntry),
 		broadcastSem:     make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
@@ -176,6 +177,22 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		s.mu.Unlock()
 		if bJob != nil {
 			bJob.cancel()
+		}
+		return
+	}
+	if job.Type == "stop_panel_broadcast" {
+		ownerID := job.UserID
+		if ownerID == 0 {
+			ownerID = job.OwnerID
+		}
+		s.mu.Lock()
+		pJob := s.panelBroadcasts[ownerID]
+		if pJob != nil {
+			delete(s.panelBroadcasts, ownerID)
+		}
+		s.mu.Unlock()
+		if pJob != nil {
+			pJob.cancel()
 		}
 		return
 	}
@@ -238,6 +255,22 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		go s.fetchAccountGroups(context.Background(), client, job.ChatID, targetID)
 		return
 	}
+	if job.Type == "cache_list" {
+		go s.handleCacheList(context.Background(), client, job.ChatID, targetID, job.Text)
+		return
+	}
+	if job.Type == "cache_watermark" {
+		go s.handleCacheWatermark(context.Background(), client, job.ChatID, targetID, job.Text)
+		return
+	}
+	if job.Type == "start_panel_broadcast" {
+		go s.handleStartPanelBroadcast(context.Background(), client, job.ChatID, targetID)
+		return
+	}
+	if job.Type == "test_rc_broadcast" {
+		go s.handleTestRCBroadcast(context.Background(), client, job.ChatID, targetID)
+		return
+	}
 	started := time.Now()
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pingCancel()
@@ -254,7 +287,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 		return
 	}
 
-	imported := 0
+	var allGroups []jasebGroupDoc
 	seen := make(map[int64]bool)
 
 	err := dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
@@ -270,30 +303,11 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 		seen[id] = true
 		title := dialogName(item.Peer, entities, id)
 
-		// 1. Simpan ke MongoDB (Sumber data utama)
-		var mongoID string
-		if s.db != nil {
-			col := s.db.Collection("userbot_groups")
-			res, err := col.InsertOne(ctx, bson.M{
-				"owner_id":   ownerID,
-				"target":     fmt.Sprintf("%d", id),
-				"title":      title,
-				"chat_id":    id,
-				"created_at": time.Now(),
-			})
-			if err == nil {
-				if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
-					mongoID = oid.Hex()
-				}
-			}
-		}
-
-		// 2. Sinkronkan perubahan ke SQLite lokal
-		if s.sqlite != nil {
-			query := `INSERT INTO userbot_groups (mongo_id, owner_id, target, title, chat_id, created_at) VALUES (?, ?, ?, ?, ?, ?);`
-			_, _ = s.sqlite.DB.ExecContext(ctx, query, mongoID, ownerID, fmt.Sprintf("%d", id), title, id, time.Now())
-		}
-		imported++
+		allGroups = append(allGroups, jasebGroupDoc{
+			Target: fmt.Sprintf("%d", id),
+			Title:  title,
+			ChatID: id,
+		})
 		return nil
 	})
 
@@ -301,14 +315,27 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 		log.Printf("[fetchAccountGroups] dialogs error: %v", err)
 	}
 
-	// Update userbot_configs
-	if s.sqlite != nil {
-		var gCount int
-		_ = s.sqlite.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM userbot_groups WHERE owner_id = ?;`, ownerID).Scan(&gCount)
-		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE userbot_configs SET extra = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?;`, gCount, ownerID)
+	// 1. Simpan ke MongoDB jaseb_configurasi (koleksi tunggal terpadu)
+	if s.db != nil {
+		col := s.db.Collection("jaseb_configurasi")
+		opts := options.Update().SetUpsert(true)
+		_, _ = col.UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{
+			"$set": bson.M{
+				"groups":     allGroups,
+				"updated_at": time.Now(),
+			},
+		}, opts)
 	}
 
-	report := fmt.Sprintf("✅ <b>Sinkronisasi Grup Berhasil!</b>\n\n<blockquote><i>Sebanyak <code>%d</code> grup dari akun Anda telah berhasil diimpor ke list sebar broadcast.</i></blockquote>", imported)
+	// 2. Sinkronkan ke SQLite jaseb_configurasi
+	if s.sqlite != nil {
+		groupsBytes, _ := json.Marshal(allGroups)
+		query := `INSERT INTO jaseb_configurasi (owner_id, groups, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(owner_id) DO UPDATE SET groups = excluded.groups, updated_at = CURRENT_TIMESTAMP;`
+		_, _ = s.sqlite.DB.ExecContext(ctx, query, ownerID, string(groupsBytes))
+	}
+
+	report := fmt.Sprintf("✅ <b>Sinkronisasi Grup Berhasil!</b>\n\n<blockquote><i>Sebanyak <code>%d</code> grup dari akun Anda telah berhasil diimpor ke list sebar broadcast.</i></blockquote>", len(allGroups))
 	s.reply(ctx, chatID, report, "panel_notice")
 }
 
@@ -813,6 +840,34 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("[Userbot chatID=%d] MTProto selesai/gagal: %v", chatID, err)
+			errStr := strings.ToUpper(err.Error())
+			if strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") ||
+				strings.Contains(errStr, "SESSION_REVOKED") ||
+				strings.Contains(errStr, "SESSION_EXPIRED") ||
+				strings.Contains(errStr, "USER_DEACTIVATED") ||
+				strings.Contains(errStr, "AUTH_KEY_PERM_EMPTY") {
+				s.mu.Lock()
+				delete(s.active, chatID)
+				delete(s.active, ownerID)
+				delete(s.owners, chatID)
+				delete(s.clientOwners, client)
+				s.mu.Unlock()
+
+				if s.sqlite != nil {
+					_ = s.sqlite.DeleteSession(context.Background(), chatID)
+				}
+				if s.db != nil {
+					_, _ = s.db.Collection("userbot_sessions").DeleteMany(context.Background(), bson.M{
+						"$or": []bson.M{
+							{"_id": chatID},
+							{"_id": ownerID},
+							{"owner_id": ownerID},
+							{"account_id": ownerID},
+						},
+					})
+				}
+				s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas silahkan pasang kembali /create</i></blockquote>", "session_revoked")
+			}
 		}
 	}()
 }

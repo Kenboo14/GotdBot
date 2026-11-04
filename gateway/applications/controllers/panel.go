@@ -271,7 +271,7 @@ func (h *Handler) CekList(ctx context.Context, b *bot.Bot, chatID, userID int64)
 	if len(lists) == 0 {
 		var sb strings.Builder
 		sb.WriteString("📁 <b>Daftar List Pesan Promosi</b>\n\n")
-		sb.WriteString("<blockquote>ℹ️ <i>Belum ada list yang tersimpan. Gunakan tombol <b>📝 Tambah List 📝</b> untuk menambahkan teks materi promosi Anda.</i></blockquote>")
+		sb.WriteString("<blockquote>ℹ️ <i>Belum ada list yang tersimpan. Gunakan tombol <b>📝 Tambah List 📝</b> untuk menambahkan teks materi promosi Anda. Pesan akan disimpan aman di cache cloud (@AiotdCaches).</i></blockquote>")
 
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:      chatID,
@@ -283,15 +283,11 @@ func (h *Handler) CekList(ctx context.Context, b *bot.Bot, chatID, userID int64)
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📁 <b>Daftar List Pesan Promosi</b> (Total: <code>%d</code>)\n\n", len(lists)))
-	for i, l := range lists {
-		preview := l.Text
-		if len([]rune(preview)) > 150 {
-			preview = string([]rune(preview)[:147]) + "..."
-		}
-		sb.WriteString(fmt.Sprintf("<blockquote><b>List #%d:</b>\n<i>%s</i></blockquote>\n\n", i+1, html.EscapeString(preview)))
-		if i >= 9 {
-			sb.WriteString(fmt.Sprintf("<i>...dan <code>%d</code> list lainnya.</i>\n", len(lists)-10))
+	sb.WriteString(fmt.Sprintf("📁 <b>Daftar List Pesan Promosi</b> (Total: <code>%d</code> list tersimpan)\n\n", len(lists)))
+	for i, msgID := range lists {
+		sb.WriteString(fmt.Sprintf("<blockquote><b>List #%d:</b>\n<i>Tersimpan di Cache AiotdCaches:</i> <code>Message ID #%d</code> (Topic: <code>3325</code>)</blockquote>\n\n", i+1, msgID))
+		if i >= 19 {
+			sb.WriteString(fmt.Sprintf("<i>...dan <code>%d</code> list lainnya.</i>\n", len(lists)-20))
 			break
 		}
 	}
@@ -453,14 +449,21 @@ func (h *Handler) SebarKeRC(ctx context.Context, b *bot.Bot, chatID, userID int6
 	if len(lists) == 0 {
 		sb.WriteString("<blockquote>⚠️ <i>Belum ada list materi promosi yang tersimpan! Tambahkan list terlebih dahulu sebelum melakukan uji coba.</i></blockquote>")
 	} else {
-		testText := lists[0].Text
-		if cfg.Watermark != "" {
-			testText += "\n\n" + cfg.Watermark
+		payload := models.PToService{
+			ChatID: chatID,
+			UserID: userID,
+			Type:   "test_rc_broadcast",
+		}
+		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+			log.Printf("test_rc_broadcast broker error: %v", err)
 		}
 
-		sb.WriteString("<blockquote>🚀 <b>Status Uji Coba :</b> <code>Berhasil Dikirim ke RC / Saved Messages</code>\n")
-		sb.WriteString(fmt.Sprintf("<b>Pratinjau List #1:</b>\n<i>%s</i></blockquote>\n\n", html.EscapeString(testText)))
-		sb.WriteString("<i>Format teks, emoji, watermark, dan entity telah diverifikasi sesuai konfigurasi aktif.</i>")
+		sb.WriteString("<blockquote>🚀 <b>Status Uji Coba :</b> <code>Sedang Diproses oleh Userbot</code>\n")
+		sb.WriteString(fmt.Sprintf("<b>Target Cache ID :</b> <code>#%d</code> (Topic: <code>3325</code>)\n", lists[0]))
+		if cfg.Watermark != "" {
+			sb.WriteString(fmt.Sprintf("<b>Watermark :</b> <i>%s</i>\n", html.EscapeString(cfg.Watermark)))
+		}
+		sb.WriteString("</blockquote>\n<i>Materi sedang dikirimkan ke Saved Messages akun Telegram Anda.</i>")
 	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
@@ -539,18 +542,44 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *bot.Bot, chatID, userID i
 	if strings.HasPrefix(cfg.Status, "Berhenti") {
 		cfg.Status = "Berjalan"
 		cfg.TindakanTerkini = "Siaran otomatis diaktifkan"
+		cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
+		_ = h.db.SaveUserConfig(ctx, cfg)
+
+		// Picu broadcast di ubot via Redis
+		payload := models.PToService{
+			ChatID: chatID,
+			UserID: userID,
+			Type:   "start_panel_broadcast",
+		}
+		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+			log.Printf("start_panel_broadcast broker error: %v", err)
+		}
 	} else {
 		cfg.Status = "Berhenti"
 		cfg.TindakanTerkini = "Siaran otomatis dimatikan"
+		cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
+		_ = h.db.SaveUserConfig(ctx, cfg)
+
+		// Hentikan broadcast di ubot via Redis
+		payload := models.PToService{
+			ChatID: chatID,
+			UserID: userID,
+			Type:   "stop_panel_broadcast",
+		}
+		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+			log.Printf("stop_panel_broadcast broker error: %v", err)
+		}
 	}
-	cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
-	_ = h.db.SaveUserConfig(ctx, cfg)
 
 	var sb strings.Builder
 	sb.WriteString("📊 <b>Status Siaran Otomatis Diperbarui!</b>\n\n")
 	sb.WriteString(fmt.Sprintf("Status Saat Ini : <code>%s</code>\n", html.EscapeString(cfg.Status)))
 	sb.WriteString(fmt.Sprintf("Tindakan Terkini : <i>%s</i>\n\n", html.EscapeString(cfg.TindakanTerkini)))
-	sb.WriteString("<blockquote>🚀 <i>Bila status Berjalan, siaran otomatis aktif memproses daftar materi promosi ke seluruh target grup sesuai jeda yang ditentukan.</i></blockquote>")
+	if cfg.Status == "Berjalan" {
+		sb.WriteString("<blockquote>🚀 <i>Siaran otomatis telah dimulai! Userbot aktif mengirim materi promosi dari cache ke seluruh grup target sesuai jeda yang dikonfigurasi.</i></blockquote>")
+	} else {
+		sb.WriteString("<blockquote>🛑 <i>Siaran otomatis telah dihentikan. Seluruh antrean pengiriman dinonaktifkan.</i></blockquote>")
+	}
 
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      chatID,
@@ -798,25 +827,25 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 	switch state {
 	case "waiting_add_list":
 		h.setPanelState(chatID, "")
-		_, err := h.db.AddList(ctx, userID, text)
-		if err != nil {
+		payload := models.PToService{
+			ChatID: chatID,
+			UserID: userID,
+			Type:   "cache_list",
+			Text:   text,
+		}
+		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+			log.Printf("cache_list broker error: %v", err)
 			b.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID:      chatID,
-				Text:        fmt.Sprintf("❌ <b>Gagal Menyimpan List:</b> <code>%s</code>", html.EscapeString(err.Error())),
+				Text:        "❌ <b>Gagal Menyimpan List:</b> <i>Layanan broker userbot tidak merespon.</i>",
 				ParseMode:   "HTML",
 				ReplyMarkup: grupListMenuMarkup,
 			})
 			return true
 		}
-		_, lCount := h.db.CountGroupsAndLists(ctx, userID)
-		var sb strings.Builder
-		sb.WriteString("✅ <b>List Berhasil Disimpan!</b>\n\n")
-		sb.WriteString(fmt.Sprintf("<blockquote><i>%s</i></blockquote>\n\n", html.EscapeString(text)))
-		sb.WriteString(fmt.Sprintf("Total list tersimpan: <code>%d</code>", lCount))
-
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:      chatID,
-			Text:        sb.String(),
+			Text:        "⏳ <b>Sedang mengamankan materi list ke cache...</b>\n\n<blockquote><i>Userbot sedang me-reply teks promosi ke @AiotdCaches (Topic 3325).</i></blockquote>",
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
@@ -841,7 +870,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 				if id, parseErr := strconv.ParseInt(p, 10, 64); parseErr == nil {
 					chatIDVal = id
 				}
-				_, err := h.db.AddGroup(ctx, userID, p, p, chatIDVal)
+				err := h.db.AddGroup(ctx, userID, p, p, chatIDVal)
 				if err == nil {
 					addedCount++
 				}
@@ -876,7 +905,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
 			lists := h.db.GetLists(ctx, userID)
 			if idx <= len(lists) {
-				_ = h.db.DeleteList(ctx, userID, lists[idx-1].ID)
+				_ = h.db.DeleteListByIndex(ctx, userID, idx-1)
 				b.SendMessage(ctx, &bot.SendMessageParams{
 					ChatID:      chatID,
 					Text:        fmt.Sprintf("✅ <b>List #%d berhasil dihapus.</b>", idx),
@@ -909,7 +938,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
 			groups := h.db.GetGroups(ctx, userID)
 			if idx <= len(groups) {
-				_ = h.db.DeleteGroup(ctx, userID, groups[idx-1].ID)
+				_ = h.db.DeleteGroupByIndex(ctx, userID, idx-1)
 				b.SendMessage(ctx, &bot.SendMessageParams{
 					ChatID:      chatID,
 					Text:        fmt.Sprintf("✅ <b>Target grup #%d (%s) berhasil dihapus.</b>", idx, html.EscapeString(groups[idx-1].Target)),
@@ -983,6 +1012,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 		cfg := h.db.GetUserConfig(ctx, userID)
 		if text == "🗑️ Hapus Watermark 🗑️" || strings.EqualFold(text, "hapus") {
 			cfg.Watermark = ""
+			cfg.WatermarkCacheID = 0
 			_ = h.db.SaveUserConfig(ctx, cfg)
 			b.SendMessage(ctx, &bot.SendMessageParams{
 				ChatID:      chatID,
@@ -992,11 +1022,25 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 			})
 			return true
 		}
-		cfg.Watermark = text
-		_ = h.db.SaveUserConfig(ctx, cfg)
+		payload := models.PToService{
+			ChatID: chatID,
+			UserID: userID,
+			Type:   "cache_watermark",
+			Text:   text,
+		}
+		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+			log.Printf("cache_watermark broker error: %v", err)
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID:      chatID,
+				Text:        "❌ <b>Gagal Menyimpan Watermark:</b> <i>Layanan broker userbot tidak merespon.</i>",
+				ParseMode:   "HTML",
+				ReplyMarkup: statusMenuMarkup,
+			})
+			return true
+		}
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:      chatID,
-			Text:        fmt.Sprintf("✅ <b>Custom watermark berhasil disimpan:</b>\n\n<blockquote><i>%s</i></blockquote>", html.EscapeString(text)),
+			Text:        "⏳ <b>Sedang mengamankan custom watermark ke cache...</b>\n\n<blockquote><i>Userbot sedang me-reply teks watermark ke @AiotdCaches (Topic 6847).</i></blockquote>",
 			ParseMode:   "HTML",
 			ReplyMarkup: statusMenuMarkup,
 		})

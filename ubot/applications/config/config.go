@@ -44,8 +44,10 @@ type Config struct {
 	} `yaml:"userbot"`
 
 	Cache struct {
-		GroupCache string `yaml:"group_cache"`
-		NotesCache int    `yaml:"notes_cache"`
+		GroupCache     string `yaml:"group_cache"`
+		NotesCache     int    `yaml:"notes_cache"`
+		TeksCache      int    `yaml:"teks_cache"`
+		WatermarkCache int    `yaml:"watermark_cache"`
 	} `yaml:"cache"`
 }
 
@@ -142,5 +144,19 @@ func applyEnv(cfg *Config) {
 	}
 	if cfg.Cache.NotesCache <= 0 {
 		cfg.Cache.NotesCache = 7157
+	}
+
+	if value := os.Getenv("TEKS_CACHE"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Cache.TeksCache)
+	}
+	if cfg.Cache.TeksCache <= 0 {
+		cfg.Cache.TeksCache = 3325
+	}
+
+	if value := os.Getenv("WATERMARK_CACHE"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Cache.WatermarkCache)
+	}
+	if cfg.Cache.WatermarkCache <= 0 {
+		cfg.Cache.WatermarkCache = 6847
 	}
 }

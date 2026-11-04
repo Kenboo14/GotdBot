@@ -75,6 +75,9 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 		params.ReplyMarkup = mainMenuMarkup
 	case "failed":
 		params.ReplyMarkup = cachedRemoveKeyboard
+	case "session_revoked":
+		params.ParseMode = "HTML"
+		params.ReplyMarkup = cachedRemoveKeyboard
 	case "panel_notice":
 		params.ParseMode = "HTML"
 		params.ReplyMarkup = grupListMenuMarkup

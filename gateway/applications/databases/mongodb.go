@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -64,11 +63,11 @@ func (m *MongoClient) HasSession(ctx context.Context, ownerID int64) (bool, erro
 	return count > 0, nil
 }
 
-func (m *MongoClient) SaveConfig(ctx context.Context, c *UserConfig) error {
+func (m *MongoClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	if m == nil || m.Database == nil {
 		return nil
 	}
-	col := m.Database.Collection("userbot_configs")
+	col := m.Database.Collection("jaseb_configurasi")
 	opts := options.Update().SetUpsert(true)
 	filter := bson.M{"_id": c.OwnerID}
 	update := bson.M{"$set": c}
@@ -76,12 +75,12 @@ func (m *MongoClient) SaveConfig(ctx context.Context, c *UserConfig) error {
 	return err
 }
 
-func (m *MongoClient) GetConfig(ctx context.Context, ownerID int64) (*UserConfig, error) {
+func (m *MongoClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConfig, error) {
 	if m == nil || m.Database == nil {
 		return nil, nil
 	}
-	col := m.Database.Collection("userbot_configs")
-	var c UserConfig
+	col := m.Database.Collection("jaseb_configurasi")
+	var c JasebConfig
 	err := col.FindOne(ctx, bson.M{"_id": ownerID}).Decode(&c)
 	if err == mongo.ErrNoDocuments {
 		return nil, nil
@@ -92,70 +91,32 @@ func (m *MongoClient) GetConfig(ctx context.Context, ownerID int64) (*UserConfig
 	return &c, nil
 }
 
-func (m *MongoClient) AddList(ctx context.Context, list *UserList) (string, error) {
-	if m == nil || m.Database == nil {
-		return "", nil
-	}
-	col := m.Database.Collection("userbot_lists")
-	doc := bson.M{
-		"owner_id":   list.OwnerID,
-		"text":       list.Text,
-		"media_type": list.MediaType,
-		"created_at": list.CreatedAt,
-	}
-	res, err := col.InsertOne(ctx, doc)
-	if err != nil {
-		return "", err
-	}
-	if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
-		return oid.Hex(), nil
-	}
-	return "", nil
-}
-
-func (m *MongoClient) GetLists(ctx context.Context, ownerID int64) ([]UserList, error) {
-	if m == nil || m.Database == nil {
-		return nil, nil
-	}
-	col := m.Database.Collection("userbot_lists")
-	cur, err := col.Find(ctx, bson.M{"owner_id": ownerID})
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-
-	var result []UserList
-	for cur.Next(ctx) {
-		var raw struct {
-			ID        primitive.ObjectID `bson:"_id"`
-			OwnerID   int64              `bson:"owner_id"`
-			Text      string             `bson:"text"`
-			MediaType string             `bson:"media_type"`
-			CreatedAt time.Time          `bson:"created_at"`
-		}
-		if err := cur.Decode(&raw); err == nil {
-			result = append(result, UserList{
-				MongoID:   raw.ID.Hex(),
-				OwnerID:   raw.OwnerID,
-				Text:      raw.Text,
-				MediaType: raw.MediaType,
-				CreatedAt: raw.CreatedAt,
-			})
-		}
-	}
-	return result, nil
-}
-
-func (m *MongoClient) DeleteList(ctx context.Context, ownerID int64, mongoID string) error {
+func (m *MongoClient) AddListCacheID(ctx context.Context, ownerID int64, cacheMsgID int) error {
 	if m == nil || m.Database == nil {
 		return nil
 	}
-	col := m.Database.Collection("userbot_lists")
-	oid, err := primitive.ObjectIDFromHex(mongoID)
-	if err != nil {
-		return err
+	col := m.Database.Collection("jaseb_configurasi")
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$push": bson.M{"lists": cacheMsgID},
+		"$set":  bson.M{"updated_at": time.Now()},
 	}
-	_, err = col.DeleteOne(ctx, bson.M{"_id": oid, "owner_id": ownerID})
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+func (m *MongoClient) DeleteListCacheID(ctx context.Context, ownerID int64, cacheMsgID int) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	col := m.Database.Collection("jaseb_configurasi")
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$pull": bson.M{"lists": cacheMsgID},
+		"$set":  bson.M{"updated_at": time.Now()},
+	}
+	_, err := col.UpdateOne(ctx, filter, update)
 	return err
 }
 
@@ -163,78 +124,44 @@ func (m *MongoClient) ClearLists(ctx context.Context, ownerID int64) error {
 	if m == nil || m.Database == nil {
 		return nil
 	}
-	col := m.Database.Collection("userbot_lists")
-	_, err := col.DeleteMany(ctx, bson.M{"owner_id": ownerID})
+	col := m.Database.Collection("jaseb_configurasi")
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$set": bson.M{
+			"lists":      []int{},
+			"updated_at": time.Now(),
+		},
+	}
+	_, err := col.UpdateOne(ctx, filter, update)
 	return err
 }
 
-func (m *MongoClient) AddGroup(ctx context.Context, g *UserGroup) (string, error) {
-	if m == nil || m.Database == nil {
-		return "", nil
-	}
-	col := m.Database.Collection("userbot_groups")
-	doc := bson.M{
-		"owner_id":   g.OwnerID,
-		"target":     g.Target,
-		"title":      g.Title,
-		"chat_id":    g.ChatID,
-		"created_at": g.CreatedAt,
-	}
-	res, err := col.InsertOne(ctx, doc)
-	if err != nil {
-		return "", err
-	}
-	if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
-		return oid.Hex(), nil
-	}
-	return "", nil
-}
-
-func (m *MongoClient) GetGroups(ctx context.Context, ownerID int64) ([]UserGroup, error) {
-	if m == nil || m.Database == nil {
-		return nil, nil
-	}
-	col := m.Database.Collection("userbot_groups")
-	cur, err := col.Find(ctx, bson.M{"owner_id": ownerID})
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-
-	var result []UserGroup
-	for cur.Next(ctx) {
-		var raw struct {
-			ID        primitive.ObjectID `bson:"_id"`
-			OwnerID   int64              `bson:"owner_id"`
-			Target    string             `bson:"target"`
-			Title     string             `bson:"title"`
-			ChatID    int64              `bson:"chat_id"`
-			CreatedAt time.Time          `bson:"created_at"`
-		}
-		if err := cur.Decode(&raw); err == nil {
-			result = append(result, UserGroup{
-				MongoID:   raw.ID.Hex(),
-				OwnerID:   raw.OwnerID,
-				Target:    raw.Target,
-				Title:     raw.Title,
-				ChatID:    raw.ChatID,
-				CreatedAt: raw.CreatedAt,
-			})
-		}
-	}
-	return result, nil
-}
-
-func (m *MongoClient) DeleteGroup(ctx context.Context, ownerID int64, mongoID string) error {
+func (m *MongoClient) AddGroup(ctx context.Context, ownerID int64, g GroupEntry) error {
 	if m == nil || m.Database == nil {
 		return nil
 	}
-	col := m.Database.Collection("userbot_groups")
-	oid, err := primitive.ObjectIDFromHex(mongoID)
-	if err != nil {
-		return err
+	col := m.Database.Collection("jaseb_configurasi")
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$push": bson.M{"groups": g},
+		"$set":  bson.M{"updated_at": time.Now()},
 	}
-	_, err = col.DeleteOne(ctx, bson.M{"_id": oid, "owner_id": ownerID})
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+func (m *MongoClient) DeleteGroup(ctx context.Context, ownerID int64, target string) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	col := m.Database.Collection("jaseb_configurasi")
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$pull": bson.M{"groups": bson.M{"target": target}},
+		"$set":  bson.M{"updated_at": time.Now()},
+	}
+	_, err := col.UpdateOne(ctx, filter, update)
 	return err
 }
 
@@ -242,74 +169,45 @@ func (m *MongoClient) ClearGroups(ctx context.Context, ownerID int64) error {
 	if m == nil || m.Database == nil {
 		return nil
 	}
-	col := m.Database.Collection("userbot_groups")
-	_, err := col.DeleteMany(ctx, bson.M{"owner_id": ownerID})
+	col := m.Database.Collection("jaseb_configurasi")
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$set": bson.M{
+			"groups":     []GroupEntry{},
+			"updated_at": time.Now(),
+		},
+	}
+	_, err := col.UpdateOne(ctx, filter, update)
 	return err
 }
 
-func (m *MongoClient) AddTopic(ctx context.Context, t *UserTopic) (string, error) {
+func (m *MongoClient) AddTopic(ctx context.Context, ownerID int64, t TopicEntry) error {
 	if m == nil || m.Database == nil {
-		return "", nil
+		return nil
 	}
-	col := m.Database.Collection("userbot_topics")
-	doc := bson.M{
-		"owner_id":   t.OwnerID,
-		"chat_id":    t.ChatID,
-		"topic_id":   t.TopicID,
-		"title":      t.Title,
-		"created_at": t.CreatedAt,
+	col := m.Database.Collection("jaseb_configurasi")
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$push": bson.M{"topics": t},
+		"$set":  bson.M{"updated_at": time.Now()},
 	}
-	res, err := col.InsertOne(ctx, doc)
-	if err != nil {
-		return "", err
-	}
-	if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
-		return oid.Hex(), nil
-	}
-	return "", nil
-}
-
-func (m *MongoClient) GetTopics(ctx context.Context, ownerID int64) ([]UserTopic, error) {
-	if m == nil || m.Database == nil {
-		return nil, nil
-	}
-	col := m.Database.Collection("userbot_topics")
-	cur, err := col.Find(ctx, bson.M{"owner_id": ownerID})
-	if err != nil {
-		return nil, err
-	}
-	defer cur.Close(ctx)
-
-	var result []UserTopic
-	for cur.Next(ctx) {
-		var raw struct {
-			ID        primitive.ObjectID `bson:"_id"`
-			OwnerID   int64              `bson:"owner_id"`
-			ChatID    int64              `bson:"chat_id"`
-			TopicID   int                `bson:"topic_id"`
-			Title     string             `bson:"title"`
-			CreatedAt time.Time          `bson:"created_at"`
-		}
-		if err := cur.Decode(&raw); err == nil {
-			result = append(result, UserTopic{
-				MongoID:   raw.ID.Hex(),
-				OwnerID:   raw.OwnerID,
-				ChatID:    raw.ChatID,
-				TopicID:   raw.TopicID,
-				Title:     raw.Title,
-				CreatedAt: raw.CreatedAt,
-			})
-		}
-	}
-	return result, nil
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	return err
 }
 
 func (m *MongoClient) ClearTopics(ctx context.Context, ownerID int64) error {
 	if m == nil || m.Database == nil {
 		return nil
 	}
-	col := m.Database.Collection("userbot_topics")
-	_, err := col.DeleteMany(ctx, bson.M{"owner_id": ownerID})
+	col := m.Database.Collection("jaseb_configurasi")
+	filter := bson.M{"_id": ownerID}
+	update := bson.M{
+		"$set": bson.M{
+			"topics":     []TopicEntry{},
+			"updated_at": time.Now(),
+		},
+	}
+	_, err := col.UpdateOne(ctx, filter, update)
 	return err
 }
-

@@ -43,6 +43,24 @@ func getNotesCacheTopicID() int {
 	return 7157
 }
 
+func getTeksCacheTopicID() int {
+	if val := strings.TrimSpace(os.Getenv("TEKS_CACHE")); val != "" {
+		if id, err := strconv.Atoi(val); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 3325
+}
+
+func getWatermarkCacheTopicID() int {
+	if val := strings.TrimSpace(os.Getenv("WATERMARK_CACHE")); val != "" {
+		if id, err := strconv.Atoi(val); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 6847
+}
+
 var (
 	noteNameRe       = regexp.MustCompile(`^[\w-]{1,32}$`)
 	urlButtonRe      = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|\[(?:https?://[^\]]+)\]\((https?://[^)]+)\)\]`)
@@ -207,6 +225,33 @@ func (s *Service) sendReplyToAiotdCaches(ctx context.Context, client *telegram.C
 		return 0, fmt.Errorf("gagal membalas ke @%s/%d: %w", groupCache, topicID, err)
 	}
 
+	cachedMsgID := extractMessageIDFromUpdates(updates)
+	return cachedMsgID, nil
+}
+
+func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *telegram.Client, topicID int, text string) (int, error) {
+	groupCache := getGroupCache()
+	cachePeer, err := s.resolveCachePeer(ctx, client)
+	if err != nil {
+		return 0, fmt.Errorf("gagal resolve @%s: %w", groupCache, err)
+	}
+
+	replyTo := &tg.InputReplyToMessage{
+		ReplyToMsgID: topicID,
+		TopMsgID:     topicID,
+	}
+
+	randomID := time.Now().UnixNano()
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     cachePeer,
+		ReplyTo:  replyTo,
+		Message:  text,
+		RandomID: randomID,
+	}
+	updates, err := client.API().MessagesSendMessage(ctx, req)
+	if err != nil {
+		return 0, fmt.Errorf("gagal mengirim ke @%s/%d: %w", groupCache, topicID, err)
+	}
 	cachedMsgID := extractMessageIDFromUpdates(updates)
 	return cachedMsgID, nil
 }

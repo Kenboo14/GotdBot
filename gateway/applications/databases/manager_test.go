@@ -43,36 +43,35 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 	cfg.Safemode = true
 	cfg.Mode = "Fast"
 	cfg.Watermark = "@test_watermark"
+	cfg.WatermarkCacheID = 6847
 	if err := dm.SaveUserConfig(ctx, cfg); err != nil {
 		t.Fatalf("save config failed: %v", err)
 	}
 
 	updated := dm.GetUserConfig(ctx, ownerID)
-	if updated.Delay != 10 || !updated.Safemode || updated.Mode != "Fast" || updated.Watermark != "@test_watermark" {
+	if updated.Delay != 10 || !updated.Safemode || updated.Mode != "Fast" || updated.Watermark != "@test_watermark" || updated.WatermarkCacheID != 6847 {
 		t.Errorf("updated config mismatch: %+v", updated)
 	}
 
-	// 3. Test AddList & GetLists
-	l1, err := dm.AddList(ctx, ownerID, "Promo 1")
-	if err != nil {
-		t.Fatalf("AddList failed: %v", err)
+	// 3. Test AddListCacheID & GetLists
+	if err := dm.AddListCacheID(ctx, ownerID, 1001); err != nil {
+		t.Fatalf("AddListCacheID failed: %v", err)
 	}
-	l2, err := dm.AddList(ctx, ownerID, "Promo 2")
-	if err != nil {
-		t.Fatalf("AddList 2 failed: %v", err)
+	if err := dm.AddListCacheID(ctx, ownerID, 1002); err != nil {
+		t.Fatalf("AddListCacheID 2 failed: %v", err)
 	}
 
 	lists := dm.GetLists(ctx, ownerID)
-	if len(lists) != 2 {
-		t.Fatalf("expected 2 lists, got %d", len(lists))
+	if len(lists) != 2 || lists[0] != 1001 || lists[1] != 1002 {
+		t.Fatalf("expected [1001, 1002], got %+v", lists)
 	}
 
-	if err := dm.DeleteList(ctx, ownerID, l1.ID); err != nil {
-		t.Fatalf("DeleteList failed: %v", err)
+	if err := dm.DeleteListByIndex(ctx, ownerID, 0); err != nil {
+		t.Fatalf("DeleteListByIndex failed: %v", err)
 	}
 	listsAfterDel := dm.GetLists(ctx, ownerID)
-	if len(listsAfterDel) != 1 || listsAfterDel[0].ID != l2.ID {
-		t.Fatalf("expected 1 list remaining (l2), got %d", len(listsAfterDel))
+	if len(listsAfterDel) != 1 || listsAfterDel[0] != 1002 {
+		t.Fatalf("expected 1 list remaining (1002), got %+v", listsAfterDel)
 	}
 
 	_ = dm.ClearLists(ctx, ownerID)
@@ -81,7 +80,7 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 	}
 
 	// 4. Test AddGroup & GetGroups
-	g1, err := dm.AddGroup(ctx, ownerID, "@group1", "Grup Promosi 1", -100111)
+	err = dm.AddGroup(ctx, ownerID, "@group1", "Grup Promosi 1", -100111)
 	if err != nil {
 		t.Fatalf("AddGroup failed: %v", err)
 	}
@@ -90,13 +89,18 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 		t.Fatalf("expected group1, got %+v", groups)
 	}
 
-	_ = dm.DeleteGroup(ctx, ownerID, g1.ID)
+	gCount, lCount := dm.CountGroupsAndLists(ctx, ownerID)
+	if gCount != 1 || lCount != 0 {
+		t.Fatalf("expected gCount 1, lCount 0, got %d, %d", gCount, lCount)
+	}
+
+	_ = dm.ClearGroups(ctx, ownerID)
 	if len(dm.GetGroups(ctx, ownerID)) != 0 {
-		t.Fatalf("expected 0 groups after delete")
+		t.Fatalf("expected 0 groups after clear")
 	}
 
 	// 5. Test AddTopic & GetTopics
-	_, err = dm.AddTopic(ctx, ownerID, -100111, 42, "Forum Topic #42")
+	err = dm.AddTopic(ctx, ownerID, -100111, 42, "Forum Topic #42")
 	if err != nil {
 		t.Fatalf("AddTopic failed: %v", err)
 	}
@@ -109,4 +113,3 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 		t.Fatalf("expected 0 topics after clear")
 	}
 }
-

@@ -162,6 +162,31 @@ func (s *SQLiteClient) initTables() error {
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 
+		`CREATE TABLE IF NOT EXISTS jaseb_configurasi (
+			owner_id INTEGER PRIMARY KEY,
+			type TEXT DEFAULT 'Broadcast',
+			delay INTEGER DEFAULT 5,
+			skip_floodwait INTEGER DEFAULT 0,
+			timer TEXT DEFAULT 'Belum diatur',
+			extra INTEGER DEFAULT 0,
+			mode TEXT DEFAULT 'Normal',
+			safemode INTEGER DEFAULT 0,
+			status TEXT DEFAULT 'Berhenti',
+			masa_aktif TEXT DEFAULT 'November 29, 2026 at 14:18',
+			notifikasi TEXT DEFAULT 'Aktif · Kirim ke Saya',
+			email TEXT DEFAULT 'Belum diatur',
+			admin TEXT DEFAULT 'Belum diatur',
+			watermark TEXT DEFAULT '',
+			watermark_cache_id INTEGER DEFAULT 0,
+			topic_enabled INTEGER DEFAULT 0,
+			tindakan_terkini TEXT DEFAULT 'Siaran otomatis dimatikan',
+			tindakan_terakhir TEXT DEFAULT '-',
+			lists TEXT DEFAULT '[]',
+			groups TEXT DEFAULT '[]',
+			topics TEXT DEFAULT '[]',
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+
 		`CREATE TABLE IF NOT EXISTS userbot_lists (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			mongo_id TEXT DEFAULT '',
