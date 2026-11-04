@@ -69,6 +69,12 @@ func (h *Handler) HandleMessage(ctx context.Context, b *bot.Bot, update *t_model
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
+
+	// Intersep tombol ReplyKeyboard dan state input panel kontrol
+	if h.RoutePanelButton(ctx, b, update) {
+		return
+	}
+
 	chatID, text := update.Message.Chat.ID, strings.TrimSpace(update.Message.Text)
 	h.Sessions.mu.RLock()
 	session := h.Sessions.sessions[chatID]

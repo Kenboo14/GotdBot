@@ -4,6 +4,7 @@ import (
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/config"
 	"assterisk/gateway/applications/controllers"
+	"assterisk/gateway/applications/databases"
 	"assterisk/gateway/applications/middleware"
 	"context"
 	"encoding/json"
@@ -39,9 +40,15 @@ func Run(ctx context.Context) {
 		log.Fatal("Failed Connect Redis:", err)
 	}
 
+	// Data Manager (MongoDB + SQLite Sync)
+	dbManager, err := databases.NewDataManager(ctx_timeout, cfg.Mongo.URI, cfg.Mongo.DBName, cfg.SQLite.Path)
+	if err != nil {
+		log.Printf("⚠️ DataManager warning: %v", err)
+	}
+
 	// Modules
 	modules := []Module{
-		&controllers.Init{},
+		&controllers.Init{DB: dbManager},
 	}
 
 	baseTransport := &http.Transport{

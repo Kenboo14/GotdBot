@@ -140,6 +140,59 @@ func (s *SQLiteClient) initTables() error {
 			PRIMARY KEY (log_bot_id, log_message_id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_log_routes_user ON log_routes(user_id);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_configs (
+			owner_id INTEGER PRIMARY KEY,
+			type TEXT DEFAULT 'Broadcast',
+			delay INTEGER DEFAULT 5,
+			skip_floodwait INTEGER DEFAULT 0,
+			timer TEXT DEFAULT 'Belum diatur',
+			extra INTEGER DEFAULT 0,
+			mode TEXT DEFAULT 'Normal',
+			safemode INTEGER DEFAULT 0,
+			status TEXT DEFAULT 'Berhenti',
+			masa_aktif TEXT DEFAULT 'November 29, 2026 at 14:18',
+			notifikasi TEXT DEFAULT 'Aktif · Kirim ke Saya',
+			email TEXT DEFAULT 'Belum diatur',
+			admin TEXT DEFAULT 'Belum diatur',
+			watermark TEXT DEFAULT '',
+			topic_enabled INTEGER DEFAULT 0,
+			tindakan_terkini TEXT DEFAULT 'Siaran otomatis dimatikan',
+			tindakan_terakhir TEXT DEFAULT '-',
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_lists (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			mongo_id TEXT DEFAULT '',
+			owner_id INTEGER NOT NULL,
+			text TEXT NOT NULL,
+			media_type TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_ub_lists_owner ON userbot_lists(owner_id);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_groups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			mongo_id TEXT DEFAULT '',
+			owner_id INTEGER NOT NULL,
+			target TEXT NOT NULL,
+			title TEXT DEFAULT '',
+			chat_id INTEGER DEFAULT 0,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_ub_groups_owner ON userbot_groups(owner_id);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_topics (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			mongo_id TEXT DEFAULT '',
+			owner_id INTEGER NOT NULL,
+			chat_id INTEGER DEFAULT 0,
+			topic_id INTEGER DEFAULT 0,
+			title TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_ub_topics_owner ON userbot_topics(owner_id);`,
 	}
 
 	for _, query := range queries {

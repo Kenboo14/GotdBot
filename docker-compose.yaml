@@ -23,8 +23,13 @@ services:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
       REDIS_ADDR: redis:6379
       REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
+      MONGO_URI: ${MONGO_URI:-${MONGO_BACKUP_URI:-}}
+      MONGO_DB: ${MONGO_DB:-${MONGO_BACKUP_DB:-gotdbot}}
+      SQLITE_PATH: ${SQLITE_PATH:-/app/data/userbot.db}
       GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-65MiB}
       GOGC: ${GATEWAY_GOGC:-50}
+    volumes:
+      - ubot_data:/app/data
 
     depends_on:
       redis:

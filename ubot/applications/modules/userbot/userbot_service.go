@@ -25,9 +25,11 @@ import (
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/telegram/message/styling"
+	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -232,6 +234,10 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		s.reply(ctx, job.ChatID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")
 		return
 	}
+	if job.Type == "fetch_groups" {
+		go s.fetchAccountGroups(context.Background(), client, job.ChatID, targetID)
+		return
+	}
 	started := time.Now()
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pingCancel()
@@ -240,6 +246,70 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 	s.reply(ctx, job.ChatID, fmt.Sprintf("<code>%.3f ms</code>", float64(time.Since(started).Microseconds())/1000), "ok")
+}
+
+func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+	if client == nil {
+		s.reply(ctx, chatID, "❌ <b>Gagal Mengambil Grup:</b> Sesi userbot belum aktif.", "panel_notice")
+		return
+	}
+
+	imported := 0
+	seen := make(map[int64]bool)
+
+	err := dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
+		entities := tg.Entities{
+			Users:    item.Entities.Users(),
+			Chats:    item.Entities.Chats(),
+			Channels: item.Entities.Channels(),
+		}
+		kind, id, skip := dialogKind(item.Peer, entities, ownerID)
+		if skip || kind != "group" || seen[id] {
+			return nil
+		}
+		seen[id] = true
+		title := dialogName(item.Peer, entities, id)
+
+		// 1. Simpan ke MongoDB (Sumber data utama)
+		var mongoID string
+		if s.db != nil {
+			col := s.db.Collection("userbot_groups")
+			res, err := col.InsertOne(ctx, bson.M{
+				"owner_id":   ownerID,
+				"target":     fmt.Sprintf("%d", id),
+				"title":      title,
+				"chat_id":    id,
+				"created_at": time.Now(),
+			})
+			if err == nil {
+				if oid, ok := res.InsertedID.(primitive.ObjectID); ok {
+					mongoID = oid.Hex()
+				}
+			}
+		}
+
+		// 2. Sinkronkan perubahan ke SQLite lokal
+		if s.sqlite != nil {
+			query := `INSERT INTO userbot_groups (mongo_id, owner_id, target, title, chat_id, created_at) VALUES (?, ?, ?, ?, ?, ?);`
+			_, _ = s.sqlite.DB.ExecContext(ctx, query, mongoID, ownerID, fmt.Sprintf("%d", id), title, id, time.Now())
+		}
+		imported++
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("[fetchAccountGroups] dialogs error: %v", err)
+	}
+
+	// Update userbot_configs
+	if s.sqlite != nil {
+		var gCount int
+		_ = s.sqlite.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM userbot_groups WHERE owner_id = ?;`, ownerID).Scan(&gCount)
+		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE userbot_configs SET extra = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?;`, gCount, ownerID)
+	}
+
+	report := fmt.Sprintf("✅ <b>Sinkronisasi Grup Berhasil!</b>\n\n<blockquote><i>Sebanyak <code>%d</code> grup dari akun Anda telah berhasil diimpor ke list sebar broadcast.</i></blockquote>", imported)
+	s.reply(ctx, chatID, report, "panel_notice")
 }
 
 func (s *Service) Restore(ctx context.Context) {

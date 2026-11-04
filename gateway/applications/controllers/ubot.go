@@ -63,13 +63,21 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 		h.setInstallState(data.ChatID, data.State)
 	}
 	params := &bot.SendMessageParams{ChatID: data.ChatID, Text: data.Text}
+	if strings.Contains(data.Text, "<") && strings.Contains(data.Text, ">") {
+		params.ParseMode = "HTML"
+	}
 	switch data.State {
 	case "waiting_phone":
 		params.ReplyMarkup = installPhoneKeyboard()
 	case "waiting_otp", "waiting_password", "waiting_worker":
 		params.ReplyMarkup = cancelKeyboard()
-	case "installed", "failed":
+	case "installed":
+		params.ReplyMarkup = mainMenuMarkup
+	case "failed":
 		params.ReplyMarkup = cachedRemoveKeyboard
+	case "panel_notice":
+		params.ParseMode = "HTML"
+		params.ReplyMarkup = grupListMenuMarkup
 	}
 	if _, err := b.SendMessage(ctx, params); err != nil {
 		log.Printf("Telegram send failed: %v", err)
