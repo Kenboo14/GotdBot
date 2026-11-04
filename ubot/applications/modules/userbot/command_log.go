@@ -540,22 +540,34 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		dbCtx, dbCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer dbCancel()
 
-		err := s.sqlite.SaveLogRoute(dbCtx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
+		// Bot API message ID ≠ MTProto message ID di private chat.
+		// Bot API mengembalikan ID dari perspektif bot, tapi userbot (MTProto)
+		// melihat pesan yang sama dengan ID berbeda. Kita perlu ID MTProto
+		// karena replyToMsgID saat user membalas menggunakan ID MTProto.
+		routeLogMsgID := s.resolveLogMTProtoMsgID(ctx, client)
+		if routeLogMsgID == 0 {
+			routeLogMsgID = logMsgID // fallback ke Bot API ID
+			log.Printf("[LogBot] Tidak bisa resolve MTProto msg ID, menggunakan Bot API ID: %d", logMsgID)
+		} else {
+			log.Printf("[LogBot] MTProto msg ID: %d (Bot API ID: %d)", routeLogMsgID, logMsgID)
+		}
+
+		err := s.sqlite.SaveLogRoute(dbCtx, logBotID, routeLogMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 		if err != nil {
 			log.Printf("[LogBot] Gagal simpan log route di SQLite: %v", err)
 		} else {
-			log.Printf("[LogBot] Log route tersimpan di SQLite: logMsgID=%d -> chatID=%d msgID=%d", logMsgID, sourceChatID, msg.ID)
+			log.Printf("[LogBot] Log route tersimpan di SQLite: logMsgID=%d -> chatID=%d msgID=%d", routeLogMsgID, sourceChatID, msg.ID)
 		}
 
 		// Simpan rute ke MongoDB juga langsung agar rute permanen
-		s.saveLogRouteMongo(dbCtx, logBotID, logMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
+		s.saveLogRouteMongo(dbCtx, logBotID, routeLogMsgID, ownerID, sourceChatID, msg.ID, peerType, peerAccessHash)
 
 		// Backup media ke MongoDB (async)
 		if mInfo != nil && (fileID != "" || mInfo.mediaRawID != 0) {
 			go func() {
 				bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				s.logSaveMediaMongo(bgCtx, ownerID, logBotID, logMsgID, sourceChatID, msg.ID, mInfo, fileID, msg.Message)
+				s.logSaveMediaMongo(bgCtx, ownerID, logBotID, routeLogMsgID, sourceChatID, msg.ID, mInfo, fileID, msg.Message)
 			}()
 		}
 	}
@@ -916,6 +928,39 @@ func (s *Service) resolveLogBotInputUser(ctx context.Context, client *telegram.C
 		return nil, fmt.Errorf("peer bukan User")
 	}
 	return inputUser, nil
+}
+
+// resolveLogMTProtoMsgID mengambil MTProto message ID dari pesan terbaru
+// yang dikirim oleh LogBot ke chat pribadi userbot owner.
+// Bot API message ID ≠ MTProto message ID di private chat, jadi kita harus
+// query via MessagesGetHistory untuk mendapatkan ID yang benar dari sisi userbot.
+func (s *Service) resolveLogMTProtoMsgID(ctx context.Context, client *telegram.Client) int {
+	logBotPeer, err := s.resolveLogBotInputUser(ctx, client)
+	if err != nil || logBotPeer == nil {
+		return 0
+	}
+	history, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:  logBotPeer,
+		Limit: 5,
+	})
+	if err != nil {
+		log.Printf("[LogBot] MessagesGetHistory gagal: %v", err)
+		return 0
+	}
+	var msgs []tg.MessageClass
+	switch h := history.(type) {
+	case *tg.MessagesMessages:
+		msgs = h.Messages
+	case *tg.MessagesMessagesSlice:
+		msgs = h.Messages
+	}
+	// Cari pesan terbaru yang masuk dari LogBot (bukan outgoing dari userbot)
+	for _, m := range msgs {
+		if tgMsg, ok := m.(*tg.Message); ok && !tgMsg.Out {
+			return tgMsg.ID
+		}
+	}
+	return 0
 }
 
 // forwardMediaToLogBot mem-forward pesan media ke LogBot via MTProto (zero download & zero upload)
