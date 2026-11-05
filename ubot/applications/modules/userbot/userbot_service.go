@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
@@ -51,6 +52,35 @@ func init() {
 	}
 }
 
+type AccountSessionState string
+
+const (
+	StateConnecting     AccountSessionState = "CONNECTING"
+	StateConnected      AccountSessionState = "CONNECTED"
+	StateReconnecting   AccountSessionState = "RECONNECTING"
+	StateSuspected      AccountSessionState = "SUSPECTED"
+	StateVerifying      AccountSessionState = "VERIFYING"
+	StateSessionInvalid AccountSessionState = "SESSION_INVALID"
+	StateStopped        AccountSessionState = "STOPPED"
+)
+
+type rpcErrorMiddleware struct {
+	chatID  int64
+	genID   uint64
+	service *Service
+}
+
+func (m *rpcErrorMiddleware) Handle(next tg.Invoker) telegram.InvokeFunc {
+	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+		err := next.Invoke(ctx, input, output)
+		if err != nil && isSessionRevokedError(err) {
+			// Menjalankan cleanup secara asynchronous agar tidak memblokir jalur Invoke RPC
+			go m.service.handleSessionRevoked(m.chatID, m.genID, err)
+		}
+		return err
+	}
+}
+
 type Service struct {
 	root             context.Context
 	sqlite           *databases.SQLiteClient
@@ -80,6 +110,7 @@ type Service struct {
 	accountCtxs      map[int64]context.Context    // chatID -> clientCtx (account lifecycle context)
 	accountGens      map[int64]uint64             // chatID -> token kepemilikan generasi lifecycle
 	nextGen          uint64                       // counter generasi unik untuk lifecycle
+	accountStates    map[int64]AccountSessionState // chatID -> status lifecycle event-driven
 	lastActive       map[int64]time.Time          // chatID -> waktu aktivitas terakhir
 	lastUpdate       map[int64]time.Time          // chatID -> waktu terakhir incoming update diterima
 	lastVerified     map[int64]time.Time          // chatID -> waktu terakhir verifikasi pesan 'Check'
@@ -136,6 +167,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		activeCancels:    make(map[int64]context.CancelFunc),
 		accountCtxs:      make(map[int64]context.Context),
 		accountGens:      make(map[int64]uint64),
+		accountStates:    make(map[int64]AccountSessionState),
 		lastActive:       make(map[int64]time.Time),
 		lastUpdate:       make(map[int64]time.Time),
 		lastVerified:     make(map[int64]time.Time),
@@ -773,6 +805,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	genID := s.nextGen
 	s.connecting[chatID] = genID
 	s.accountGens[chatID] = genID
+	s.accountStates[chatID] = StateConnecting
 	s.lastActive[chatID] = time.Now()
 	clientCtx, clientCancel := context.WithCancel(s.root)
 	s.activeCancels[chatID] = clientCancel
@@ -844,15 +877,40 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{
 			SessionStorage: store,
 			UpdateHandler:  updateHandler,
+			Middlewares: []telegram.Middleware{
+				&rpcErrorMiddleware{chatID: chatID, genID: genID, service: s},
+			},
 			OnDead: func(err error) {
 				if isSessionRevokedError(err) {
-					s.handleSessionRevoked(chatID, ownerID, client, err)
+					go s.handleSessionRevoked(chatID, genID, err)
 				}
 			},
 			OnConnectionState: func(state telegram.ConnectionState) {
-				if state == telegram.ConnectionStateDisconnected {
-					s.triggerImmediateVerification(chatID)
+				s.mu.Lock()
+				// Ownership check: abaikan event jika generasi client sudah tidak cocok
+				if s.accountGens[chatID] != genID {
+					s.mu.Unlock()
+					return
 				}
+				switch state {
+				case telegram.ConnectionStateReady:
+					wasSuspected := (s.accountStates[chatID] == StateSuspected || s.accountStates[chatID] == StateReconnecting)
+					s.accountStates[chatID] = StateConnected
+					s.mu.Unlock()
+					// Jika sebelumnya terputus (suspected), lakukan verifikasi saat koneksi sudah READY
+					if wasSuspected {
+						s.triggerImmediateVerification(chatID)
+					}
+					return
+				case telegram.ConnectionStateDisconnected:
+					// Jangan langsung kirim Check saat disconnect; tandai SUSPECTED
+					s.accountStates[chatID] = StateSuspected
+				case telegram.ConnectionStateConnecting:
+					if s.accountStates[chatID] != StateSuspected {
+						s.accountStates[chatID] = StateConnecting
+					}
+				}
+				s.mu.Unlock()
 			},
 		})
 		s.mu.Lock()
@@ -876,6 +934,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			if s.accountGens[chatID] == genID {
 				s.owners[chatID] = self.ID
 				s.clientOwners[client] = self.ID
+				s.accountStates[chatID] = StateConnected
 			}
 			s.mu.Unlock()
 			if store != nil {
@@ -897,7 +956,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("[Userbot chatID=%d] MTProto selesai/gagal: %v", chatID, err)
 			if isSessionRevokedError(err) {
-				s.handleSessionRevoked(chatID, ownerID, client, err)
+				go s.handleSessionRevoked(chatID, genID, err)
 				return
 			}
 
@@ -922,6 +981,29 @@ func isSessionRevokedError(err error) bool {
 		return false
 	}
 	errStr := strings.ToUpper(err.Error())
+
+	// Fast exclusion: jika network/I/O error atau timeout, JANGAN PERNAH dianggap session revoked
+	if strings.Contains(errStr, "TIMEOUT") ||
+		strings.Contains(errStr, "DEADLINE EXCEEDED") ||
+		strings.Contains(errStr, "RESET BY PEER") ||
+		strings.Contains(errStr, "BROKEN PIPE") ||
+		strings.Contains(errStr, "EOF") ||
+		strings.Contains(errStr, "NETWORK IS UNREACHABLE") ||
+		strings.Contains(errStr, "CONNECTION REFUSED") ||
+		strings.Contains(errStr, "NO SUCH HOST") {
+		return false
+	}
+
+	// Non-auth Telegram error: JANGAN dianggap session revoked
+	if strings.Contains(errStr, "FLOOD_WAIT") ||
+		strings.Contains(errStr, "CHAT_WRITE_FORBIDDEN") ||
+		strings.Contains(errStr, "PEER_ID_INVALID") ||
+		strings.Contains(errStr, "CHANNEL_PRIVATE") ||
+		strings.Contains(errStr, "CHAT_ID_INVALID") {
+		return false
+	}
+
+	// Klasifikasi error autentikasi permanen resmi Telegram MTProto
 	return strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") ||
 		strings.Contains(errStr, "SESSION_REVOKED") ||
 		strings.Contains(errStr, "SESSION_EXPIRED") ||
@@ -930,10 +1012,21 @@ func isSessionRevokedError(err error) bool {
 		strings.Contains(errStr, "AUTH_KEY_DUPLICATED")
 }
 
-func (s *Service) handleSessionRevoked(chatID, ownerID int64, client *telegram.Client, reason error) {
-	log.Printf("⚠️ [Sesi Terlepas Realtime] chatID=%d ownerID=%d: %v", chatID, ownerID, reason)
-
+func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error) {
 	s.mu.Lock()
+	currentGen := s.accountGens[chatID]
+	// Poin 4 & 5: Cleanup hanya boleh dilakukan SEKALI per account generation.
+	// Jika generasi tidak cocok atau sudah pernah dibersihkan (currentGen == 0), abaikan seketika.
+	if currentGen == 0 || (genID != 0 && currentGen != genID) {
+		s.mu.Unlock()
+		return
+	}
+	// Tandai generasi sudah di-cleanup (idempotent guard)
+	delete(s.accountGens, chatID)
+	s.accountStates[chatID] = StateSessionInvalid
+
+	client := s.active[chatID]
+	ownerID := s.owners[chatID]
 	delete(s.active, chatID)
 	delete(s.owners, chatID)
 	delete(s.lastUpdate, chatID)
@@ -941,21 +1034,31 @@ func (s *Service) handleSessionRevoked(chatID, ownerID int64, client *telegram.C
 	delete(s.verifying, chatID)
 	if client != nil {
 		delete(s.clientOwners, client)
+		delete(s.senderCache, client)
 	}
-	if cancel, ok := s.activeCancels[chatID]; ok && cancel != nil {
-		cancel()
-		delete(s.activeCancels, chatID)
-	}
+	cancel := s.activeCancels[chatID]
+	delete(s.activeCancels, chatID)
+	delete(s.accountCtxs, chatID)
 	s.mu.Unlock()
 
-	// Bersihkan sesi HANYA untuk akun ini (chatID).
-	// JANGAN hapus berdasarkan ownerID agar akun lain milik owner yang sama TIDAK ikut terhapus!
+	log.Printf("⚠️ [Sesi Terlepas Realtime] chatID=%d ownerID=%d gen=%d: %v", chatID, ownerID, genID, reason)
+
+	// Batalkan context client di luar lock
+	if cancel != nil {
+		cancel()
+	}
+
+	// Bersihkan sesi HANYA untuk akun ini (chatID), di luar lock agar bebas deadlock
 	if s.sqlite != nil {
 		_ = s.sqlite.DeleteSession(context.Background(), chatID)
 	}
 	if s.db != nil {
 		_, _ = s.db.Collection("userbot_sessions").DeleteOne(context.Background(), bson.M{"_id": chatID})
 	}
+
+	s.mu.Lock()
+	s.accountStates[chatID] = StateStopped
+	s.mu.Unlock()
 
 	// Kirim pesan notifikasi instan ke bot gateway
 	s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas silahkan pasang kembali /create</i></blockquote>", "session_revoked")
@@ -974,10 +1077,18 @@ func (s *Service) triggerImmediateVerification(chatID int64) {
 	s.mu.Lock()
 	genID, ok := s.accountGens[chatID]
 	isVerif := s.verifying[chatID]
-	s.mu.Unlock()
-	if ok && !isVerif {
-		go s.verifyAccountSession(s.root, chatID, genID)
+	lastVer := s.lastVerified[chatID]
+	client := s.active[chatID]
+
+	// Poin 8: Pastikan pengiriman Check hanya terjadi saat diperlukan dan tidak menyebabkan flood
+	if !ok || client == nil || isVerif || (!lastVer.IsZero() && time.Since(lastVer) < 30*time.Second) {
+		s.mu.Unlock()
+		return
 	}
+	s.accountStates[chatID] = StateSuspected
+	s.mu.Unlock()
+
+	go s.verifyAccountSession(s.root, chatID, genID)
 }
 
 // verifyAccountSession memverifikasi sesi menggunakan pesan 'Check' ke @AiotdCaches reply-to 7073 (SESSION_CACHE).
@@ -996,12 +1107,12 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 		return
 	}
 	client := s.active[chatID]
-	ownerID := s.owners[chatID]
 	if s.verifying[chatID] || client == nil {
 		s.mu.Unlock()
 		return
 	}
 	s.verifying[chatID] = true
+	s.accountStates[chatID] = StateVerifying
 	s.mu.Unlock()
 
 	defer func() {
@@ -1015,7 +1126,7 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 	if err != nil {
 		log.Printf("[verifyAccount %d] Gagal resolve cache: %v (bukan auth error, sesi dipertahankan)", chatID, err)
 		if isSessionRevokedError(err) {
-			s.handleSessionRevoked(chatID, ownerID, client, err)
+			go s.handleSessionRevoked(chatID, genID, err)
 		}
 		return
 	}
@@ -1042,7 +1153,7 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 		// B. Error autentikasi permanen
 		if isSessionRevokedError(err) {
 			log.Printf("⚠️ [verifyAccount %d] Sesi terbukti revoked via verifikasi 'Check': %v", chatID, err)
-			s.handleSessionRevoked(chatID, ownerID, client, err)
+			go s.handleSessionRevoked(chatID, genID, err)
 			return
 		}
 
@@ -1050,7 +1161,10 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 		// JANGAN menganggap sesi revoked! JANGAN hapus session string!
 		log.Printf("ℹ️ [verifyAccount %d] Error non-auth saat verifikasi 'Check': %v (sesi dipertahankan)", chatID, err)
 		s.mu.Lock()
-		s.lastVerified[chatID] = time.Now()
+		if s.accountGens[chatID] == genID {
+			s.lastVerified[chatID] = time.Now()
+			s.accountStates[chatID] = StateConnected
+		}
 		s.mu.Unlock()
 		return
 	}
@@ -1058,9 +1172,12 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 	// A. Pesan berhasil dikirim: Sesi valid & aktif!
 	now := time.Now()
 	s.mu.Lock()
-	s.lastVerified[chatID] = now
-	s.lastUpdate[chatID] = now
-	s.lastActive[chatID] = now
+	if s.accountGens[chatID] == genID {
+		s.accountStates[chatID] = StateConnected
+		s.lastVerified[chatID] = now
+		s.lastUpdate[chatID] = now
+		s.lastActive[chatID] = now
+	}
 	s.mu.Unlock()
 	log.Printf("✅ [verifyAccount %d] Verifikasi 'Check' sukses! Akun aktif & terautentikasi penuh.", chatID)
 }
