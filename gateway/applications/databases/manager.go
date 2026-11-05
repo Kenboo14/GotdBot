@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -161,15 +163,35 @@ func (m *DataManager) ClearLists(ctx context.Context, ownerID int64) error {
 // AddGroup: Menambahkan target grup ke array groups di jaseb_configurasi
 func (m *DataManager) AddGroup(ctx context.Context, ownerID int64, target, title string, chatID int64) error {
 	cfg := m.GetUserConfig(ctx, ownerID)
+
+	cleanTarget := strings.TrimSpace(target)
+	cleanChatID := chatID
+	peerType := "channel"
+
+	if strings.HasPrefix(cleanTarget, "-100") {
+		peerType = "channel"
+		if id, err := strconv.ParseInt(strings.TrimPrefix(cleanTarget, "-100"), 10, 64); err == nil && id > 0 {
+			cleanChatID = id
+		}
+	} else if strings.HasPrefix(cleanTarget, "-") {
+		peerType = "chat"
+		if id, err := strconv.ParseInt(strings.TrimPrefix(cleanTarget, "-"), 10, 64); err == nil && id > 0 {
+			cleanChatID = id
+		}
+	} else if cleanChatID > 0 && cleanChatID < 1000000000 {
+		peerType = "chat"
+	}
+
 	for _, g := range cfg.Groups {
-		if g.Target == target || (chatID != 0 && g.ChatID == chatID) {
+		if g.Target == cleanTarget || (cleanChatID != 0 && g.ChatID == cleanChatID) {
 			return nil // sudah ada
 		}
 	}
 	cfg.Groups = append(cfg.Groups, GroupEntry{
-		Target: target,
-		Title:  title,
-		ChatID: chatID,
+		Target:   cleanTarget,
+		Title:    title,
+		ChatID:   cleanChatID,
+		PeerType: peerType,
 	})
 	return m.SaveUserConfig(ctx, cfg)
 }

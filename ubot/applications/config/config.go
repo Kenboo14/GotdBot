@@ -48,6 +48,7 @@ type Config struct {
 		NotesCache     int    `yaml:"notes_cache"`
 		TeksCache      int    `yaml:"teks_cache"`
 		WatermarkCache int    `yaml:"watermark_cache"`
+		SessionCache   int    `yaml:"session_cache"`
 	} `yaml:"cache"`
 }
 
@@ -158,5 +159,12 @@ func applyEnv(cfg *Config) {
 	}
 	if cfg.Cache.WatermarkCache <= 0 {
 		cfg.Cache.WatermarkCache = 6847
+	}
+
+	if value := os.Getenv("SESSION_CACHE"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Cache.SessionCache)
+	}
+	if cfg.Cache.SessionCache <= 0 {
+		cfg.Cache.SessionCache = 7073
 	}
 }

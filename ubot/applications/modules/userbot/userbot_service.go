@@ -81,6 +81,10 @@ type Service struct {
 	accountGens      map[int64]uint64             // chatID -> token kepemilikan generasi lifecycle
 	nextGen          uint64                       // counter generasi unik untuk lifecycle
 	lastActive       map[int64]time.Time          // chatID -> waktu aktivitas terakhir
+	lastUpdate       map[int64]time.Time          // chatID -> waktu terakhir incoming update diterima
+	lastVerified     map[int64]time.Time          // chatID -> waktu terakhir verifikasi pesan 'Check'
+	verifying        map[int64]bool               // chatID -> guard anti-double-verification
+	verifSem         chan struct{}                // semaphore pembatas concurrent Check ke AiotdCaches (max 2)
 	owners           map[int64]int64              // chatID -> ownerID
 	clientOwners     map[*telegram.Client]int64   // client -> ownerID
 	senderCache      map[*telegram.Client]*message.Sender // cached message.Sender per client
@@ -133,6 +137,10 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		accountCtxs:      make(map[int64]context.Context),
 		accountGens:      make(map[int64]uint64),
 		lastActive:       make(map[int64]time.Time),
+		lastUpdate:       make(map[int64]time.Time),
+		lastVerified:     make(map[int64]time.Time),
+		verifying:        make(map[int64]bool),
+		verifSem:         make(chan struct{}, 2), // hemat resource, max 2 concurrent Check ke AiotdCaches
 		owners:           make(map[int64]int64),
 		clientOwners:     make(map[*telegram.Client]int64),
 		senderCache:      make(map[*telegram.Client]*message.Sender),
@@ -296,6 +304,8 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 			Chats:    item.Entities.Chats(),
 			Channels: item.Entities.Channels(),
 		}
+		s.cacheEntities(entities)
+
 		kind, id, skip := dialogKind(item.Peer, entities, ownerID)
 		if skip || kind != "group" || seen[id] {
 			return nil
@@ -303,10 +313,32 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 		seen[id] = true
 		title := dialogName(item.Peer, entities, id)
 
+		var accessHash int64
+		peerType := "channel"
+
+		switch p := item.Peer.(type) {
+		case *tg.InputPeerChannel:
+			accessHash = p.AccessHash
+			peerType = "channel"
+			s.channelAccessHashes.Store(p.ChannelID, p.AccessHash)
+		case *tg.InputPeerChat:
+			peerType = "chat"
+		}
+
+		if ch, ok := entities.Channels[id]; ok && ch != nil {
+			if ch.AccessHash != 0 {
+				accessHash = ch.AccessHash
+			}
+			peerType = "channel"
+			s.channelAccessHashes.Store(id, accessHash)
+		}
+
 		allGroups = append(allGroups, jasebGroupDoc{
-			Target: fmt.Sprintf("%d", id),
-			Title:  title,
-			ChatID: id,
+			Target:     fmt.Sprintf("%d", id),
+			Title:      title,
+			ChatID:     id,
+			AccessHash: accessHash,
+			PeerType:   peerType,
 		})
 		return nil
 	})
@@ -482,6 +514,8 @@ func (s *Service) Restore(ctx context.Context) {
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
 	go s.startIdleReaper(ctx)
+	// Jalankan session monitor worker terpusat (Incoming Update Monitoring & 2-stage 'Check' verification)
+	go s.startSessionMonitorWorker(ctx)
 }
 
 func (s *Service) syncAllNotesToRedis(ctx context.Context) {
@@ -835,41 +869,236 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			}
 			// Pre-warm inline bot resolution so first inline command is fast (staggered & bound to clientCtx).
 			s.preWarmInlineBot(clientCtx, client)
+
+			now := time.Now()
+			s.mu.Lock()
+			s.lastUpdate[chatID] = now
+			s.lastVerified[chatID] = now
+			s.mu.Unlock()
+
+			// Menunggu hingga context client dihentikan atau koneksi terputus dari MTProto
 			<-ctx.Done()
 			return ctx.Err()
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("[Userbot chatID=%d] MTProto selesai/gagal: %v", chatID, err)
-			errStr := strings.ToUpper(err.Error())
-			if strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") ||
-				strings.Contains(errStr, "SESSION_REVOKED") ||
-				strings.Contains(errStr, "SESSION_EXPIRED") ||
-				strings.Contains(errStr, "USER_DEACTIVATED") ||
-				strings.Contains(errStr, "AUTH_KEY_PERM_EMPTY") {
-				s.mu.Lock()
-				delete(s.active, chatID)
-				delete(s.active, ownerID)
-				delete(s.owners, chatID)
-				delete(s.clientOwners, client)
-				s.mu.Unlock()
+			if isSessionRevokedError(err) {
+				s.handleSessionRevoked(chatID, ownerID, client, err)
+				return
+			}
 
-				if s.sqlite != nil {
-					_ = s.sqlite.DeleteSession(context.Background(), chatID)
-				}
-				if s.db != nil {
-					_, _ = s.db.Collection("userbot_sessions").DeleteMany(context.Background(), bson.M{
-						"$or": []bson.M{
-							{"_id": chatID},
-							{"_id": ownerID},
-							{"owner_id": ownerID},
-							{"account_id": ownerID},
-						},
-					})
-				}
-				s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas silahkan pasang kembali /create</i></blockquote>", "session_revoked")
+			// Jika koneksi terputus karena gangguan sementara (jaringan/timeout):
+			// JANGAN hapus sesi! Jadwalkan reconnect otomatis agar akun tetap online 24/7.
+			s.mu.Lock()
+			isStillCurrent := (s.accountGens[chatID] == genID)
+			delete(s.active, chatID)
+			s.mu.Unlock()
+
+			if isStillCurrent && clientCtx.Err() == nil {
+				log.Printf("[Userbot chatID=%d] Koneksi MTProto terputus sementara (%v). Menjadwalkan reconnect otomatis...", chatID, err)
+				time.Sleep(3 * time.Second)
+				s.activate(chatID, ownerID)
 			}
 		}
 	}()
+}
+
+func isSessionRevokedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToUpper(err.Error())
+	return strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") ||
+		strings.Contains(errStr, "SESSION_REVOKED") ||
+		strings.Contains(errStr, "SESSION_EXPIRED") ||
+		strings.Contains(errStr, "USER_DEACTIVATED") ||
+		strings.Contains(errStr, "AUTH_KEY_PERM_EMPTY") ||
+		strings.Contains(errStr, "AUTH_KEY_DUPLICATED")
+}
+
+func (s *Service) handleSessionRevoked(chatID, ownerID int64, client *telegram.Client, reason error) {
+	log.Printf("⚠️ [Sesi Terlepas Realtime] chatID=%d ownerID=%d: %v", chatID, ownerID, reason)
+
+	s.mu.Lock()
+	delete(s.active, chatID)
+	delete(s.owners, chatID)
+	delete(s.lastUpdate, chatID)
+	delete(s.lastVerified, chatID)
+	delete(s.verifying, chatID)
+	if client != nil {
+		delete(s.clientOwners, client)
+	}
+	if cancel, ok := s.activeCancels[chatID]; ok && cancel != nil {
+		cancel()
+		delete(s.activeCancels, chatID)
+	}
+	s.mu.Unlock()
+
+	// Bersihkan sesi HANYA untuk akun ini (chatID).
+	// JANGAN hapus berdasarkan ownerID agar akun lain milik owner yang sama TIDAK ikut terhapus!
+	if s.sqlite != nil {
+		_ = s.sqlite.DeleteSession(context.Background(), chatID)
+	}
+	if s.db != nil {
+		_, _ = s.db.Collection("userbot_sessions").DeleteOne(context.Background(), bson.M{"_id": chatID})
+	}
+
+	// Kirim pesan notifikasi instan ke bot gateway
+	s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas silahkan pasang kembali /create</i></blockquote>", "session_revoked")
+}
+
+func (s *Service) recordIncomingUpdate(chatID int64) {
+	now := time.Now()
+	s.mu.Lock()
+	s.lastUpdate[chatID] = now
+	s.lastActive[chatID] = now
+	s.mu.Unlock()
+}
+
+// startSessionMonitorWorker menjalankan SATU goroutine terpusat untuk memantau status incoming update 1.000 akun.
+func (s *Service) startSessionMonitorWorker(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	// Jika akun tidak menerima incoming update apapun selama > 30 menit, tandai sebagai suspected_inactive
+	inactiveThreshold := 30 * time.Minute
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.scanSuspectedInactiveAccounts(ctx, inactiveThreshold)
+		}
+	}
+}
+
+// scanSuspectedInactiveAccounts mendeteksi akun yang lama tidak ada incoming update dan menjadwalkan verifikasi 'Check' bertahap.
+func (s *Service) scanSuspectedInactiveAccounts(ctx context.Context, inactiveThreshold time.Duration) {
+	type targetCandidate struct {
+		chatID int64
+		genID  uint64
+	}
+
+	var candidates []targetCandidate
+	now := time.Now()
+
+	s.mu.Lock()
+	for cid, client := range s.active {
+		if client == nil || s.verifying[cid] {
+			continue
+		}
+		lastUp := s.lastUpdate[cid]
+		lastVer := s.lastVerified[cid]
+
+		// Jika akun belum pernah mencatat update atau sudah > inactiveThreshold
+		// DAN belum pernah diverifikasi atau verifikasi terakhir sudah > inactiveThreshold
+		if (lastUp.IsZero() || now.Sub(lastUp) > inactiveThreshold) &&
+			(lastVer.IsZero() || now.Sub(lastVer) > inactiveThreshold) {
+			candidates = append(candidates, targetCandidate{
+				chatID: cid,
+				genID:  s.accountGens[cid],
+			})
+		}
+	}
+	s.mu.Unlock()
+
+	// Lakukan verifikasi secara berurutan dan staggered (tidak serentak) agar hemat resource
+	for _, cand := range candidates {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			s.verifyAccountSession(ctx, cand.chatID, cand.genID)
+			// Berikan jeda 2 detik antar verifikasi agar tidak membanjiri @AiotdCaches
+			time.Sleep(2 * time.Second)
+		}
+	}
+}
+
+// verifyAccountSession memverifikasi sesi menggunakan pesan 'Check' ke @AiotdCaches reply-to 7073 (SESSION_CACHE).
+func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID uint64) {
+	// Guard semaphore: batasi maksimal 2 verifikasi paralel di seluruh aplikasi
+	select {
+	case s.verifSem <- struct{}{}:
+		defer func() { <-s.verifSem }()
+	case <-ctx.Done():
+		return
+	}
+
+	s.mu.Lock()
+	if s.accountGens[chatID] != genID {
+		s.mu.Unlock()
+		return
+	}
+	client := s.active[chatID]
+	ownerID := s.owners[chatID]
+	if s.verifying[chatID] || client == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.verifying[chatID] = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.verifying, chatID)
+		s.mu.Unlock()
+	}()
+
+	// 1. Resolve peer @AiotdCaches
+	cachePeer, err := s.resolveCachePeer(ctx, client)
+	if err != nil {
+		log.Printf("[verifyAccount %d] Gagal resolve cache: %v (bukan auth error, sesi dipertahankan)", chatID, err)
+		if isSessionRevokedError(err) {
+			s.handleSessionRevoked(chatID, ownerID, client, err)
+		}
+		return
+	}
+
+	// 2. Kirim pesan Check dengan reply ke message ID 7073 (SESSION_CACHE)
+	topicID := getSessionCacheTopicID()
+	replyTo := &tg.InputReplyToMessage{
+		ReplyToMsgID: topicID,
+		TopMsgID:     topicID,
+	}
+	randomID := time.Now().UnixNano()
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     cachePeer,
+		ReplyTo:  replyTo,
+		Message:  "Check",
+		RandomID: randomID,
+	}
+
+	sendCtx, sendCancel := context.WithTimeout(ctx, 10*time.Second)
+	_, err = client.API().MessagesSendMessage(sendCtx, req)
+	sendCancel()
+
+	if err != nil {
+		// B. Error autentikasi permanen
+		if isSessionRevokedError(err) {
+			log.Printf("⚠️ [verifyAccount %d] Sesi terbukti revoked via verifikasi 'Check': %v", chatID, err)
+			s.handleSessionRevoked(chatID, ownerID, client, err)
+			return
+		}
+
+		// C. Error non-autentikasi (FLOOD_WAIT, CHAT_WRITE_FORBIDDEN, PEER_ID_INVALID, network, timeout)
+		// JANGAN menganggap sesi revoked! JANGAN hapus session string!
+		log.Printf("ℹ️ [verifyAccount %d] Error non-auth saat verifikasi 'Check': %v (sesi dipertahankan)", chatID, err)
+		s.mu.Lock()
+		s.lastVerified[chatID] = time.Now()
+		s.mu.Unlock()
+		return
+	}
+
+	// A. Pesan berhasil dikirim: Sesi valid & aktif!
+	now := time.Now()
+	s.mu.Lock()
+	s.lastVerified[chatID] = now
+	s.lastUpdate[chatID] = now
+	s.lastActive[chatID] = now
+	s.mu.Unlock()
+	log.Printf("✅ [verifyAccount %d] Verifikasi 'Check' sukses! Akun aktif & terautentikasi penuh.", chatID)
 }
 
 func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
@@ -1241,6 +1470,9 @@ type userbotUpdateHandler struct {
 }
 
 func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) error {
+	// Catat incoming update realtime untuk akun ini (zero-overhead)
+	h.s.recordIncomingUpdate(h.chatID)
+
 	switch upd := u.(type) {
 	case *tg.UpdateShortMessage:
 		h.s.mu.Lock()

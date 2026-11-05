@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
+	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"go.mongodb.org/mongo-driver/bson"
@@ -23,9 +25,11 @@ type panelBroadcastJob struct {
 }
 
 type jasebGroupDoc struct {
-	Target string `bson:"target" json:"target"`
-	Title  string `bson:"title" json:"title"`
-	ChatID int64  `bson:"chat_id" json:"chat_id"`
+	Target     string `bson:"target" json:"target"`
+	Title      string `bson:"title" json:"title"`
+	ChatID     int64  `bson:"chat_id" json:"chat_id"`
+	AccessHash int64  `bson:"access_hash" json:"access_hash"`
+	PeerType   string `bson:"peer_type" json:"peer_type"`
 }
 
 type jasebTopicDoc struct {
@@ -295,6 +299,9 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 	s.reply(ctx, chatID, fmt.Sprintf("🚀 <b>Siaran Otomatis Dimulai!</b>\n\n<blockquote><i>Mengirim materi promosi ke <code>%d</code> grup target dengan jeda <code>%d detik</code> per grup.</i></blockquote>", len(cfg.Groups), delaySec), "panel_notice")
 	s.setPanelBroadcastStatus(ctx, ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(cfg.Groups)))
 
+	// Pre-warm seluruh dialog channel/supergroup access hash agar kirim pesan tidak CHAT_ID_INVALID
+	s.preWarmDialogAccessHashes(ctx, client, ownerID)
+
 	sent := 0
 	failed := 0
 
@@ -307,7 +314,7 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 		default:
 		}
 
-		targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target)
+		targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target, grp.AccessHash, grp.PeerType)
 		if err != nil {
 			log.Printf("[panelBroadcast] resolve target %s error: %v", grp.Target, err)
 			failed++
@@ -396,20 +403,89 @@ func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Cl
 	s.reply(ctx, chatID, fmt.Sprintf("✅ <b>Uji Coba Berhasil!</b>\n\n<blockquote><i>Materi promosi (Cache ID: <code>#%d</code>) telah berhasil dikirim ke Saved Messages akun Telegram Anda.</i></blockquote>", msgID), "panel_notice")
 }
 
-func (s *Service) resolveTargetPeer(ctx context.Context, client *telegram.Client, chatID int64, target string) (tg.InputPeerClass, error) {
-	if hashVal, ok := s.channelAccessHashes.Load(chatID); ok {
-		if hash, ok := hashVal.(int64); ok && hash != 0 {
-			return &tg.InputPeerChannel{ChannelID: chatID, AccessHash: hash}, nil
+func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *telegram.Client, ownerID int64) {
+	_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
+		s.cacheEntities(tg.Entities{
+			Users:    item.Entities.Users(),
+			Chats:    item.Entities.Chats(),
+			Channels: item.Entities.Channels(),
+		})
+		switch p := item.Peer.(type) {
+		case *tg.InputPeerChannel:
+			if p.ChannelID != 0 && p.AccessHash != 0 {
+				s.channelAccessHashes.Store(p.ChannelID, p.AccessHash)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *Service) resolveTargetPeer(ctx context.Context, client *telegram.Client, chatID int64, target string, accessHash int64, peerType string) (tg.InputPeerClass, error) {
+	cleanID := chatID
+	if cleanID < 0 {
+		cleanID = -cleanID
+	}
+	strID := fmt.Sprintf("%d", chatID)
+	if strings.HasPrefix(strID, "-100") {
+		if parsed, err := strconv.ParseInt(strings.TrimPrefix(strID, "-100"), 10, 64); err == nil {
+			cleanID = parsed
+		}
+	} else if strings.HasPrefix(target, "-100") {
+		if parsed, err := strconv.ParseInt(strings.TrimPrefix(target, "-100"), 10, 64); err == nil {
+			cleanID = parsed
+		}
+	} else if strings.HasPrefix(target, "-") {
+		if parsed, err := strconv.ParseInt(strings.TrimPrefix(target, "-"), 10, 64); err == nil {
+			cleanID = parsed
 		}
 	}
+
+	// 1. Cek dari channelAccessHashes yang telah dicache
+	if hashVal, ok := s.channelAccessHashes.Load(cleanID); ok {
+		if hash, ok := hashVal.(int64); ok && hash != 0 {
+			return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
+		}
+	}
+
+	// 2. Jika ada accessHash dari database record
+	if accessHash != 0 {
+		s.channelAccessHashes.Store(cleanID, accessHash)
+		return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: accessHash}, nil
+	}
+
+	// 3. Jika target adalah username @username
 	if strings.HasPrefix(target, "@") {
 		resolved, err := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: strings.TrimPrefix(target, "@")})
 		if err == nil {
-			return peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
+			p, err := peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
+			if err == nil {
+				if ch, ok := p.(*tg.InputPeerChannel); ok {
+					s.channelAccessHashes.Store(ch.ChannelID, ch.AccessHash)
+				}
+				return p, nil
+			}
 		}
 	}
-	if chatID != 0 {
-		return &tg.InputPeerChat{ChatID: chatID}, nil
+
+	// 4. Jika peerType adalah channel/supergroup atau cleanID besar (supergroup ID biasanya > 1.000.000)
+	if peerType == "channel" || cleanID > 1000000 {
+		_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
+			if ch, ok := item.Peer.(*tg.InputPeerChannel); ok {
+				s.channelAccessHashes.Store(ch.ChannelID, ch.AccessHash)
+			}
+			return nil
+		})
+		if hashVal, ok := s.channelAccessHashes.Load(cleanID); ok {
+			if hash, ok := hashVal.(int64); ok && hash != 0 {
+				return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
+			}
+		}
+		return nil, fmt.Errorf("supergroup %d tidak memiliki access_hash (pastikan userbot sudah bergabung ke grup)", cleanID)
+	}
+
+	// 5. Basic group (chat)
+	if cleanID != 0 {
+		return &tg.InputPeerChat{ChatID: cleanID}, nil
 	}
 	return nil, fmt.Errorf("peer tidak dapat ditemukan")
 }

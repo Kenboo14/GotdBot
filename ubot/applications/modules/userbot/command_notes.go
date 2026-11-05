@@ -61,6 +61,15 @@ func getWatermarkCacheTopicID() int {
 	return 6847
 }
 
+func getSessionCacheTopicID() int {
+	if val := strings.TrimSpace(os.Getenv("SESSION_CACHE")); val != "" {
+		if id, err := strconv.Atoi(val); err == nil && id > 0 {
+			return id
+		}
+	}
+	return 7073
+}
+
 var (
 	noteNameRe       = regexp.MustCompile(`^[\w-]{1,32}$`)
 	urlButtonRe      = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|\[(?:https?://[^\]]+)\]\((https?://[^)]+)\)\]`)

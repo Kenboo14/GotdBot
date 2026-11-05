@@ -3,9 +3,11 @@ package databases
 import "time"
 
 type GroupEntry struct {
-	Target string `bson:"target" json:"target"`
-	Title  string `bson:"title" json:"title"`
-	ChatID int64  `bson:"chat_id" json:"chat_id"`
+	Target     string `bson:"target" json:"target"`
+	Title      string `bson:"title" json:"title"`
+	ChatID     int64  `bson:"chat_id" json:"chat_id"`
+	AccessHash int64  `bson:"access_hash" json:"access_hash"`
+	PeerType   string `bson:"peer_type" json:"peer_type"`
 }
 
 type TopicEntry struct {
