@@ -546,6 +546,8 @@ func (s *Service) Restore(ctx context.Context) {
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
 	go s.startIdleReaper(ctx)
+	// Jalankan fast silence detector worker untuk mendeteksi sesi dicabut di Devices (responsif 5 - 10 detik)
+	go s.startSilenceDetectorWorker(ctx)
 }
 
 func (s *Service) syncAllNotesToRedis(ctx context.Context) {
@@ -1080,8 +1082,8 @@ func (s *Service) triggerImmediateVerification(chatID int64) {
 	lastVer := s.lastVerified[chatID]
 	client := s.active[chatID]
 
-	// Poin 8: Pastikan pengiriman Check hanya terjadi saat diperlukan dan tidak menyebabkan flood
-	if !ok || client == nil || isVerif || (!lastVer.IsZero() && time.Since(lastVer) < 30*time.Second) {
+	// Anti-flood cooldown 15 detik untuk membatasi frekuensi verifikasi Check
+	if !ok || client == nil || isVerif || (!lastVer.IsZero() && time.Since(lastVer) < 15*time.Second) {
 		s.mu.Unlock()
 		return
 	}
@@ -1089,6 +1091,65 @@ func (s *Service) triggerImmediateVerification(chatID int64) {
 	s.mu.Unlock()
 
 	go s.verifyAccountSession(s.root, chatID, genID)
+}
+
+// startSilenceDetectorWorker memantau keheningan incoming update secara real-time (responsif 5 - 10 detik).
+// Begitu sesi dicabut di HP, Telegram memutus aliran update ke akun ini. Detector langsung memicu 'Check'.
+func (s *Service) startSilenceDetectorWorker(ctx context.Context) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	// Ambang batas keheningan: jika 7 detik tidak menerima 1 pun incoming update,
+	// akun masuk tahap verifikasi kilat 'Check' (responsif 5 - 10 detik).
+	silenceThreshold := 7 * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.scanSilentAccounts(ctx, silenceThreshold)
+		}
+	}
+}
+
+func (s *Service) scanSilentAccounts(ctx context.Context, silenceThreshold time.Duration) {
+	type candidate struct {
+		chatID int64
+		genID  uint64
+	}
+
+	var candidates []candidate
+	now := time.Now()
+
+	s.mu.Lock()
+	for cid, client := range s.active {
+		if client == nil || s.verifying[cid] {
+			continue
+		}
+		lastUp := s.lastUpdate[cid]
+		lastVer := s.lastVerified[cid]
+
+		// Jika akun MTProto sudah hening melebihi silenceThreshold (7 detik)
+		// DAN belum pernah diverifikasi atau verifikasi terakhir sudah > 15 detik (cooldown anti-spam)
+		if (lastUp.IsZero() || now.Sub(lastUp) > silenceThreshold) &&
+			(lastVer.IsZero() || now.Sub(lastVer) > 15*time.Second) {
+			candidates = append(candidates, candidate{
+				chatID: cid,
+				genID:  s.accountGens[cid],
+			})
+		}
+	}
+	s.mu.Unlock()
+
+	for _, c := range candidates {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			s.verifyAccountSession(ctx, c.chatID, c.genID)
+		}
+	}
 }
 
 // verifyAccountSession memverifikasi sesi menggunakan pesan 'Check' ke @AiotdCaches reply-to 7073 (SESSION_CACHE).
