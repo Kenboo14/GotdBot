@@ -514,8 +514,6 @@ func (s *Service) Restore(ctx context.Context) {
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
 	go s.startIdleReaper(ctx)
-	// Jalankan session monitor worker terpusat (Incoming Update Monitoring & 2-stage 'Check' verification)
-	go s.startSessionMonitorWorker(ctx)
 }
 
 func (s *Service) syncAllNotesToRedis(ctx context.Context) {
@@ -818,6 +816,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.mu.Unlock()
 			s.cacheEntities(entities)
 			if msg, ok := update.Message.(*tg.Message); ok {
+				if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && peerUser.UserID == 777000 {
+					s.triggerImmediateVerification(chatID)
+				}
 				s.interceptLogMessage(ctx, chatID, client, entities, msg)
 			}
 			return s.handleUserbotMessage(ctx, chatID, client, entities, update)
@@ -840,7 +841,20 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			chatID:     chatID,
 			clientRef:  &client,
 		}
-		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, UpdateHandler: updateHandler})
+		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{
+			SessionStorage: store,
+			UpdateHandler:  updateHandler,
+			OnDead: func(err error) {
+				if isSessionRevokedError(err) {
+					s.handleSessionRevoked(chatID, ownerID, client, err)
+				}
+			},
+			OnConnectionState: func(state telegram.ConnectionState) {
+				if state == telegram.ConnectionStateDisconnected {
+					s.triggerImmediateVerification(chatID)
+				}
+			},
+		})
 		s.mu.Lock()
 		if s.connecting[chatID] == genID {
 			delete(s.connecting, chatID)
@@ -955,64 +969,14 @@ func (s *Service) recordIncomingUpdate(chatID int64) {
 	s.mu.Unlock()
 }
 
-// startSessionMonitorWorker menjalankan SATU goroutine terpusat untuk memantau status incoming update 1.000 akun.
-func (s *Service) startSessionMonitorWorker(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-
-	// Jika akun tidak menerima incoming update apapun selama > 30 menit, tandai sebagai suspected_inactive
-	inactiveThreshold := 30 * time.Minute
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			s.scanSuspectedInactiveAccounts(ctx, inactiveThreshold)
-		}
-	}
-}
-
-// scanSuspectedInactiveAccounts mendeteksi akun yang lama tidak ada incoming update dan menjadwalkan verifikasi 'Check' bertahap.
-func (s *Service) scanSuspectedInactiveAccounts(ctx context.Context, inactiveThreshold time.Duration) {
-	type targetCandidate struct {
-		chatID int64
-		genID  uint64
-	}
-
-	var candidates []targetCandidate
-	now := time.Now()
-
+// triggerImmediateVerification menjadwalkan verifikasi sesi 'Check' seketika murni berbasis event MTProto.
+func (s *Service) triggerImmediateVerification(chatID int64) {
 	s.mu.Lock()
-	for cid, client := range s.active {
-		if client == nil || s.verifying[cid] {
-			continue
-		}
-		lastUp := s.lastUpdate[cid]
-		lastVer := s.lastVerified[cid]
-
-		// Jika akun belum pernah mencatat update atau sudah > inactiveThreshold
-		// DAN belum pernah diverifikasi atau verifikasi terakhir sudah > inactiveThreshold
-		if (lastUp.IsZero() || now.Sub(lastUp) > inactiveThreshold) &&
-			(lastVer.IsZero() || now.Sub(lastVer) > inactiveThreshold) {
-			candidates = append(candidates, targetCandidate{
-				chatID: cid,
-				genID:  s.accountGens[cid],
-			})
-		}
-	}
+	genID, ok := s.accountGens[chatID]
+	isVerif := s.verifying[chatID]
 	s.mu.Unlock()
-
-	// Lakukan verifikasi secara berurutan dan staggered (tidak serentak) agar hemat resource
-	for _, cand := range candidates {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			s.verifyAccountSession(ctx, cand.chatID, cand.genID)
-			// Berikan jeda 2 detik antar verifikasi agar tidak membanjiri @AiotdCaches
-			time.Sleep(2 * time.Second)
-		}
+	if ok && !isVerif {
+		go s.verifyAccountSession(s.root, chatID, genID)
 	}
 }
 
@@ -1474,7 +1438,16 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 	h.s.recordIncomingUpdate(h.chatID)
 
 	switch upd := u.(type) {
+	case *tg.UpdateShort:
+		if _, ok := upd.Update.(*tg.UpdateServiceNotification); ok {
+			h.s.triggerImmediateVerification(h.chatID)
+		}
+		return h.dispatcher.Handle(ctx, u)
+
 	case *tg.UpdateShortMessage:
+		if upd.UserID == 777000 {
+			h.s.triggerImmediateVerification(h.chatID)
+		}
 		h.s.mu.Lock()
 		ownerID := h.s.owners[h.chatID]
 		h.s.mu.Unlock()
@@ -1559,6 +1532,24 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 				},
 			},
 		})
+
+	case *tg.Updates:
+		for _, item := range upd.Updates {
+			if _, ok := item.(*tg.UpdateServiceNotification); ok {
+				h.s.triggerImmediateVerification(h.chatID)
+				break
+			}
+		}
+		return h.dispatcher.Handle(ctx, u)
+
+	case *tg.UpdatesCombined:
+		for _, item := range upd.Updates {
+			if _, ok := item.(*tg.UpdateServiceNotification); ok {
+				h.s.triggerImmediateVerification(h.chatID)
+				break
+			}
+		}
+		return h.dispatcher.Handle(ctx, u)
 
 	default:
 		return h.dispatcher.Handle(ctx, u)
