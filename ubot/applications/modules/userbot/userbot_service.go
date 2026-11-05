@@ -1152,7 +1152,7 @@ func (s *Service) scanSilentAccounts(ctx context.Context, silenceThreshold time.
 	}
 }
 
-// verifyAccountSession memverifikasi sesi menggunakan pesan 'Check' ke @AiotdCaches reply-to 7073 (SESSION_CACHE).
+// verifyAccountSession memverifikasi keabsahan sesi secara silent via RPC Telegram tanpa spam pesan di chat.
 func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID uint64) {
 	// Guard semaphore: batasi maksimal 2 verifikasi paralel di seluruh aplikasi
 	select {
@@ -1182,7 +1182,40 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 		s.mu.Unlock()
 	}()
 
-	// 1. Resolve peer @AiotdCaches
+	// Tahap 1 (Solusi 2): Silent RPC via UpdatesGetState.
+	// Memeriksa keabsahan AuthKey langsung ke Telegram API tanpa mengirim pesan teks (0 spam di chat).
+	stateCtx, stateCancel := context.WithTimeout(ctx, 5*time.Second)
+	_, err := client.API().UpdatesGetState(stateCtx)
+	stateCancel()
+
+	if err != nil {
+		// B. Error autentikasi permanen: Sesi terbukti dicabut di Devices!
+		if isSessionRevokedError(err) {
+			log.Printf("⚠️ [verifyAccount %d] Sesi terbukti revoked via Silent RPC UpdatesGetState: %v", chatID, err)
+			go s.handleSessionRevoked(chatID, genID, err)
+			return
+		}
+
+		// C. Jika error sementara/jaringan, fallback ke Tahap 2: Verifikasi Pesan Check ke @AiotdCaches
+		log.Printf("ℹ️ [verifyAccount %d] Silent RPC gagal (%v), mencoba fallback verifikasi 'Check'...", chatID, err)
+		s.verifyViaCheckMessage(ctx, chatID, genID, client)
+		return
+	}
+
+	// A. Silent RPC berhasil: Sesi valid & aktif tanpa mengotori chat!
+	now := time.Now()
+	s.mu.Lock()
+	if s.accountGens[chatID] == genID {
+		s.accountStates[chatID] = StateConnected
+		s.lastVerified[chatID] = now
+		s.lastUpdate[chatID] = now
+		s.lastActive[chatID] = now
+	}
+	s.mu.Unlock()
+}
+
+// verifyViaCheckMessage adalah fallback verifikasi tahap 2 menggunakan pesan 'Check' ke @AiotdCaches reply-to 7073.
+func (s *Service) verifyViaCheckMessage(ctx context.Context, chatID int64, genID uint64, client *telegram.Client) {
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
 		log.Printf("[verifyAccount %d] Gagal resolve cache: %v (bukan auth error, sesi dipertahankan)", chatID, err)
@@ -1192,7 +1225,6 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 		return
 	}
 
-	// 2. Kirim pesan Check dengan reply ke message ID 7073 (SESSION_CACHE)
 	topicID := getSessionCacheTopicID()
 	replyTo := &tg.InputReplyToMessage{
 		ReplyToMsgID: topicID,
@@ -1207,19 +1239,16 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 	}
 
 	sendCtx, sendCancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err = client.API().MessagesSendMessage(sendCtx, req)
+	sentUpdates, err := client.API().MessagesSendMessage(sendCtx, req)
 	sendCancel()
 
 	if err != nil {
-		// B. Error autentikasi permanen
 		if isSessionRevokedError(err) {
 			log.Printf("⚠️ [verifyAccount %d] Sesi terbukti revoked via verifikasi 'Check': %v", chatID, err)
 			go s.handleSessionRevoked(chatID, genID, err)
 			return
 		}
 
-		// C. Error non-autentikasi (FLOOD_WAIT, CHAT_WRITE_FORBIDDEN, PEER_ID_INVALID, network, timeout)
-		// JANGAN menganggap sesi revoked! JANGAN hapus session string!
 		log.Printf("ℹ️ [verifyAccount %d] Error non-auth saat verifikasi 'Check': %v (sesi dipertahankan)", chatID, err)
 		s.mu.Lock()
 		if s.accountGens[chatID] == genID {
@@ -1230,7 +1259,20 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 		return
 	}
 
-	// A. Pesan berhasil dikirim: Sesi valid & aktif!
+	// Auto-delete pesan Check agar channel @AiotdCaches tetap bersih
+	if sentUpdates != nil {
+		go func() {
+			delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer delCancel()
+			if updShort, ok := sentUpdates.(*tg.UpdateShortSentMessage); ok {
+				_, _ = client.API().MessagesDeleteMessages(delCtx, &tg.MessagesDeleteMessagesRequest{
+					Revoke: true,
+					ID:     []int{updShort.ID},
+				})
+			}
+		}()
+	}
+
 	now := time.Now()
 	s.mu.Lock()
 	if s.accountGens[chatID] == genID {
