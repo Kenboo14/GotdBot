@@ -43,12 +43,21 @@ var idleTimeoutMinutes = 30
 // to protect existing active sessions from eviction (admission control policy).
 var maxActiveSessions = 100
 
+// sessionHeartbeatSeconds controls how often an active MTProto session is
+// checked with a lightweight UpdatesGetState RPC. Telegram does not always
+// close the transport immediately after a session is revoked from Devices,
+// so this heartbeat is the reliable fallback when no other RPC is running.
+var sessionHeartbeatSeconds = 30
+
 func init() {
 	if v, err := strconv.Atoi(os.Getenv("IDLE_TIMEOUT_MINUTES")); err == nil && v > 0 {
 		idleTimeoutMinutes = v
 	}
 	if v, err := strconv.Atoi(os.Getenv("MAX_ACTIVE_SESSIONS")); err == nil && v > 0 {
 		maxActiveSessions = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("SESSION_HEARTBEAT_SECONDS")); err == nil && v >= 15 {
+		sessionHeartbeatSeconds = v
 	}
 }
 
@@ -82,50 +91,93 @@ func (m *rpcErrorMiddleware) Handle(next tg.Invoker) telegram.InvokeFunc {
 }
 
 type Service struct {
-	root             context.Context
-	sqlite           *databases.SQLiteClient
-	db               *mongo.Database
-	redis            *databases.Redis
-	apiID            int
-	apiHash          string
-	key              []byte
-	botToken         string
-	logBotToken      string
-	logBotID         int64
-	logBotUsername   string
+	root                context.Context
+	sqlite              *databases.SQLiteClient
+	db                  *mongo.Database
+	redis               *databases.Redis
+	apiID               int
+	apiHash             string
+	key                 []byte
+	botToken            string
+	logBotToken         string
+	logBotID            int64
+	logBotUsername      string
 	startedLogBots      sync.Map // key: [2]int64{userbotID, logBotID} -> true
 	logStatusCache      sync.Map // key: int64 (ownerID) -> bool
 	ownerUsernames      sync.Map // key: int64 (ownerID) -> lowercase username without @
 	userAccessHashes    sync.Map // key: int64 (userID) -> int64 (accessHash)
 	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
 	lastLogBotMsgID     sync.Map // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
-	inlineMu         sync.RWMutex
-	botUsernameCache string
-	inlineBots       map[*telegram.Client]*tg.InputUser
-	mu               sync.Mutex
-	logins           map[int64]*login
-	active           map[int64]*telegram.Client
-	connecting       map[int64]uint64             // guard terhadap double activation & reservasi slot (chatID -> genID)
-	activeCancels    map[int64]context.CancelFunc // cancel func untuk graceful shutdown
-	accountCtxs      map[int64]context.Context    // chatID -> clientCtx (account lifecycle context)
-	accountGens      map[int64]uint64             // chatID -> token kepemilikan generasi lifecycle
-	nextGen          uint64                       // counter generasi unik untuk lifecycle
-	accountStates    map[int64]AccountSessionState // chatID -> status lifecycle event-driven
-	lastActive       map[int64]time.Time          // chatID -> waktu aktivitas terakhir
-	lastUpdate       map[int64]time.Time          // chatID -> waktu terakhir incoming update diterima
-	lastVerified     map[int64]time.Time          // chatID -> waktu terakhir verifikasi pesan 'Check'
-	verifying        map[int64]bool               // chatID -> guard anti-double-verification
-	verifSem         chan struct{}                // semaphore pembatas concurrent Check ke AiotdCaches (max 2)
-	owners           map[int64]int64              // chatID -> ownerID
-	clientOwners     map[*telegram.Client]int64   // client -> ownerID
-	senderCache      map[*telegram.Client]*message.Sender // cached message.Sender per client
-	prefixes         map[int64]string
-	broadcasts       map[int64]*broadcastJob
-	panelBroadcasts  map[int64]*panelBroadcastJob
-	sudoMu           sync.RWMutex
-	sudoCache        map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
-	broadcastSem     chan struct{}             // Semaphore untuk membatasi concurrent gcast
+	inlineMu            sync.RWMutex
+	botUsernameCache    string
+	inlineBots          map[*telegram.Client]*tg.InputUser
+	mu                  sync.Mutex
+	logins              map[int64]*login
+	active              map[int64]*telegram.Client
+	connecting          map[int64]uint64                     // guard terhadap double activation & reservasi slot (chatID -> genID)
+	activeCancels       map[int64]context.CancelFunc         // cancel func untuk graceful shutdown
+	accountCtxs         map[int64]context.Context            // chatID -> clientCtx (account lifecycle context)
+	accountGens         map[int64]uint64                     // chatID -> token kepemilikan generasi lifecycle
+	nextGen             uint64                               // counter generasi unik untuk lifecycle
+	accountStates       map[int64]AccountSessionState        // chatID -> status lifecycle event-driven
+	lastActive          map[int64]time.Time                  // chatID -> waktu aktivitas terakhir
+	lastUpdate          map[int64]time.Time                  // chatID -> waktu terakhir incoming update diterima
+	lastVerified        map[int64]time.Time                  // chatID -> waktu terakhir verifikasi pesan 'Check'
+	verifying           map[int64]bool                       // chatID -> guard anti-double-verification
+	verifSem            chan struct{}                        // semaphore pembatas concurrent Check ke AiotdCaches (max 2)
+	heartbeatSem        chan struct{}                        // pembatas RPC heartbeat sesi aktif
+	owners              map[int64]int64                      // chatID -> ownerID
+	clientOwners        map[*telegram.Client]int64           // client -> ownerID
+	senderCache         map[*telegram.Client]*message.Sender // cached message.Sender per client
+	prefixes            map[int64]string
+	broadcasts          map[int64]*broadcastJob
+	panelBroadcasts     map[int64]*panelBroadcastJob
+	sudoMu              sync.RWMutex
+	sudoCache           map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
+	broadcastSem        chan struct{}             // Semaphore untuk membatasi concurrent gcast
 }
+
+// publishSessionState mengirimkan perubahan lifecycle akun sebagai event
+// terpisah dari pesan Telegram. Consumer seperti gateway atau WebSocket
+// gateway dapat memakai stream ini untuk update real-time tanpa polling.
+// Stream ini sengaja tidak memakai from:ubot karena stream tersebut ditujukan
+// untuk pesan yang memang harus dikirim ke chat Telegram owner.
+func (s *Service) publishSessionState(chatID, ownerID int64, state AccountSessionState, reason string) {
+	if s.redis == nil || chatID == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := s.redis.To(ctx, "session:events", &models.PFromService{
+		ChatID:  chatID,
+		OwnerID: ownerID,
+		State:   string(state),
+		Type:    "session_status",
+		Text:    reason,
+	}); err != nil {
+		log.Printf("[SessionEvent] gagal publish chatID=%d state=%s: %v", chatID, state, err)
+	}
+}
+
+// setAccountState memperbarui state hanya untuk lifecycle generation yang
+// masih aktif, lalu mengirim event ketika state benar-benar berubah.
+func (s *Service) setAccountState(chatID int64, genID uint64, state AccountSessionState, reason string) {
+	s.mu.Lock()
+	if genID != 0 && s.accountGens[chatID] != genID {
+		s.mu.Unlock()
+		return
+	}
+	previous := s.accountStates[chatID]
+	s.accountStates[chatID] = state
+	ownerID := s.owners[chatID]
+	s.mu.Unlock()
+
+	if previous != state {
+		s.publishSessionState(chatID, ownerID, state, reason)
+	}
+}
+
 type login struct {
 	cancel    context.CancelFunc
 	otp       chan string
@@ -152,36 +204,37 @@ type record struct {
 
 func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken, logBotToken string) *Service {
 	return &Service{
-		root:             root,
-		sqlite:           sqlite,
-		db:               db,
-		redis:            redis,
-		apiID:            apiID,
-		apiHash:          apiHash,
-		key:              key,
-		botToken:         botToken,
-		logBotToken:      logBotToken,
-		logins:           make(map[int64]*login),
-		active:           make(map[int64]*telegram.Client),
-		connecting:       make(map[int64]uint64),
-		activeCancels:    make(map[int64]context.CancelFunc),
-		accountCtxs:      make(map[int64]context.Context),
-		accountGens:      make(map[int64]uint64),
-		accountStates:    make(map[int64]AccountSessionState),
-		lastActive:       make(map[int64]time.Time),
-		lastUpdate:       make(map[int64]time.Time),
-		lastVerified:     make(map[int64]time.Time),
-		verifying:        make(map[int64]bool),
-		verifSem:         make(chan struct{}, 2), // hemat resource, max 2 concurrent Check ke AiotdCaches
-		owners:           make(map[int64]int64),
-		clientOwners:     make(map[*telegram.Client]int64),
-		senderCache:      make(map[*telegram.Client]*message.Sender),
-		prefixes:         make(map[int64]string),
-		broadcasts:       make(map[int64]*broadcastJob),
-		panelBroadcasts:  make(map[int64]*panelBroadcastJob),
-		inlineBots:       make(map[*telegram.Client]*tg.InputUser),
-		sudoCache:        make(map[string]sudoCacheEntry),
-		broadcastSem:     make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
+		root:            root,
+		sqlite:          sqlite,
+		db:              db,
+		redis:           redis,
+		apiID:           apiID,
+		apiHash:         apiHash,
+		key:             key,
+		botToken:        botToken,
+		logBotToken:     logBotToken,
+		logins:          make(map[int64]*login),
+		active:          make(map[int64]*telegram.Client),
+		connecting:      make(map[int64]uint64),
+		activeCancels:   make(map[int64]context.CancelFunc),
+		accountCtxs:     make(map[int64]context.Context),
+		accountGens:     make(map[int64]uint64),
+		accountStates:   make(map[int64]AccountSessionState),
+		lastActive:      make(map[int64]time.Time),
+		lastUpdate:      make(map[int64]time.Time),
+		lastVerified:    make(map[int64]time.Time),
+		verifying:       make(map[int64]bool),
+		verifSem:        make(chan struct{}, 2), // hemat resource, max 2 concurrent Check ke AiotdCaches
+		heartbeatSem:    make(chan struct{}, 16),
+		owners:          make(map[int64]int64),
+		clientOwners:    make(map[*telegram.Client]int64),
+		senderCache:     make(map[*telegram.Client]*message.Sender),
+		prefixes:        make(map[int64]string),
+		broadcasts:      make(map[int64]*broadcastJob),
+		panelBroadcasts: make(map[int64]*panelBroadcastJob),
+		inlineBots:      make(map[*telegram.Client]*tg.InputUser),
+		sudoCache:       make(map[string]sudoCacheEntry),
+		broadcastSem:    make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
 	}
 }
 
@@ -546,8 +599,10 @@ func (s *Service) Restore(ctx context.Context) {
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
 	go s.startIdleReaper(ctx)
-	// Jalankan fast silence detector worker untuk mendeteksi sesi dicabut di Devices (responsif 5 - 10 detik)
-	go s.startSilenceDetectorWorker(ctx)
+	// Callback MTProto tetap menjadi jalur utama. Heartbeat hanya menjalankan
+	// RPC ringan sebagai fallback saat koneksi transport masih hidup tetapi
+	// AuthKey sudah dicabut dari perangkat lain.
+	go s.startSessionHeartbeatWorker(ctx)
 }
 
 func (s *Service) syncAllNotesToRedis(ctx context.Context) {
@@ -807,12 +862,15 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	genID := s.nextGen
 	s.connecting[chatID] = genID
 	s.accountGens[chatID] = genID
+	// State CONNECTING dipancarkan sebagai event lifecycle, bukan dipolling.
 	s.accountStates[chatID] = StateConnecting
+	initialOwnerID := ownerID
 	s.lastActive[chatID] = time.Now()
 	clientCtx, clientCancel := context.WithCancel(s.root)
 	s.activeCancels[chatID] = clientCancel
 	s.accountCtxs[chatID] = clientCtx
 	s.mu.Unlock()
+	s.publishSessionState(chatID, initialOwnerID, StateConnecting, "MTProto client sedang menghubungkan akun")
 	go func() {
 		var client *telegram.Client
 		defer func() {
@@ -898,19 +956,30 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				case telegram.ConnectionStateReady:
 					wasSuspected := (s.accountStates[chatID] == StateSuspected || s.accountStates[chatID] == StateReconnecting)
 					s.accountStates[chatID] = StateConnected
+					ownerID := s.owners[chatID]
 					s.mu.Unlock()
+					s.publishSessionState(chatID, ownerID, StateConnected, "Koneksi MTProto siap")
 					// Jika sebelumnya terputus (suspected), lakukan verifikasi saat koneksi sudah READY
 					if wasSuspected {
 						s.triggerImmediateVerification(chatID)
 					}
 					return
 				case telegram.ConnectionStateDisconnected:
-					// Jangan langsung kirim Check saat disconnect; tandai SUSPECTED
+					// Disconnect bukan bukti sesi dicabut. Tandai event sementara dan
+					// biarkan gotd melakukan reconnect atau mengembalikan auth error.
 					s.accountStates[chatID] = StateSuspected
+					ownerID := s.owners[chatID]
+					s.mu.Unlock()
+					s.publishSessionState(chatID, ownerID, StateSuspected, "Koneksi MTProto terputus; menunggu hasil reconnect")
+					return
 				case telegram.ConnectionStateConnecting:
 					if s.accountStates[chatID] != StateSuspected {
 						s.accountStates[chatID] = StateConnecting
 					}
+					ownerID := s.owners[chatID]
+					s.mu.Unlock()
+					s.publishSessionState(chatID, ownerID, StateConnecting, "MTProto sedang reconnect")
+					return
 				}
 				s.mu.Unlock()
 			},
@@ -939,11 +1008,16 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				s.accountStates[chatID] = StateConnected
 			}
 			s.mu.Unlock()
+			s.publishSessionState(chatID, self.ID, StateConnected, "Sesi Telegram berhasil diautentikasi")
 			if store != nil {
 				_ = store.setAccount(ctx, self.ID)
 			}
 			// Pre-warm inline bot resolution so first inline command is fast (staggered & bound to clientCtx).
 			s.preWarmInlineBot(clientCtx, client)
+			// Status broadcast disimpan persisten. Jika server restart saat
+			// status masih Berjalan, lanjutkan dari checkpoint dan waktu jatuh
+			// tempo yang tersimpan, bukan memulai ulang dari target pertama.
+			go s.resumePanelBroadcast(client, chatID, self.ID)
 
 			now := time.Now()
 			s.mu.Lock()
@@ -971,6 +1045,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 
 			if isStillCurrent && clientCtx.Err() == nil {
 				log.Printf("[Userbot chatID=%d] Koneksi MTProto terputus sementara (%v). Menjadwalkan reconnect otomatis...", chatID, err)
+				s.publishSessionState(chatID, ownerID, StateReconnecting, err.Error())
 				time.Sleep(3 * time.Second)
 				s.activate(chatID, ownerID)
 			}
@@ -1029,6 +1104,10 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 
 	client := s.active[chatID]
 	ownerID := s.owners[chatID]
+	stateReason := "Sesi Telegram dicabut"
+	if reason != nil {
+		stateReason = reason.Error()
+	}
 	delete(s.active, chatID)
 	delete(s.owners, chatID)
 	delete(s.lastUpdate, chatID)
@@ -1044,6 +1123,8 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 	s.mu.Unlock()
 
 	log.Printf("⚠️ [Sesi Terlepas Realtime] chatID=%d ownerID=%d gen=%d: %v", chatID, ownerID, genID, reason)
+
+	s.publishSessionState(chatID, ownerID, StateSessionInvalid, stateReason)
 
 	// Batalkan context client di luar lock
 	if cancel != nil {
@@ -1088,68 +1169,96 @@ func (s *Service) triggerImmediateVerification(chatID int64) {
 		return
 	}
 	s.accountStates[chatID] = StateSuspected
+	ownerID := s.owners[chatID]
 	s.mu.Unlock()
+	s.publishSessionState(chatID, ownerID, StateSuspected, "Telegram mengirim service notification; memverifikasi sesi")
 
 	go s.verifyAccountSession(s.root, chatID, genID)
 }
 
-// startSilenceDetectorWorker memantau keheningan incoming update secara real-time (responsif 5 - 10 detik).
-// Begitu sesi dicabut di HP, Telegram memutus aliran update ke akun ini. Detector langsung memicu 'Check'.
-func (s *Service) startSilenceDetectorWorker(ctx context.Context) {
-	ticker := time.NewTicker(3 * time.Second)
+// startSessionHeartbeatWorker memvalidasi AuthKey akun aktif secara berkala.
+// Ini bukan polling ke gateway dan tidak membuat koneksi baru; RPC berjalan di
+// client MTProto yang sudah aktif. Tanpa heartbeat, Telegram bisa membiarkan
+// transport tetap terlihat hidup setelah sesi dihapus dari Devices.
+func (s *Service) startSessionHeartbeatWorker(ctx context.Context) {
+	interval := time.Duration(sessionHeartbeatSeconds) * time.Second
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
-	// Ambang batas keheningan: jika 7 detik tidak menerima 1 pun incoming update,
-	// akun masuk tahap verifikasi kilat 'Check' (responsif 5 - 10 detik).
-	silenceThreshold := 7 * time.Second
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.scanSilentAccounts(ctx, silenceThreshold)
+			s.heartbeatActiveSessions(ctx)
 		}
 	}
 }
 
-func (s *Service) scanSilentAccounts(ctx context.Context, silenceThreshold time.Duration) {
+func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 	type candidate struct {
 		chatID int64
 		genID  uint64
+		client *telegram.Client
 	}
 
-	var candidates []candidate
-	now := time.Now()
-
 	s.mu.Lock()
-	for cid, client := range s.active {
-		if client == nil || s.verifying[cid] {
+	candidates := make([]candidate, 0, len(s.active))
+	for chatID, client := range s.active {
+		if client == nil || s.accountStates[chatID] == StateSessionInvalid || s.accountStates[chatID] == StateStopped {
 			continue
 		}
-		lastUp := s.lastUpdate[cid]
-		lastVer := s.lastVerified[cid]
-
-		// Jika akun MTProto sudah hening melebihi silenceThreshold (7 detik)
-		// DAN belum pernah diverifikasi atau verifikasi terakhir sudah > 15 detik (cooldown anti-spam)
-		if (lastUp.IsZero() || now.Sub(lastUp) > silenceThreshold) &&
-			(lastVer.IsZero() || now.Sub(lastVer) > 15*time.Second) {
-			candidates = append(candidates, candidate{
-				chatID: cid,
-				genID:  s.accountGens[cid],
-			})
-		}
+		candidates = append(candidates, candidate{
+			chatID: chatID,
+			genID:  s.accountGens[chatID],
+			client: client,
+		})
 	}
 	s.mu.Unlock()
 
-	for _, c := range candidates {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			s.verifyAccountSession(ctx, c.chatID, c.genID)
-		}
+	for _, item := range candidates {
+		item := item
+		go s.heartbeatSession(ctx, item.chatID, item.genID, item.client)
 	}
+}
+
+func (s *Service) heartbeatSession(ctx context.Context, chatID int64, genID uint64, client *telegram.Client) {
+	select {
+	case s.heartbeatSem <- struct{}{}:
+		defer func() { <-s.heartbeatSem }()
+	case <-ctx.Done():
+		return
+	}
+
+	s.mu.Lock()
+	if s.accountGens[chatID] != genID || s.active[chatID] != client {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	_, err := client.API().UpdatesGetState(checkCtx)
+	cancel()
+	if err != nil {
+		if isSessionRevokedError(err) {
+			log.Printf("[SessionHeartbeat] sesi revoked chatID=%d: %v", chatID, err)
+			s.handleSessionRevoked(chatID, genID, err)
+			return
+		}
+		// Error jaringan/timeout tidak boleh menghapus sesi. OnDead dan
+		// connection state handler tetap menangani reconnect sementara.
+		log.Printf("[SessionHeartbeat] RPC sementara gagal chatID=%d: %v", chatID, err)
+		return
+	}
+
+	s.mu.Lock()
+	if s.accountGens[chatID] == genID && s.active[chatID] == client {
+		now := time.Now()
+		s.lastVerified[chatID] = now
+		s.lastActive[chatID] = now
+	}
+	s.mu.Unlock()
 }
 
 // verifyAccountSession memverifikasi keabsahan sesi secara silent via RPC Telegram tanpa spam pesan di chat.

@@ -60,6 +60,8 @@ type jasebConfigDoc struct {
 	Lists            []int           `bson:"lists" json:"lists"`
 	Groups           []jasebGroupDoc `bson:"groups" json:"groups"`
 	Topics           []jasebTopicDoc `bson:"topics" json:"topics"`
+	BroadcastIndex   int             `bson:"broadcast_index" json:"broadcast_index"`
+	BroadcastNextAt  int64           `bson:"broadcast_next_at" json:"broadcast_next_at"`
 	UpdatedAt        time.Time       `bson:"updated_at" json:"updated_at"`
 }
 
@@ -95,17 +97,21 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 		var listsJSON, groupsJSON, topicsJSON string
 		var delay, sfw, sfm, tpe, extra, wmCacheID int
 		var typ, timer, mode, status, masaAktif, notif, email, admin, watermark, tTerkini, tTerakhir string
+		var broadcastIndex int
+		var broadcastNextAt int64
 		var updatedAt time.Time
 
 		query := `SELECT type, delay, skip_floodwait, timer, extra, mode, safemode, status,
 			masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
-			tindakan_terkini, tindakan_terakhir, lists, groups, topics, updated_at
+			tindakan_terkini, tindakan_terakhir, lists, groups, topics,
+			broadcast_index, broadcast_next_at, updated_at
 			FROM jaseb_configurasi WHERE owner_id = ? LIMIT 1;`
 
 		err := s.sqlite.DB.QueryRowContext(ctx, query, ownerID).Scan(
 			&typ, &delay, &sfw, &timer, &extra, &mode, &sfm, &status,
 			&masaAktif, &notif, &email, &admin, &watermark, &wmCacheID, &tpe,
-			&tTerkini, &tTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &updatedAt,
+			&tTerkini, &tTerakhir, &listsJSON, &groupsJSON, &topicsJSON,
+			&broadcastIndex, &broadcastNextAt, &updatedAt,
 		)
 		if err == nil {
 			var doc jasebConfigDoc
@@ -127,6 +133,8 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 			doc.TopicEnabled = tpe == 1
 			doc.TindakanTerkini = tTerkini
 			doc.TindakanTerakhir = tTerakhir
+			doc.BroadcastIndex = broadcastIndex
+			doc.BroadcastNextAt = broadcastNextAt
 			doc.UpdatedAt = updatedAt
 			if listsJSON != "" {
 				_ = json.Unmarshal([]byte(listsJSON), &doc.Lists)
@@ -195,6 +203,21 @@ func (s *Service) setPanelBroadcastStatus(ctx context.Context, ownerID int64, st
 	}
 }
 
+func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int64, nextIndex int, nextAt time.Time) {
+	if s.db != nil {
+		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{
+			"$set": bson.M{
+				"broadcast_index":   nextIndex,
+				"broadcast_next_at": nextAt.Unix(),
+				"updated_at":        time.Now(),
+			},
+		}, options.Update().SetUpsert(true))
+	}
+	if s.sqlite != nil {
+		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET broadcast_index = ?, broadcast_next_at = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, nextIndex, nextAt.Unix(), ownerID)
+	}
+}
+
 func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string) {
 	topicID := getTeksCacheTopicID()
 	cachedMsgID, err := s.sendTextToAiotdCachesTopic(ctx, client, topicID, text)
@@ -254,6 +277,17 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 }
 
 func (s *Service) handleStartPanelBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+	s.launchPanelBroadcast(client, chatID, ownerID, false)
+}
+
+func (s *Service) resumePanelBroadcast(client *telegram.Client, chatID, ownerID int64) {
+	cfg := s.getJasebConfig(context.Background(), ownerID)
+	if strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
+		s.launchPanelBroadcast(client, chatID, ownerID, true)
+	}
+}
+
+func (s *Service) launchPanelBroadcast(client *telegram.Client, chatID, ownerID int64, resume bool) {
 	s.mu.Lock()
 	if existing, ok := s.panelBroadcasts[ownerID]; ok && existing != nil {
 		existing.cancel()
@@ -262,10 +296,10 @@ func (s *Service) handleStartPanelBroadcast(ctx context.Context, client *telegra
 	s.panelBroadcasts[ownerID] = &panelBroadcastJob{cancel: bCancel}
 	s.mu.Unlock()
 
-	go s.executePanelBroadcast(bCtx, client, chatID, ownerID)
+	go s.executePanelBroadcast(bCtx, client, chatID, ownerID, resume)
 }
 
-func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64, resume bool) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.panelBroadcasts, ownerID)
@@ -296,20 +330,37 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 		delaySec = 5
 	}
 
-	s.reply(ctx, chatID, fmt.Sprintf("🚀 <b>Siaran Otomatis Dimulai!</b>\n\n<blockquote><i>Mengirim materi promosi ke <code>%d</code> grup target dengan jeda <code>%d detik</code> per grup.</i></blockquote>", len(cfg.Groups), delaySec), "panel_notice")
-	s.setPanelBroadcastStatus(ctx, ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(cfg.Groups)))
+	if !resume {
+		s.reply(ctx, chatID, fmt.Sprintf("🚀 <b>Siaran Otomatis Dimulai!</b>\n\n<blockquote><i>Mengirim materi promosi ke <code>%d</code> grup target dengan jeda <code>%d detik</code> per grup.</i></blockquote>", len(cfg.Groups), delaySec), "panel_notice")
+		s.setPanelBroadcastStatus(ctx, ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(cfg.Groups)))
+	}
 
 	// Pre-warm seluruh dialog channel/supergroup access hash agar kirim pesan tidak CHAT_ID_INVALID
 	s.preWarmDialogAccessHashes(ctx, client, ownerID)
 
-	sent := 0
-	failed := 0
-
-	for i, grp := range cfg.Groups {
+	for {
+		cfg = s.getJasebConfig(ctx, ownerID)
+		if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
+			return
+		}
+		if len(cfg.Groups) == 0 || len(cfg.Lists) == 0 {
+			s.setPanelBroadcastStatus(context.Background(), ownerID, "Berhenti", "Target atau materi kosong")
+			return
+		}
+		delaySec = cfg.Delay
+		if delaySec <= 0 {
+			delaySec = 5
+		}
+		index := cfg.BroadcastIndex
+		if index < 0 || index >= len(cfg.Groups) {
+			index = 0
+		}
+		if cfg.BroadcastNextAt > time.Now().Unix() && !s.waitPanelBroadcast(ctx, ownerID, time.Unix(cfg.BroadcastNextAt, 0)) {
+			return
+		}
+		grp := cfg.Groups[index]
 		select {
 		case <-ctx.Done():
-			s.reply(context.Background(), chatID, "🛑 <b>Siaran Otomatis Dihentikan oleh Pengguna.</b>", "panel_notice")
-			s.setPanelBroadcastStatus(context.Background(), ownerID, "Berhenti", "Dihentikan oleh pengguna")
 			return
 		default:
 		}
@@ -317,11 +368,12 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 		targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target, grp.AccessHash, grp.PeerType)
 		if err != nil {
 			log.Printf("[panelBroadcast] resolve target %s error: %v", grp.Target, err)
-			failed++
+			nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
+			s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (index+1)%len(cfg.Groups), nextAt)
 			continue
 		}
 
-		msgID := cfg.Lists[i%len(cfg.Lists)]
+		msgID := cfg.Lists[index%len(cfg.Lists)]
 		randomID := time.Now().UnixNano()
 
 		req := &tg.MessagesForwardMessagesRequest{
@@ -341,7 +393,8 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 			if flood, ok := tgerr.AsFloodWait(err); ok {
 				if cfg.SkipFloodWait {
 					log.Printf("[panelBroadcast] FloodWait %v skipped", flood)
-					failed++
+					nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
+					s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (index+1)%len(cfg.Groups), nextAt)
 					continue
 				}
 				sleepDur := flood + time.Second
@@ -352,25 +405,38 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 				}
 				_, _ = client.API().MessagesForwardMessages(ctx, req)
 			}
-			failed++
-		} else {
-			sent++
 		}
 
-		sleepDur := time.Duration(delaySec) * time.Second
+		nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
 		if cfg.Safemode {
-			sleepDur += 500 * time.Millisecond
+			nextAt = nextAt.Add(500 * time.Millisecond)
 		}
+		s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (index+1)%len(cfg.Groups), nextAt)
+	}
+}
+
+func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due time.Time) bool {
+	for {
+		remaining := time.Until(due)
+		if remaining <= 0 {
+			return true
+		}
+		wait := remaining
+		if wait > 500*time.Millisecond {
+			wait = 500 * time.Millisecond
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(sleepDur):
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+		cfg := s.getJasebConfig(ctx, ownerID)
+		if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
+			return false
 		}
 	}
-
-	report := fmt.Sprintf("✅ <b>Putaran Siaran Selesai!</b>\n\n<blockquote><b>Hasil Pengiriman:</b>\n• Berhasil : <code>%d</code> grup\n• Gagal : <code>%d</code> grup\n• Total Target : <code>%d</code> grup</blockquote>\n\n<i>Putaran ini telah selesai dikirim.</i>", sent, failed, len(cfg.Groups))
-	s.reply(ctx, chatID, report, "panel_notice")
-	s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", fmt.Sprintf("Selesai (%d terkirim, %d gagal)", sent, failed))
 }
 
 func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {

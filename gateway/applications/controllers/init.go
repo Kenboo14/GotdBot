@@ -57,6 +57,7 @@ func (h *Handler) getPanelState(chatID int64) string {
 func (m *Init) Register(ctx context.Context, b *bot.Bot, r *broker.Redis) {
 	SetInlineRedis(r)
 	h := NewHandler(r, m.DB)
+	go startSessionEventWebSocket(ctx, r)
 
 	// Listener dari ubot
 	go r.Listener(ctx, b, "from:group:ubot", "from:worker:ubot", "from:ubot", h.SendMessage)

@@ -184,6 +184,8 @@ func (s *SQLiteClient) initTables() error {
 			lists TEXT DEFAULT '[]',
 			groups TEXT DEFAULT '[]',
 			topics TEXT DEFAULT '[]',
+			broadcast_index INTEGER DEFAULT 0,
+			broadcast_next_at INTEGER DEFAULT 0,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 
@@ -231,6 +233,8 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec(`ALTER TABLE userbot_notes ADD COLUMN cache_channel TEXT DEFAULT '';`)
 	_, _ = s.DB.Exec(`ALTER TABLE log_routes ADD COLUMN peer_type TEXT DEFAULT 'user';`)
 	_, _ = s.DB.Exec(`ALTER TABLE log_routes ADD COLUMN access_hash INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_index INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_next_at INTEGER DEFAULT 0;`)
 
 	return nil
 }
@@ -479,7 +483,6 @@ func (s *SQLiteClient) CountNotes(ctx context.Context, ownerID int64) (int, erro
 	err := s.DB.QueryRowContext(ctx, query, ownerID).Scan(&count)
 	return count, err
 }
-
 
 func (s *SQLiteClient) CountAllNotes(ctx context.Context) (int, error) {
 	var count int

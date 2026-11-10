@@ -1,11 +1,57 @@
+# Secrets and local configuration
 .env
-ubot/configs.yaml
-gateway/configs.yaml
+.env.*
+!.env.example
+**/configs.yaml
 sync_config.jsonc
+
+# Runtime databases and SQLite sidecar files
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Build outputs and compiled binaries
 *.exe
-gateway/gateway-bin
-ubot/ubot-bin
+*.dll
+*.so
+*.dylib
+**/*-bin
+**/*-bin.exe
+**/main.exe
+
+# Logs and local runtime output
 *.log
+logs/
+**/logs/
+
+# Go and general build caches
 .cache/
 .gocache/
 .gocache*/
+**/.cache/
+**/.gocache/
+**/.gocache*/
+tmp/
+temp/
+
+# Local development environments
+gotdVenv/
+.venv/
+venv/
+**/node_modules/
+
+# IDE and OS metadata
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Coverage and test artifacts
+coverage.out
+coverage.html
+*.prof
