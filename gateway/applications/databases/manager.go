@@ -57,21 +57,22 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 }
 
 func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebConfig {
-	// 1. Coba baca dari SQLite untuk latensi instan (< 1ms)
-	if m.sqlite != nil {
-		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
-		if err == nil && cfg != nil {
-			return cfg
-		}
-	}
-
-	// 2. Fallback ke MongoDB Cloud Atlas
+	// MongoDB adalah sumber utama karena userbot menyimpan List/Grup di
+	// collection jaseb_configurasi. SQLite Gateway hanya cache lokal.
 	if m.mongo != nil {
 		cfg, err := m.mongo.GetConfig(ctx, ownerID)
 		if err == nil && cfg != nil {
 			if m.sqlite != nil {
 				_ = m.sqlite.SaveConfig(ctx, cfg)
 			}
+			return cfg
+		}
+	}
+
+	// Fallback saat MongoDB tidak tersedia.
+	if m.sqlite != nil {
+		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
+		if err == nil && cfg != nil {
 			return cfg
 		}
 	}

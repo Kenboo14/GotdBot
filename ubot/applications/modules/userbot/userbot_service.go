@@ -349,11 +349,27 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 	if job.Type == "cache_list" {
-		go s.handleCacheList(context.Background(), client, job.ChatID, targetID, job.Text)
+		go s.handleCacheList(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs)
 		return
 	}
 	if job.Type == "cache_watermark" {
-		go s.handleCacheWatermark(context.Background(), client, job.ChatID, targetID, job.Text)
+		go s.handleCacheWatermark(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs)
+		return
+	}
+	if job.Type == "get_list_detail" {
+		go s.handleListDetail(context.Background(), client, job.ChatID, targetID, job.TaskID)
+		return
+	}
+	if job.Type == "get_list_previews" {
+		go s.handleListPreviews(context.Background(), client, job.ChatID, targetID, job.TaskID)
+		return
+	}
+	if job.Type == "clear_panel_lists" || job.Type == "clear_panel_groups" {
+		go s.clearPanelData(context.Background(), targetID, job.Type == "clear_panel_lists")
+		return
+	}
+	if job.Type == "delete_panel_list" {
+		go s.deletePanelList(context.Background(), targetID, job.Text)
 		return
 	}
 	if job.Type == "start_panel_broadcast" {

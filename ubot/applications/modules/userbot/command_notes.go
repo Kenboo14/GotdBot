@@ -71,12 +71,12 @@ func getSessionCacheTopicID() int {
 }
 
 var (
-	noteNameRe       = regexp.MustCompile(`^[\w-]{1,32}$`)
-	urlButtonRe      = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|\[(?:https?://[^\]]+)\]\((https?://[^)]+)\)\]`)
-	urlButtonSimpRe  = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|(https?://[^\]\s]+)\]`)
-	cbButtonRe       = regexp.MustCompile(`\[([^\[\]#]{1,40})#([\w-]{1,32})\]`)
-	popButtonRe      = regexp.MustCompile(`\[([^\[\]$]{1,40})\$([\w-]{1,32})\]`)
-	htmlTagRe        = regexp.MustCompile(`(?i)</?(?:b|strong|i|em|u|s|strike|code|pre|blockquote|a|tg-spoiler)(?:\s|>)`)
+	noteNameRe      = regexp.MustCompile(`^[\w-]{1,32}$`)
+	urlButtonRe     = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|\[(?:https?://[^\]]+)\]\((https?://[^)]+)\)\]`)
+	urlButtonSimpRe = regexp.MustCompile(`(?i)\[([^\[\]|]+)\|(https?://[^\]\s]+)\]`)
+	cbButtonRe      = regexp.MustCompile(`\[([^\[\]#]{1,40})#([\w-]{1,32})\]`)
+	popButtonRe     = regexp.MustCompile(`\[([^\[\]$]{1,40})\$([\w-]{1,32})\]`)
+	htmlTagRe       = regexp.MustCompile(`(?i)</?(?:b|strong|i|em|u|s|strike|code|pre|blockquote|a|tg-spoiler)(?:\s|>)`)
 )
 
 type NoteButton struct {
@@ -238,7 +238,7 @@ func (s *Service) sendReplyToAiotdCaches(ctx context.Context, client *telegram.C
 	return cachedMsgID, nil
 }
 
-func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *telegram.Client, topicID int, text string) (int, error) {
+func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *telegram.Client, topicID int, text string, entities []tg.MessageEntityClass) (int, error) {
 	groupCache := getGroupCache()
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
@@ -255,6 +255,7 @@ func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *telegr
 		Peer:     cachePeer,
 		ReplyTo:  replyTo,
 		Message:  text,
+		Entities: entities,
 		RandomID: randomID,
 	}
 	updates, err := client.API().MessagesSendMessage(ctx, req)
@@ -430,7 +431,7 @@ func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, 
 				"media_type":       nr.MediaType,
 				"media_data":       nr.MediaData,
 				"cache_message_id": nr.CacheMessageID,
-				"cache_channel":   nr.CacheChannel,
+				"cache_channel":    nr.CacheChannel,
 				"updated_at":       time.Now(),
 			}}
 			_, err := s.db.Collection("userbot_notes").UpdateOne(bgCtx, filter, update, options.Update().SetUpsert(true))
@@ -909,7 +910,7 @@ DownloadDone:
 							"media_type":       nr.MediaType,
 							"media_data":       nr.MediaData,
 							"cache_message_id": nr.CacheMessageID,
-							"cache_channel":   nr.CacheChannel,
+							"cache_channel":    nr.CacheChannel,
 							"updated_at":       time.Now(),
 						}}
 						_, err := s.db.Collection("userbot_notes").UpdateOne(bgCtx, filter, update, options.Update().SetUpsert(true))
@@ -961,6 +962,13 @@ func convertEntitiesToHTML(text string, entities []tg.MessageEntityClass) string
 		case *tg.MessageEntitySpoiler:
 			inserts = append(inserts, insert{pos: entity.Offset, tag: "<tg-spoiler>"})
 			inserts = append(inserts, insert{pos: entity.Offset + entity.Length, tag: "</tg-spoiler>"})
+		case *tg.MessageEntityBlockquote:
+			open := "<blockquote>"
+			if entity.Collapsed {
+				open = "<blockquote expandable>"
+			}
+			inserts = append(inserts, insert{pos: entity.Offset, tag: open})
+			inserts = append(inserts, insert{pos: entity.Offset + entity.Length, tag: "</blockquote>"})
 		case *tg.MessageEntityTextURL:
 			inserts = append(inserts, insert{pos: entity.Offset, tag: fmt.Sprintf("<a href=\"%s\">", html.EscapeString(entity.URL))})
 			inserts = append(inserts, insert{pos: entity.Offset + entity.Length, tag: "</a>"})

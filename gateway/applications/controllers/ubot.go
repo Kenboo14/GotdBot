@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -55,6 +57,9 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 		h.handleBroadcastMonitor(ctx, b, data)
 		return
 	}
+	if data.State == "panel_notice" {
+		h.clearProgress(ctx, b, data.ChatID)
+	}
 	if data.ChatID == 0 || strings.TrimSpace(data.Text) == "" {
 		log.Printf("incomplete Redis message %s", msg.ID)
 		return
@@ -81,6 +86,31 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 	case "panel_notice":
 		params.ParseMode = "HTML"
 		params.ReplyMarkup = grupListMenuMarkup
+	}
+	switch data.Type {
+	case "list_detail":
+		params.ParseMode = "HTML"
+		params.ReplyMarkup = &t_models.InlineKeyboardMarkup{InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}}}}
+	case "list_previews":
+		params.ParseMode = "HTML"
+		count, _ := strconv.Atoi(data.TaskID)
+		params.ReplyMarkup = browseListMarkup(count)
+	}
+	if data.MediaCacheID > 0 {
+		cache := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+		if cache == "" {
+			cache = "AiotdCaches"
+		}
+		if _, err := b.CopyMessage(ctx, &bot.CopyMessageParams{
+			ChatID:      data.ChatID,
+			FromChatID:  "@" + cache,
+			MessageID:   data.MediaCacheID,
+			ReplyMarkup: params.ReplyMarkup,
+		}); err == nil {
+			return
+		} else {
+			log.Printf("Telegram copy cached media failed (cache=%s message=%d): %v", cache, data.MediaCacheID, err)
+		}
 	}
 	if _, err := b.SendMessage(ctx, params); err != nil {
 		log.Printf("Telegram send failed: %v", err)

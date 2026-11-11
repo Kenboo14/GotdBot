@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -45,7 +46,6 @@ var (
 			{{Text: "🧑‍💻 Cek Topic 🧑‍💻"}, {Text: "🧑‍💻 Topic 🧑‍💻"}, {Text: "📌 List Topic"}},
 			{{Text: "📁 Cek List 📁"}, {Text: "📚 Cek Grup 📚"}},
 			{{Text: "📝 Tambah List 📝"}, {Text: "📝 Tambah Grup 📝"}},
-			{{Text: "♨️ Hapus List ♨️"}, {Text: "♨️ Hapus Grup ♨️"}},
 			{{Text: "📦 Sebar Ke RC 📦"}, {Text: "🌐 Home 🌐"}},
 		},
 		ResizeKeyboard: true,
@@ -338,6 +338,95 @@ func (h *Handler) CekGrup(ctx context.Context, b *bot.Bot, chatID, userID int64)
 		ParseMode:   "HTML",
 		ReplyMarkup: grupListMenuMarkup,
 	})
+}
+
+func browseKeyboard(count int, allText string) *t_models.ReplyKeyboardMarkup {
+	rows := [][]t_models.KeyboardButton{{{Text: allText}}}
+	for start := 0; start < count; start += 5 {
+		row := make([]t_models.KeyboardButton, 0, 5)
+		for i := start; i < start+5 && i < count; i++ {
+			row = append(row, t_models.KeyboardButton{Text: strconv.Itoa(i + 1)})
+		}
+		rows = append(rows, row)
+	}
+	rows = append(rows, []t_models.KeyboardButton{{Text: "Kembali"}})
+	return &t_models.ReplyKeyboardMarkup{Keyboard: rows, ResizeKeyboard: true}
+}
+
+func browseListMarkup(count int) *t_models.ReplyKeyboardMarkup {
+	return browseKeyboard(count, "Hapus Semua List")
+}
+func browseGroupMarkup(count int) *t_models.ReplyKeyboardMarkup {
+	return browseKeyboard(count, "Hapus Semua Grup")
+}
+
+func (h *Handler) DisplayList(ctx context.Context, b *bot.Bot, chatID, userID int64) {
+	lists := h.db.GetLists(ctx, userID)
+	if len(lists) == 0 {
+		h.setPanelState(chatID, "")
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "📁 <b>List kosong.</b>\n\nBelum ada list yang tersimpan.", ParseMode: "HTML", ReplyMarkup: grupListMenuMarkup})
+		return
+	}
+	h.setPanelState(chatID, "browse_list")
+	payload := models.PToService{ChatID: chatID, UserID: userID, Type: "get_list_previews", TaskID: strconv.Itoa(len(lists))}
+	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "❌ Preview List tidak dapat diminta dari userbot.", ReplyMarkup: browseListMarkup(len(lists))})
+	}
+}
+
+func (h *Handler) DisplayGroup(ctx context.Context, b *bot.Bot, chatID, userID int64) {
+	groups := h.db.GetGroups(ctx, userID)
+	if len(groups) == 0 {
+		h.setPanelState(chatID, "")
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "📚 <b>Grup kosong.</b>\n\nBelum ada grup yang tersimpan.", ParseMode: "HTML", ReplyMarkup: grupListMenuMarkup})
+		return
+	}
+	h.setPanelState(chatID, "browse_group")
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "📚 <b>Display Grup</b>\n\nTotal tersimpan: <code>%d</code>\n\n", len(groups))
+	for i, group := range groups {
+		title := strings.Join(strings.Fields(group.Title), " ")
+		words := strings.Fields(title)
+		if len(words) > 6 {
+			title = strings.Join(words[:6], " ") + "…"
+		}
+		if title == "" {
+			title = group.Target
+		}
+		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
+	}
+	builder.WriteString("\nPilih angka untuk menghapus grup tersebut.")
+	text := builder.String()
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ParseMode: "HTML", ReplyMarkup: browseGroupMarkup(len(groups))})
+}
+
+func (h *Handler) showListDetail(ctx context.Context, b *bot.Bot, chatID, userID int64, index int) {
+	lists := h.db.GetLists(ctx, userID)
+	if index < 0 || index >= len(lists) {
+		h.DisplayList(ctx, b, chatID, userID)
+		return
+	}
+	h.setPanelState(chatID, "list_detail")
+	payload := models.PToService{ChatID: chatID, UserID: userID, Type: "get_list_detail", TaskID: strconv.Itoa(index), Text: strconv.Itoa(lists[index])}
+	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "❌ Detail list tidak dapat diminta dari userbot.", ReplyMarkup: browseListMarkup(len(lists))})
+	}
+}
+
+func (h *Handler) showGroupDetail(ctx context.Context, b *bot.Bot, chatID, userID int64, index int) {
+	groups := h.db.GetGroups(ctx, userID)
+	if index < 0 || index >= len(groups) {
+		h.DisplayGroup(ctx, b, chatID, userID)
+		return
+	}
+	g := groups[index]
+	title := g.Title
+	if title == "" {
+		title = g.Target
+	}
+	text := fmt.Sprintf("📚 <b>Detail Grup #%d</b>\n\n<b>Nama:</b> %s\n<b>Target:</b> <code>%s</code>\n<b>Chat ID:</b> <code>%d</code>", index+1, html.EscapeString(title), html.EscapeString(g.Target), g.ChatID)
+	markup := &t_models.InlineKeyboardMarkup{InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "🗑️ Hapus Grup", CallbackData: fmt.Sprintf("panel:group:delete:%d", index)}}}}
+	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ParseMode: "HTML", ReplyMarkup: markup})
 }
 
 // PromptHapusList prompts for list deletion
@@ -806,8 +895,99 @@ func (h *Handler) ShowWebapp(ctx context.Context, b *bot.Bot, chatID int64) {
 	})
 }
 
+// HandlePanelMedia routes media/caption messages into the same panel state flow.
+func (h *Handler) HandlePanelMedia(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+	if update == nil || update.Message == nil || update.Message.From == nil {
+		return
+	}
+	message := update.Message
+	state := h.getPanelState(message.Chat.ID)
+	if state != "waiting_add_list" && state != "waiting_add_watermark" {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: message.Chat.ID, Text: "Kirim media saat menu List atau Watermark sedang menunggu input.", ReplyMarkup: mainMenuMarkup})
+		return
+	}
+	if message.MediaGroupID != "" {
+		key := fmt.Sprintf("%d:%s:%s", message.Chat.ID, state, message.MediaGroupID)
+		h.mediaMu.Lock()
+		batch := h.mediaBatches[key]
+		if batch == nil {
+			batch = &panelMediaBatch{ChatID: message.Chat.ID, UserID: message.From.ID, State: state}
+			h.mediaBatches[key] = batch
+		}
+		batch.SourceIDs = append(batch.SourceIDs, message.ID)
+		h.mediaMu.Unlock()
+		time.AfterFunc(900*time.Millisecond, func() { h.flushPanelMediaGroup(ctx, b, key) })
+		return
+	}
+	h.stagePanelMedia(ctx, b, message.Chat.ID, message.From.ID, state, []int{message.ID})
+}
+
+func (h *Handler) flushPanelMediaGroup(ctx context.Context, b *bot.Bot, key string) {
+	h.mediaMu.Lock()
+	batch := h.mediaBatches[key]
+	delete(h.mediaBatches, key)
+	h.mediaMu.Unlock()
+	if batch == nil {
+		return
+	}
+	h.stagePanelMedia(ctx, b, batch.ChatID, batch.UserID, batch.State, batch.SourceIDs)
+}
+
+func (h *Handler) stagePanelMedia(ctx context.Context, b *bot.Bot, chatID, userID int64, state string, sourceIDs []int) {
+	cache := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+	if cache == "" {
+		cache = "AiotdCaches"
+	}
+	topic := os.Getenv("TEKS_CACHE")
+	jobType := "cache_list"
+	if state == "waiting_add_watermark" {
+		topic = os.Getenv("WATERMARK_CACHE")
+		jobType = "cache_watermark"
+	}
+	topicID, err := strconv.Atoi(strings.TrimSpace(topic))
+	if err != nil || topicID <= 0 {
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "❌ Topic cache belum dikonfigurasi."})
+		return
+	}
+	ids, err := b.CopyMessages(ctx, &bot.CopyMessagesParams{ChatID: "@" + cache, FromChatID: chatID, MessageThreadID: topicID, MessageIDs: sourceIDs})
+	if err != nil || len(ids) == 0 {
+		log.Printf("copy media to cache failed: %v", err)
+		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "❌ Gagal menyimpan media ke cache."})
+		return
+	}
+	cacheIDs := make([]int, 0, len(ids))
+	for _, id := range ids {
+		cacheIDs = append(cacheIDs, id.ID)
+	}
+	h.setPanelState(chatID, "")
+	if err := h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: jobType, MediaCacheIDs: cacheIDs}); err != nil {
+		log.Printf("media cache broker error: %v", err)
+		return
+	}
+	h.sendProgress(ctx, b, chatID, &bot.SendMessageParams{ChatID: chatID, Text: "⏳ <b>Sedang mengamankan media ke cache...</b>", ParseMode: "HTML", ReplyMarkup: grupListMenuMarkup})
+}
+
+func panelEntities(message *t_models.Message) []models.MessageEntity {
+	if message == nil {
+		return nil
+	}
+	entities := message.Entities
+	if message.Caption != "" {
+		entities = message.CaptionEntities
+	}
+	result := make([]models.MessageEntity, 0, len(entities))
+	for _, entity := range entities {
+		item := models.MessageEntity{Type: string(entity.Type), Offset: entity.Offset, Length: entity.Length, URL: entity.URL, Language: entity.Language, CustomEmojiID: entity.CustomEmojiID}
+		if entity.User != nil {
+			item.UserID = entity.User.ID
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
 // HandlePanelInput processes text inputs when user is in a state
-func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, userID int64, text string) bool {
+func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, userID int64, text string, message *t_models.Message) bool {
 	state := h.getPanelState(chatID)
 	if state == "" {
 		return false
@@ -826,12 +1006,15 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 
 	switch state {
 	case "waiting_add_list":
-		h.setPanelState(chatID, "")
+		if message == nil || message.MediaGroupID == "" {
+			h.setPanelState(chatID, "")
+		}
 		payload := models.PToService{
-			ChatID: chatID,
-			UserID: userID,
-			Type:   "cache_list",
-			Text:   text,
+			ChatID:   chatID,
+			UserID:   userID,
+			Type:     "cache_list",
+			Text:     text,
+			Entities: panelEntities(message),
 		}
 		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 			log.Printf("cache_list broker error: %v", err)
@@ -843,7 +1026,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 			})
 			return true
 		}
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		h.sendProgress(ctx, b, chatID, &bot.SendMessageParams{
 			ChatID:      chatID,
 			Text:        "⏳ <b>Sedang mengamankan materi list ke cache...</b>\n\n<blockquote><i>Userbot sedang me-reply teks promosi ke @AiotdCaches (Topic 3325).</i></blockquote>",
 			ParseMode:   "HTML",
@@ -888,6 +1071,48 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
+		return true
+
+	case "browse_list", "list_detail":
+		if text == "Hapus Semua List" {
+			_ = h.db.ClearLists(ctx, userID)
+			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
+			h.DisplayList(ctx, b, chatID, userID)
+			return true
+		}
+		if text == "Kembali" {
+			h.ShowGrupList(ctx, b, chatID, userID)
+			return true
+		}
+		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
+			if state == "list_detail" {
+				b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "⚠️ Mohon pilih kembali list yang ingin dihapus melalui tombol inline pada detail list.", ParseMode: "HTML", ReplyMarkup: browseListMarkup(len(h.db.GetLists(ctx, userID)))})
+				return true
+			}
+			h.showListDetail(ctx, b, chatID, userID, idx-1)
+			return true
+		}
+		return true
+
+	case "browse_group":
+		if text == "Hapus Semua Grup" {
+			_ = h.db.ClearGroups(ctx, userID)
+			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_groups"})
+			h.DisplayGroup(ctx, b, chatID, userID)
+			return true
+		}
+		if text == "Kembali" {
+			h.ShowGrupList(ctx, b, chatID, userID)
+			return true
+		}
+		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
+			groups := h.db.GetGroups(ctx, userID)
+			if idx <= len(groups) {
+				_ = h.db.DeleteGroupByIndex(ctx, userID, idx-1)
+			}
+			h.DisplayGroup(ctx, b, chatID, userID)
+			return true
+		}
 		return true
 
 	case "waiting_del_list":
@@ -1008,7 +1233,9 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 		return true
 
 	case "waiting_set_watermark":
-		h.setPanelState(chatID, "")
+		if message == nil || message.MediaGroupID == "" {
+			h.setPanelState(chatID, "")
+		}
 		cfg := h.db.GetUserConfig(ctx, userID)
 		if text == "🗑️ Hapus Watermark 🗑️" || strings.EqualFold(text, "hapus") {
 			cfg.Watermark = ""
@@ -1023,10 +1250,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 			return true
 		}
 		payload := models.PToService{
-			ChatID: chatID,
-			UserID: userID,
-			Type:   "cache_watermark",
-			Text:   text,
+			ChatID:   chatID,
+			UserID:   userID,
+			Type:     "cache_watermark",
+			Text:     text,
+			Entities: panelEntities(message),
 		}
 		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 			log.Printf("cache_watermark broker error: %v", err)
@@ -1038,7 +1266,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *bot.Bot, chatID, user
 			})
 			return true
 		}
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		h.sendProgress(ctx, b, chatID, &bot.SendMessageParams{
 			ChatID:      chatID,
 			Text:        "⏳ <b>Sedang mengamankan custom watermark ke cache...</b>\n\n<blockquote><i>Userbot sedang me-reply teks watermark ke @AiotdCaches (Topic 6847).</i></blockquote>",
 			ParseMode:   "HTML",
@@ -1123,7 +1351,7 @@ func (h *Handler) FetchAllGroupsFromAccount(ctx context.Context, b *bot.Bot, cha
 	sb.WriteString("<blockquote><i>Menghubungi engine userbot untuk membaca seluruh grup dan supergroup yang diikuti akun Telegram Anda.</i></blockquote>\n\n")
 	sb.WriteString("<i>Proses ini berjalan di latar belakang. Anda akan menerima laporan otomatis begitu sinkronisasi selesai.</i>")
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	h.sendProgress(ctx, b, chatID, &bot.SendMessageParams{
 		ChatID:      chatID,
 		Text:        sb.String(),
 		ParseMode:   "HTML",
@@ -1154,7 +1382,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *bot.Bot, update *t_mo
 	text := strings.TrimSpace(update.Message.Text)
 
 	// Cek apakah user sedang berada dalam input state
-	if h.HandlePanelInput(ctx, b, chatID, userID, text) {
+	if h.HandlePanelInput(ctx, b, chatID, userID, text, update.Message) {
 		return true
 	}
 
@@ -1239,11 +1467,11 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *bot.Bot, update *t_mo
 
 	// Grup & List Actions
 	case "📁 Cek List 📁":
-		h.CekList(ctx, b, chatID, userID)
+		h.DisplayList(ctx, b, chatID, userID)
 		return true
 
 	case "📚 Cek Grup 📚":
-		h.CekGrup(ctx, b, chatID, userID)
+		h.DisplayGroup(ctx, b, chatID, userID)
 		return true
 
 	case "📝 Tambah List 📝":
@@ -1260,14 +1488,6 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *bot.Bot, update *t_mo
 
 	case "📝 Tambahkan Grup Manual 📝":
 		h.PromptTambahGrupManual(ctx, b, chatID)
-		return true
-
-	case "♨️ Hapus List ♨️":
-		h.PromptHapusList(ctx, b, chatID, userID)
-		return true
-
-	case "♨️ Hapus Grup ♨️":
-		h.PromptHapusGrup(ctx, b, chatID, userID)
 		return true
 
 	case "🧑‍💻 Cek Topic 🧑‍💻", "📌 List Topic":
@@ -1310,24 +1530,24 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *bot.Bot, update *t_mo
 
 	case "🗑️ Reset Konfigurasi 🗑️":
 		defaultCfg := &databases.UserConfig{
-			OwnerID:         userID,
-			Type:            "Broadcast",
-			Delay:           5,
-			SkipFloodWait:   false,
-			Timer:           "Belum diatur",
-			Extra:           0,
-			Mode:            "Normal",
-			Safemode:        false,
-			Status:          "Berhenti",
-			MasaAktif:       "November 29, 2026 at 14:18",
-			Notifikasi:      "Aktif · Kirim ke Saya",
-			Email:           "Belum diatur",
-			Admin:           "Belum diatur",
-			Watermark:       "",
-			TopicEnabled:    false,
-			TindakanTerkini: "Siaran otomatis dimatikan",
+			OwnerID:          userID,
+			Type:             "Broadcast",
+			Delay:            5,
+			SkipFloodWait:    false,
+			Timer:            "Belum diatur",
+			Extra:            0,
+			Mode:             "Normal",
+			Safemode:         false,
+			Status:           "Berhenti",
+			MasaAktif:        "November 29, 2026 at 14:18",
+			Notifikasi:       "Aktif · Kirim ke Saya",
+			Email:            "Belum diatur",
+			Admin:            "Belum diatur",
+			Watermark:        "",
+			TopicEnabled:     false,
+			TindakanTerkini:  "Siaran otomatis dimatikan",
 			TindakanTerakhir: "-",
-			UpdatedAt:       time.Now(),
+			UpdatedAt:        time.Now(),
 		}
 		_ = h.db.SaveUserConfig(ctx, defaultCfg)
 		b.SendMessage(ctx, &bot.SendMessageParams{
