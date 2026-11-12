@@ -195,7 +195,6 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 </table>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:list:delete:%s" style="danger">🗑️ Hapus List</tg-button>
-  <tg-button type="callback_data" data="panel:list:back" style="primary">🔙 Kembali ke List</tg-button>
 </tg-button-row>
 <hr/>
 <p>GotdBot • Promotional Content Manager</p>`, index+1, displayContent, index+1, mediaType, msgID, taskID)
