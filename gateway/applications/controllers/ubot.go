@@ -90,6 +90,71 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		params.ReplyMarkup = grupListMenuMarkup
 	}
 	if data.Type == "list_detail" {
+		detailMarkup := &botgotd.InlineKeyboardMarkup{
+			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
+				{{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}},
+			},
+		}
+
+		cache := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+		if cache == "" {
+			cache = "AiotdCaches"
+		}
+
+		// KASUS 1: Media Album / Grup (lebih dari 1 media)
+		if len(data.MediaCacheIDs) > 1 {
+			copied, err := b.CopyMessages(ctx, &botgotd.CopyMessagesParams{
+				ChatID:     data.ChatID,
+				FromChatID: "@" + cache,
+				MessageIDs: data.MediaCacheIDs,
+			})
+			if err == nil && len(copied) > 0 {
+				var copiedIDs []int
+				for _, c := range copied {
+					copiedIDs = append(copiedIDs, c.ID)
+				}
+				lastMsg := copied[len(copied)-1]
+				_, markupErr := b.EditMessageReplyMarkup(ctx, &botgotd.EditMessageReplyMarkupParams{
+					ChatID:      data.ChatID,
+					MessageID:   lastMsg.ID,
+					ReplyMarkup: detailMarkup,
+				})
+				if markupErr != nil {
+					richSentMsg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
+						ChatID:    data.ChatID,
+						Text:      data.Text,
+						ParseMode: "HTML",
+					})
+					if richSentMsg != nil {
+						copiedIDs = append(copiedIDs, richSentMsg.ID)
+					}
+				}
+				h.trackDetailMessageIDs(ctx, data.ChatID, copiedIDs)
+				return
+			}
+			log.Printf("Telegram copy cached media group failed (cache=%s): %v", cache, err)
+		}
+
+		// KASUS 2: Media Tunggal (1 media foto/video/dokumen)
+		if data.MediaCacheID > 0 || len(data.MediaCacheIDs) == 1 {
+			targetMediaID := data.MediaCacheID
+			if targetMediaID == 0 && len(data.MediaCacheIDs) == 1 {
+				targetMediaID = data.MediaCacheIDs[0]
+			}
+			copiedMsg, err := b.CopyMessage(ctx, &botgotd.CopyMessageParams{
+				ChatID:      data.ChatID,
+				FromChatID:  "@" + cache,
+				MessageID:   targetMediaID,
+				ReplyMarkup: detailMarkup,
+			})
+			if err == nil && copiedMsg != nil {
+				h.trackDetailMessageIDs(ctx, data.ChatID, []int{copiedMsg.ID})
+				return
+			}
+			log.Printf("Telegram copy cached single media failed (cache=%s message=%d): %v", cache, targetMediaID, err)
+		}
+
+		// KASUS 3: Teks Biasa (tidak ada media)
 		sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    data.ChatID,
 			Text:      data.Text,
