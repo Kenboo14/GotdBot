@@ -78,7 +78,9 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 		}
 	}
 	if mg := m.getMongo(); mg != nil {
-		has, err := mg.HasSession(ctx, ownerID)
+		mongoCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		has, err := mg.HasSession(mongoCtx, ownerID)
 		if err == nil && has {
 			return true
 		}
@@ -87,22 +89,25 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 }
 
 func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebConfig {
-	// MongoDB adalah sumber utama karena userbot menyimpan List/Grup di
-	// collection jaseb_configurasi. SQLite Gateway hanya cache lokal.
-	if mg := m.getMongo(); mg != nil {
-		cfg, err := mg.GetConfig(ctx, ownerID)
+	// Baca dari SQLite lokal dulu (lokal, instan) — sumber paling cepat.
+	// SQLite sudah selalu disinkronkan setiap SaveUserConfig dipanggil.
+	if m.sqlite != nil {
+		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
 		if err == nil && cfg != nil {
-			if m.sqlite != nil {
-				_ = m.sqlite.SaveConfig(ctx, cfg)
-			}
 			return cfg
 		}
 	}
 
-	// Fallback saat MongoDB tidak tersedia.
-	if m.sqlite != nil {
-		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
+	// Fallback: query MongoDB jika SQLite belum punya data (mis. pertama kali).
+	if mg := m.getMongo(); mg != nil {
+		mongoCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		cfg, err := mg.GetConfig(mongoCtx, ownerID)
 		if err == nil && cfg != nil {
+			// Simpan ke SQLite agar query berikutnya langsung dari lokal
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveConfig(ctx, cfg)
+			}
 			return cfg
 		}
 	}
@@ -137,24 +142,30 @@ func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebCo
 	return defaultCfg
 }
 
-// SaveUserConfig: "setiap perubahan datanya disimpan di mongodb, lalu sqlite hanya menyinkronkan jika terjadi perubahan"
+// SaveUserConfig: simpan SQLite langsung (synchronous), MongoDB di goroutine background (non-blocking).
 func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) error {
 	cfg.UpdatedAt = time.Now()
 
-	// 1. Simpan ke MongoDB sebagai database utama
-	if mg := m.getMongo(); mg != nil {
-		if err := mg.SaveConfig(ctx, cfg); err != nil {
-			log.Printf("⚠️ MongoDB SaveConfig error: %v", err)
-		}
-	}
-
-	// 2. Sinkronkan perubahan ke SQLite lokal
+	// 1. Simpan ke SQLite lokal dulu — langsung, tidak memblokir response panel
 	if m.sqlite != nil {
 		if err := m.sqlite.SaveConfig(ctx, cfg); err != nil {
 			log.Printf("⚠️ SQLite SyncConfig error: %v", err)
 			return err
 		}
 	}
+
+	// 2. Simpan ke MongoDB di background — tidak memblokir response ke user
+	if mg := m.getMongo(); mg != nil {
+		cfgCopy := *cfg
+		go func() {
+			mongoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := mg.SaveConfig(mongoCtx, &cfgCopy); err != nil {
+				log.Printf("⚠️ MongoDB SaveConfig error: %v", err)
+			}
+		}()
+	}
+
 	return nil
 }
 
