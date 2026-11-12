@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -185,7 +186,20 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 			}
 		}
 	}
-	text := fmt.Sprintf(`<h1>📁 Detail List #%d</h1>
+	previewMediaID := mediaCacheID
+	if previewMediaID == 0 && len(mediaCacheIDs) > 0 {
+		previewMediaID = mediaCacheIDs[0]
+	}
+	mediaLink := ""
+	if previewMediaID > 0 {
+		cacheGroup := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+		if cacheGroup == "" {
+			cacheGroup = "AiotdCaches"
+		}
+		mediaLink = fmt.Sprintf(`<a href="https://t.me/%s/%d">&#8204;</a>`, cacheGroup, previewMediaID)
+	}
+
+	text := fmt.Sprintf(`%s<h1>📁 Detail List #%d</h1>
 <blockquote expandable>%s</blockquote>
 <table border="1">
   <tr><th>📌 Properti</th><th>Nilai</th></tr>
@@ -197,7 +211,7 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
   <tg-button type="callback_data" data="panel:list:delete:%s" style="danger">🗑️ Hapus List</tg-button>
 </tg-button-row>
 <hr/>
-<p>GotdBot • Promotional Content Manager</p>`, index+1, displayContent, index+1, mediaType, msgID, taskID)
+<p>GotdBot • Promotional Content Manager</p>`, mediaLink, index+1, displayContent, index+1, mediaType, msgID, taskID)
 	// Kirim data ke Redis agar BOT (Gateway) yang mengirimkan pesan detail langsung ke pengguna di chat bot.
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
 		ChatID:        chatID,

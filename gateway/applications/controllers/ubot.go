@@ -90,37 +90,6 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		params.ReplyMarkup = grupListMenuMarkup
 	}
 	if data.Type == "list_detail" {
-		detailMarkup := &botgotd.InlineKeyboardMarkup{
-			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}},
-			},
-		}
-
-		cache := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
-		if cache == "" {
-			cache = "AiotdCaches"
-		}
-
-		// KASUS 1: Media Tunggal (1 media foto/video/dokumen) -> Tampilkan langsung medianya dengan 1 tombol Hapus List
-		if (data.MediaCacheID > 0 || len(data.MediaCacheIDs) == 1) && len(data.MediaCacheIDs) <= 1 {
-			targetMediaID := data.MediaCacheID
-			if targetMediaID == 0 && len(data.MediaCacheIDs) == 1 {
-				targetMediaID = data.MediaCacheIDs[0]
-			}
-			copiedMsg, err := b.CopyMessage(ctx, &botgotd.CopyMessageParams{
-				ChatID:      data.ChatID,
-				FromChatID:  "@" + cache,
-				MessageID:   targetMediaID,
-				ReplyMarkup: detailMarkup,
-			})
-			if err == nil && copiedMsg != nil {
-				h.trackDetailMessageIDs(ctx, data.ChatID, []int{copiedMsg.ID})
-				return
-			}
-			log.Printf("Telegram copy cached single media failed (cache=%s message=%d): %v", cache, targetMediaID, err)
-		}
-
-		// KASUS 2: Media Album atau Teks Biasa -> Kirim 1 respon pesan Rich Detail lengkap dengan info tabel & tombol Rich Hapus List
 		sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    data.ChatID,
 			Text:      data.Text,
