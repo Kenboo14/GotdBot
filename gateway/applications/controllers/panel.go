@@ -133,10 +133,14 @@ func (h *Handler) ShowMainMenu(ctx context.Context, b *botgotd.Bot, chatID, user
 		userName = "User"
 	}
 
-	text := fmt.Sprintf(
-		"<b>🤖 GotdBot Control Panel</b>\n━━━━━━━━━━━━━━━━━━━━\n\nHalo, <a href=\"tg://user?id=%d\">%s</a>! Sesi userbot aktif &amp; terhubung.\n\n<i>Gunakan menu di bawah untuk navigasi.</i>",
-		userID, html.EscapeString(userName),
-	)
+	text := fmt.Sprintf(`<h1>🤖 GotdBot Control Panel</h1>
+<blockquote expandable>👋 <b>Halo, <a href="tg://user?id=%d">%s</a>!</b>
+<i>Sesi userbot Anda sedang berjalan dan terhubung dengan aman via MTProto. Seluruh data disinkronkan secara real-time.</i></blockquote>
+<tg-button-row>
+  <tg-button type="callback_data" data="panel:status" style="primary">💎 Cek Status</tg-button>
+</tg-button-row>
+<hr/>
+<p>Silakan gunakan menu navigasi keyboard di bawah untuk mengontrol bot:</p>`, userID, html.EscapeString(userName))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -164,23 +168,30 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 	}
 
 	var sb strings.Builder
-	sb.WriteString("<b>📊 Status Userbot</b>\n━━━━━━━━━━━━━━━━━━━━\n")
-	sb.WriteString(fmt.Sprintf("<b>UserID:</b> <code>%d</code>\n", cfg.OwnerID))
-	sb.WriteString(fmt.Sprintf("<b>Tipe:</b> <code>%s</code>\n", html.EscapeString(cfg.Type)))
-	sb.WriteString(fmt.Sprintf("<b>Mode:</b> <code>%s</code>\n", html.EscapeString(cfg.Mode)))
-	sb.WriteString(fmt.Sprintf("<b>Status:</b> <code>%s</code>\n", html.EscapeString(cfg.Status)))
-	sb.WriteString(fmt.Sprintf("<b>Jeda:</b> <code>%d detik</code>\n", cfg.Delay))
-	sb.WriteString(fmt.Sprintf("<b>Timer:</b> <code>%s</code>\n", html.EscapeString(cfg.Timer)))
-	sb.WriteString(fmt.Sprintf("<b>Extra:</b> <code>%d</code>\n", cfg.Extra))
-	sb.WriteString(fmt.Sprintf("<b>Grup:</b> <code>%d</code>  <b>List:</b> <code>%d</code>\n", gCount, lCount))
-	sb.WriteString(fmt.Sprintf("<b>Safemode:</b> <code>%s</code>  <b>SkipFlood:</b> <code>%s</code>\n", safeMode, skipFw))
-	sb.WriteString(fmt.Sprintf("<b>Notifikasi:</b> <code>%s</code>\n", html.EscapeString(cfg.Notifikasi)))
-	sb.WriteString(fmt.Sprintf("<b>Email:</b> <code>%s</code>\n", html.EscapeString(cfg.Email)))
-	sb.WriteString(fmt.Sprintf("<b>Admin:</b> <code>%s</code>\n", html.EscapeString(cfg.Admin)))
-	sb.WriteString(fmt.Sprintf("<b>Masa Aktif:</b> <code>%s</code>\n", html.EscapeString(cfg.MasaAktif)))
-	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n")
-	sb.WriteString(fmt.Sprintf("<b>Aktivitas:</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerkini)))
-	sb.WriteString(fmt.Sprintf("<b>Terakhir:</b> <i>%s</i>", html.EscapeString(cfg.TindakanTerakhir)))
+	sb.WriteString("<h1>💎 Status Userbot</h1>\n")
+	sb.WriteString("<table border=\"1\">\n")
+	sb.WriteString("  <tr><th>⚙️ Parameter</th><th>📌 Nilai</th></tr>\n")
+	sb.WriteString(fmt.Sprintf("  <tr><td>🏷️ UserID</td><td><code>%d</code></td></tr>\n", cfg.OwnerID))
+	sb.WriteString(fmt.Sprintf("  <tr><td>🧩 Tipe</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Type)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>👑 Mode</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Mode)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>🕒 Jeda</td><td><code>%d detik</code></td></tr>\n", cfg.Delay))
+	sb.WriteString(fmt.Sprintf("  <tr><td>🌐 Target Grup</td><td><code>%d grup</code></td></tr>\n", gCount))
+	sb.WriteString(fmt.Sprintf("  <tr><td>📚 Materi List</td><td><code>%d list</code></td></tr>\n", lCount))
+	sb.WriteString(fmt.Sprintf("  <tr><td>⚠️ Safemode</td><td><code>%s</code></td></tr>\n", safeMode))
+	sb.WriteString(fmt.Sprintf("  <tr><td>⏭️ Skip Flood</td><td><code>%s</code></td></tr>\n", skipFw))
+	sb.WriteString(fmt.Sprintf("  <tr><td>⏱️ Timer</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Timer)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>🚀 Status</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Status)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>🔥 Masa Aktif</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.MasaAktif)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>🔔 Notifikasi</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Notifikasi)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>✉️ Email</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Email)))
+	sb.WriteString(fmt.Sprintf("  <tr><td>👤 Admin</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Admin)))
+	sb.WriteString("</table>\n")
+	sb.WriteString("<blockquote expandable>")
+	sb.WriteString(fmt.Sprintf("📋 <b>Tindakan Terkini :</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerkini)))
+	sb.WriteString(fmt.Sprintf("📄 <b>Tindakan Terakhir :</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerakhir)))
+	sb.WriteString("</blockquote>\n")
+	sb.WriteString("<tg-button-row>\n  <tg-button type=\"callback_data\" data=\"panel:status\" style=\"primary\">🔄 Refresh Status</tg-button>\n</tg-button-row>\n")
+	sb.WriteString("<hr/>\n<p>GotdBot • Userbot Status Dashboard</p>")
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -194,11 +205,13 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 func (h *Handler) ShowGrupList(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	h.setPanelState(chatID, "")
 
-	text := "<b>📂 Grup &amp; List</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"<b>List</b> — materi teks/media yang akan disiarkan.\n" +
-		"<b>Grup</b> — daftar target grup penerima siaran.\n" +
-		"<b>Topic</b> — thread forum untuk penargetan topik khusus.\n\n" +
-		"<i>Pilih aksi dari menu keyboard di bawah.</i>"
+	text := `<h1>🔥 Grup &amp; List</h1>
+<blockquote expandable>💡 <b>Petunjuk Singkat:</b>
+• <b>List :</b> <i>Materi promosi / pesan teks / media yang akan disiarkan.</i>
+• <b>Grup :</b> <i>Daftar grup atau supergroup tujuan siaran.</i>
+• <b>Topic :</b> <i>Thread forum grup Telegram untuk penargetan topik khusus.</i></blockquote>
+<hr/>
+<p>Atur target grup dan materi siaran Anda lewat tombol keyboard navigasi di bawah.</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -212,9 +225,9 @@ func (h *Handler) ShowGrupList(ctx context.Context, b *botgotd.Bot, chatID, user
 func (h *Handler) PromptTambahList(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	h.setPanelState(chatID, "waiting_add_list")
 
-	text := "<b>✏️ Tambah List Baru</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"Kirimkan teks, foto, video, atau dokumen yang akan dijadikan materi siaran.\n\n" +
-		"<i>Ketik /cancel untuk membatalkan.</i>"
+	text := "📝 <b>Masukkan list yang ingin ditambahkan</b>\n\n" +
+		"<blockquote>ℹ️ <b>List adalah teks yang Anda promosikan.</b> <i>Format teks bebas atau caption promosi multi-baris juga didukung.</i></blockquote>\n\n" +
+		"<i>Kirimkan teks pesan sekarang atau klik tombol <b>⬅️ Batal ⬅️</b> di bawah.</i>"
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -228,9 +241,8 @@ func (h *Handler) PromptTambahList(ctx context.Context, b *botgotd.Bot, chatID i
 func (h *Handler) PromptTambahGrup(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	h.setPanelState(chatID, "")
 
-	text := "<b>➕ Tambah Grup Target</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"Pilih cara menambahkan grup ke daftar sebar.\n\n" +
-		"<i>Import otomatis: seluruh grup akun.\nManual: masukkan username atau ID tertentu.</i>"
+	text := "<b>Pilih cara menambahkan grup ke list sebar</b>\n\n" +
+		"<blockquote>💡 <i>Pilih otomatis untuk mengimpor seluruh grup dari akun Anda, atau manual untuk memasukkan target tertentu.</i></blockquote>"
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -244,10 +256,8 @@ func (h *Handler) PromptTambahGrup(ctx context.Context, b *botgotd.Bot, chatID i
 func (h *Handler) PromptTambahGrupManual(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	h.setPanelState(chatID, "waiting_add_group_manual")
 
-	text := "<b>✏️ Tambah Grup Manual</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"Kirim username (<code>@grupkamu</code>), ID (<code>-1001234567890</code>), atau link undangan. " +
-		"Pisahkan dengan baris baru untuk input banyak sekaligus.\n\n" +
-		"<i>Ketik /cancel untuk membatalkan.</i>"
+	text := "📝 <b>Masukkan daftar grup yang ingin ditambahkan</b>\n\n" +
+		"<blockquote>ℹ️ <i>Kirim username grup (contoh: <code>@grupchat</code>), ID grup (contoh: <code>-1001234567890</code>), atau tautan undangan t.me/xxx. Jika lebih dari satu, pisahkan dengan baris baru.</i></blockquote>"
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -375,7 +385,7 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 		h.setPanelState(chatID, "")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "<b>📚 Grup</b>\n━━━━━━━━━━━━━━━━━━━━\n\nBelum ada grup tersimpan.",
+			Text:        "<h1>📚 Display Grup</h1><blockquote expandable>Belum ada grup yang tersimpan.</blockquote><hr/><p>GotdBot • Group Target Manager</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
@@ -383,7 +393,7 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 	}
 	h.setPanelState(chatID, "browse_group")
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<b>📚 Daftar Grup</b>\n━━━━━━━━━━━━━━━━━━━━\nTotal: <b>%d</b> grup\n\n", len(groups))
+	fmt.Fprintf(&builder, "<h1>📚 Display Grup</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b>\n\n", len(groups))
 	for i, group := range groups {
 		title := strings.Join(strings.Fields(group.Title), " ")
 		words := strings.Fields(title)
@@ -393,9 +403,9 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 		if title == "" {
 			title = group.Target
 		}
-		fmt.Fprintf(&builder, "%d. <code>%s</code>  %s\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
+		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
 	}
-	builder.WriteString("\n<i>Ketik nomor untuk melihat detail atau menghapus grup.</i>")
+	builder.WriteString("</blockquote>\n<hr/>\n<p>Pilih nomor di bawah untuk melihat detail atau menghapus grup.</p>")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        builder.String(),
@@ -428,20 +438,29 @@ func (h *Handler) showGroupDetail(ctx context.Context, b *botgotd.Bot, chatID, u
 		h.DisplayGroup(ctx, b, chatID, userID)
 		return
 	}
-	g := groups[index]
-	title := g.Title
+	grp := groups[index]
+	title := strings.TrimSpace(grp.Title)
 	if title == "" {
-		title = g.Target
+		title = grp.Target
 	}
-	text := fmt.Sprintf(
-		"<b>📌 Detail Grup #%d</b>\n━━━━━━━━━━━━━━━━━━━━\n<b>Nama:</b> %s\n<b>Target:</b> <code>%s</code>\n<b>Chat ID:</b> <code>%d</code>",
-		index+1, html.EscapeString(title), html.EscapeString(g.Target), g.ChatID,
-	)
-	markup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-		{{Text: "🗑 Hapus Grup", CallbackData: fmt.Sprintf("panel:group:delete:%d", index)}},
-		{{Text: "← Kembali ke Grup", CallbackData: "panel:group:back"}},
-	}}
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: text, ParseMode: "HTML", ReplyMarkup: markup})
+	richGroupText := fmt.Sprintf(`<h1>📚 Detail Grup #%d</h1>
+<table border="1">
+  <tr><th>Field</th><th>Nilai</th></tr>
+  <tr><td>🏷️ Nama</td><td>%s</td></tr>
+  <tr><td>🎯 Target</td><td><code>%s</code></td></tr>
+  <tr><td>🆔 Chat ID</td><td><code>%d</code></td></tr>
+</table>
+<tg-button-row>
+  <tg-button type="callback_data" data="panel:group:delete:%d" style="danger">🗑️ Hapus Grup</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot • Group Target Manager</p>`, index+1, html.EscapeString(title), html.EscapeString(grp.Target), grp.ChatID, index)
+
+	b.SendMessage(ctx, &botgotd.SendMessageParams{
+		ChatID:    chatID,
+		Text:      richGroupText,
+		ParseMode: "HTML",
+	})
 }
 
 // PromptHapusList prompts for list deletion
@@ -807,11 +826,38 @@ func (h *Handler) PromptReset(ctx context.Context, b *botgotd.Bot, chatID int64)
 
 // ShowShop displays Shop info
 func (h *Handler) ShowShop(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	text := "<b>🛒 GotdBot Store</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"• <b>VIP Userbot</b> — masa aktif tanpa batas &amp; prioritas koneksi.\n" +
-		"• <b>Multi-Account Hub</b> — koneksikan puluhan nomor secara paralel.\n" +
-		"• <b>Dedicated Instance</b> — bot gateway privat eksklusif.\n\n" +
-		"<i>Hubungi admin untuk konsultasi atau upgrade paket.</i>"
+	var sb strings.Builder
+	sb.WriteString("<h1>🛒 GotdBot Store &amp; Layanan Premium</h1>\n")
+	sb.WriteString("<table border=\"1\">\n")
+	sb.WriteString("  <tr><th>💎 Layanan</th><th>⚡ Keunggulan</th></tr>\n")
+	sb.WriteString("  <tr><td>👑 VIP Userbot</td><td>Masa aktif tanpa batas &amp; prioritas MTProto</td></tr>\n")
+	sb.WriteString("  <tr><td>🌐 Multi-Account Hub</td><td>Koneksikan puluhan nomor paralel</td></tr>\n")
+	sb.WriteString("  <tr><td>🚀 Dedicated Instance</td><td>Bot gateway privat eksklusif</td></tr>\n")
+	sb.WriteString("</table>\n")
+	sb.WriteString("<hr/>\n<p>Untuk konsultasi atau upgrade paket, silakan hubungi admin botgotd.</p>")
+
+	b.SendMessage(ctx, &botgotd.SendMessageParams{
+		ChatID:      chatID,
+		Text:        sb.String(),
+		ParseMode:   "HTML",
+		ReplyMarkup: mainMenuMarkup,
+	})
+}
+
+// ShowExpertExtra displays Expert Extra info
+func (h *Handler) ShowExpertExtra(ctx context.Context, b *botgotd.Bot, chatID int64) {
+	text := `<h1>⚡ Expert Extra Features</h1>
+<table border="1">
+  <tr><th>🛠️ Fitur</th><th>📌 Keterangan</th></tr>
+  <tr><td>🛡️ FloodWait Bypass</td><td>Antrean adaptif saat sinyal flood Telegram</td></tr>
+  <tr><td>🔍 Anti-Duplicate</td><td>Cegah pesan ganda ke dialog sama</td></tr>
+  <tr><td>⚡ Pure-Go MTProto</td><td>High performance gotd/td + SQLite WAL</td></tr>
+</table>
+<tg-button-row>
+  <tg-button type="callback_data" data="assist_server:refresh" style="primary">🔄 Server Status</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot • Multi-Configuration VPS Control Panel</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -821,48 +867,27 @@ func (h *Handler) ShowShop(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	})
 }
 
-// ShowExpertExtra displays Expert Extra info
-func (h *Handler) ShowExpertExtra(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	text := "<b>⚡ Expert Features</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"• <b>Smart FloodWait Bypass</b> — antrean jeda adaptif saat Telegram membatasi.\n" +
-		"• <b>Anti-Duplicate Filter</b> — cegah siaran ganda ke dialog yang sama.\n" +
-		"• <b>Pure-Go MTProto</b> — performa tinggi via gotd/td, SQLite WAL &amp; MongoDB.\n\n" +
-		"<i>GotdBot • VPS Control Panel</i>"
-
-	markup := &botgotd.InlineKeyboardMarkup{
-		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-			{{Text: "🖥 Server Status", CallbackData: "assist_server:refresh"}},
-		},
-	}
-
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ParseMode:   "HTML",
-		ReplyMarkup: markup,
-	})
-}
-
 // ShowBantuan displays Bantuan info
 func (h *Handler) ShowBantuan(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	text := "<b>❓ Bantuan Penggunaan</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"• <b>📊 Status</b> — ringkasan konfigurasi &amp; aktivitas akun.\n" +
-		"• <b>📂 Grup &amp; List</b> — kelola materi promosi &amp; target grup.\n" +
-		"• <b>⏱ Atur Jeda</b> — ubah interval pengiriman antar grup.\n" +
-		"• <b>🛡 Safemode</b> — proteksi akun dari limitasi Telegram.\n\n" +
-		"<i>Tekan tombol di bawah untuk panduan lengkap.</i>"
-
-	markup := &botgotd.InlineKeyboardMarkup{
-		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-			{{Text: "📖 Bantuan Lengkap", CallbackData: "assist_help:home"}},
-		},
-	}
+	text := `<h1>⚠️ Panduan &amp; Bantuan Penggunaan</h1>
+<table border="1">
+  <tr><th>🔘 Tombol</th><th>📘 Fungsi</th></tr>
+  <tr><td>💎 Status</td><td>Melihat ringkasan lengkap data dan konfigurasi</td></tr>
+  <tr><td>🧩 Grup &amp; List</td><td>Mengatur materi teks promosi &amp; target grup</td></tr>
+  <tr><td>⌛ Atur Jeda</td><td>Mengubah interval jeda pengiriman antar grup</td></tr>
+  <tr><td>⚠️ Safemode</td><td>Melindungi akun dari risiko limitasi Telegram</td></tr>
+</table>
+<tg-button-row>
+  <tg-button type="callback_data" data="assist_help:home" style="primary">📖 Menu Bantuan Lengkap</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot • Multi-Configuration VPS Control Panel</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
-		ReplyMarkup: markup,
+		ReplyMarkup: mainMenuMarkup,
 	})
 }
 
@@ -873,15 +898,19 @@ func (h *Handler) ShowSettings(ctx context.Context, b *botgotd.Bot, chatID, user
 
 // ShowFeed displays updates feed
 func (h *Handler) ShowFeed(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	text := "<b>📰 Feed &amp; Info</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"<b>Versi:</b> <code>v2.5.0</code>\n\n" +
-		"• Sinkronisasi real-time MongoDB Cloud &amp; SQLite lokal aktif.\n" +
-		"• Dual-layer messaging MTProto + Bot API.\n" +
-		"• Manajemen grup &amp; list sebar terintegrasi."
+	var sb strings.Builder
+	sb.WriteString("<h1>📰 Informasi &amp; Berita GotdBot</h1>\n")
+	sb.WriteString("<table border=\"1\">\n")
+	sb.WriteString("  <tr><th>🚀 Versi</th><th><code>v2.5.0-HighPerformance</code></th></tr>\n")
+	sb.WriteString("  <tr><td>🔄 Sinkronisasi</td><td>MongoDB Cloud Atlas &amp; SQLite WAL</td></tr>\n")
+	sb.WriteString("  <tr><td>⚡ Messaging</td><td>Pure Gotd MTProto Layer 227</td></tr>\n")
+	sb.WriteString("  <tr><td>📦 Manajemen</td><td>Grup &amp; List Terintegrasi</td></tr>\n")
+	sb.WriteString("</table>\n")
+	sb.WriteString("<hr/><p>Dapatkan pembaruan rilis berkala di channel resmi GotdBot.</p>")
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
-		Text:        text,
+		Text:        sb.String(),
 		ParseMode:   "HTML",
 		ReplyMarkup: mainMenuMarkup,
 	})
@@ -889,9 +918,10 @@ func (h *Handler) ShowFeed(ctx context.Context, b *botgotd.Bot, chatID int64) {
 
 // ShowWebapp displays Webapp info
 func (h *Handler) ShowWebapp(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	text := "<b>🌐 Web Dashboard</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" +
-		"Panel kendali visual untuk memantau performa siaran melalui browser.\n\n" +
-		"<i>Integrasi Web Dashboard sedang dalam tahap pengembangan.</i>"
+	text := `<h1>🌐 GotdBot Web Dashboard</h1>
+<blockquote expandable>Akses panel kendali visual untuk memantau performa siaran secara langsung melalui browser atau Telegram Mini App.</blockquote>
+<hr/>
+<p>Integrasi Web Dashboard sedang dalam tahap penyempurnaan cloud.</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,

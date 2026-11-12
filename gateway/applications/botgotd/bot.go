@@ -19,6 +19,7 @@ import (
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/entity"
 	"github.com/gotd/td/telegram/message/html"
+	"github.com/gotd/td/telegram/message/rich"
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
 )
@@ -355,6 +356,9 @@ func (b *Bot) SendMessage(ctx context.Context, params *SendMessageParams) (*Mess
 					ReplyToMsgID: params.ReplyParameters.MessageID,
 				})
 			}
+			if isRichContent(params.Text) {
+				req.SetRichMessage(rich.HTML(params.Text))
+			}
 			updates, err := b.API.MessagesSendMessage(ctx, req)
 			if err == nil {
 				msgID := extractMsgIDFromUpdates(updates)
@@ -536,6 +540,9 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 				Entities:    entities,
 				ReplyMarkup: markup,
 			}
+			if isRichContent(params.Text) {
+				req.SetRichMessage(rich.HTML(params.Text))
+			}
 			_, err := b.API.MessagesEditInlineBotMessage(ctx, req)
 			if err == nil {
 				return &Message{}, nil
@@ -555,6 +562,9 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 					Message:     plainText,
 					Entities:    entities,
 					ReplyMarkup: markup,
+				}
+				if isRichContent(params.Text) {
+					req.SetRichMessage(rich.HTML(params.Text))
 				}
 				_, err := b.API.MessagesEditMessage(ctx, req)
 				if err == nil {
@@ -822,6 +832,8 @@ func (b *Bot) postHTTPBool(ctx context.Context, url string, body map[string]any)
 func isRichContent(text string) bool {
 	return strings.Contains(text, "<tg-button-row>") ||
 		strings.Contains(text, "<h1>") ||
+		strings.Contains(text, "<h2>") ||
+		strings.Contains(text, "<table") ||
 		strings.Contains(text, "<hr/>")
 }
 
@@ -831,6 +843,8 @@ func cleanHTML(text string) string {
 	}
 	s := strings.ReplaceAll(text, "<h1>", "<b>")
 	s = strings.ReplaceAll(s, "</h1>", "</b>\n\n")
+	s = strings.ReplaceAll(s, "<h2>", "<b>")
+	s = strings.ReplaceAll(s, "</h2>", "</b>\n\n")
 	if idx := strings.Index(s, "<tg-button-row>"); idx != -1 {
 		if endIdx := strings.Index(s, "</tg-button-row>"); endIdx != -1 {
 			s = s[:idx] + s[endIdx+len("</tg-button-row>"):]

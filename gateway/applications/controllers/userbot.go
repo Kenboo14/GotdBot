@@ -719,26 +719,24 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 		userInvokeStr = fmt.Sprintf("<code>%d</code>", invokerID)
 	}
 
-	return fmt.Sprintf(`<b>🖥 Dashboard Server</b>
-━━━━━━━━━━━━━━━━━━━━
-<b>User:</b> %s  <b>Invoke:</b> <code>%s</code>
-<b>Ping:</b> <code>%s</code>  <b>Uptime:</b> <code>%s</code>
-
-<b>Sistem:</b>
-• CPU: <code>%.1f%%</code> (%d Cores)
-• RAM: <code>%.1f / %.1f MB (%.1f%%)</code>
-• Swap: <code>%.1f / %.1f MB (%.1f%%)</code>
-• Disk: <code>R: %.1f MB | W: %.1f MB</code>
-
-<b>Runtime Go:</b>
-• Mem: <code>%.1f MB</code> (Heap: <code>%.1f MB</code>)
-• Goroutine: <code>%d</code>
-━━━━━━━━━━━━━━━━━━━━
-<i>GotdBot • Infrastructure Monitor</i>`,
-		userInvokeStr,
-		invokeStr,
-		serverPingStr,
-		formatUptime(time.Since(gatewayStartedAt)),
+	return fmt.Sprintf(`<h1>⚡ Status Server GotdBot</h1>
+<table border="1">
+  <tr><th>🖥 Resource</th><th>📊 Nilai</th><th>⚙️ Kapasitas</th></tr>
+  <tr><td>⚙️ CPU</td><td><code>%.1f%%</code></td><td>%d Cores</td></tr>
+  <tr><td>🧠 System RAM</td><td><code>%.1f MB</code></td><td>%.1f MB (%.1f%%)</td></tr>
+  <tr><td>💾 Swapon</td><td><code>%.1f MB</code></td><td>%.1f MB (%.1f%%)</td></tr>
+  <tr><td>🔄 Disk I/O</td><td><code>R: %.1f MB</code></td><td>W: %.1f MB</td></tr>
+  <tr><td>📦 Go Heap</td><td><code>%.1f MB</code></td><td>Sys: %.1f MB</td></tr>
+  <tr><td>🧵 Goroutine</td><td><code>%d</code></td><td>Threads</td></tr>
+  <tr><td>🌐 Ping Server</td><td><code>%s</code></td><td>Latency: %s</td></tr>
+</table>
+<blockquote expandable>👤 <b>User Invoke :</b> %s
+⏳ <b>Uptime Server :</b> <code>%s</code></blockquote>
+<tg-button-row>
+  <tg-button type="callback_data" data="assist_server:refresh" style="primary">🔄 Refresh Server</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot Infrastructure • Layer 227 MTProto</p>`,
 		cpuUsage,
 		runtime.NumCPU(),
 		usedRAMMB,
@@ -749,9 +747,13 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 		swapPercent,
 		readMB,
 		writeMB,
-		float64(m.Sys)/1024/1024,
 		float64(m.HeapAlloc)/1024/1024,
+		float64(m.Sys)/1024/1024,
 		runtime.NumGoroutine(),
+		serverPingStr,
+		invokeStr,
+		userInvokeStr,
+		formatUptime(time.Since(gatewayStartedAt)),
 	)
 }
 

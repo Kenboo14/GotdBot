@@ -336,17 +336,26 @@ func broadcastMonitorText(data models.PFromService) string {
 	filled := progress / 10
 	bar := strings.Repeat("■", filled) + strings.Repeat("□", 10-filled)
 	status := fmt.Sprintf("%d%%", progress)
-	title := "📡 <b>Broadcast Sedang Berjalan</b>"
+	title := "📡 Monitor Broadcast"
 	if data.Type == "broadcast_done" {
 		if progress == 100 {
-			title = "✅ <b>Broadcast Selesai</b>"
+			title = "✅ Broadcast Selesai"
 			status = "100% selesai"
 		} else {
-			title = "🛑 <b>Broadcast Dibatalkan</b>"
+			title = "🛑 Broadcast Dibatalkan"
 			status = fmt.Sprintf("%d%% dibatalkan", progress)
 		}
 	}
-	return fmt.Sprintf("%s\n━━━━━━━━━━━━━━━━━━━━\n<b>Progress:</b> <code>[%s] %s</code>\n<b>Terkirim:</b> <code>%d</code>\n<b>Gagal:</b>    <code>%d</code>\n<b>Total:</b>    <code>%d</code>", title, bar, status, data.Success, data.Failed, data.Total)
+	return fmt.Sprintf(`<h1>%s</h1>
+<table border="1">
+  <tr><th>📊 Metrik</th><th>📌 Status</th></tr>
+  <tr><td>🚀 Progress</td><td><code>[%s] %s</code></td></tr>
+  <tr><td>✅ Terkirim</td><td><code>%d</code></td></tr>
+  <tr><td>❌ Gagal</td><td><code>%d</code></td></tr>
+  <tr><td>🎯 Total</td><td><code>%d</code></td></tr>
+</table>
+<hr/>
+<p>Userbot Broadcast Service • Gotd</p>`, title, bar, status, data.Success, data.Failed, data.Total)
 }
 
 func broadcastStopKeyboard(ownerID int64, taskID string) *botgotd.InlineKeyboardMarkup {
