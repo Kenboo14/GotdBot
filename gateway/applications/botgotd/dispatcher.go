@@ -213,8 +213,15 @@ func (b *Bot) convertMessageToUpdate(msg *tg.Message, e tg.Entities) *Update {
 		From: fromUser,
 	}
 
+	if gid, ok := msg.GetGroupedID(); ok && gid != 0 {
+		m.MediaGroupID = strconv.FormatInt(gid, 10)
+	}
+
 	// Check media
 	if msg.Media != nil {
+		if msg.Message != "" {
+			m.Caption = msg.Message
+		}
 		switch media := msg.Media.(type) {
 		case *tg.MessageMediaPhoto:
 			if photo, ok := media.Photo.(*tg.Photo); ok {
@@ -223,12 +230,75 @@ func (b *Bot) convertMessageToUpdate(msg *tg.Message, e tg.Entities) *Update {
 		case *tg.MessageMediaDocument:
 			if doc, ok := media.Document.(*tg.Document); ok {
 				m.Document = &Document{FileID: fmt.Sprintf("%d", doc.ID), MimeType: doc.MimeType, FileSize: doc.Size}
+				for _, attr := range doc.Attributes {
+					switch a := attr.(type) {
+					case *tg.DocumentAttributeVideo:
+						m.Video = &Video{FileID: fmt.Sprintf("%d", doc.ID), Duration: int(a.Duration), Width: a.W, Height: a.H, FileSize: doc.Size}
+					case *tg.DocumentAttributeAudio:
+						if a.Voice {
+							m.Voice = &Voice{FileID: fmt.Sprintf("%d", doc.ID), Duration: a.Duration, FileSize: doc.Size}
+						} else {
+							m.Audio = &Audio{FileID: fmt.Sprintf("%d", doc.ID), Duration: a.Duration, FileSize: doc.Size}
+						}
+					case *tg.DocumentAttributeAnimated:
+						m.Animation = &Document{FileID: fmt.Sprintf("%d", doc.ID), MimeType: doc.MimeType, FileSize: doc.Size}
+					}
+				}
 			}
 		}
+	}
+
+	entities := convertTgEntitiesToBot(msg.Entities)
+	if msg.Media != nil {
+		m.CaptionEntities = entities
+	} else {
+		m.Entities = entities
 	}
 
 	return &Update{
 		ID:      msg.ID,
 		Message: m,
 	}
+}
+
+func convertTgEntitiesToBot(source []tg.MessageEntityClass) []MessageEntity {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make([]MessageEntity, 0, len(source))
+	for _, item := range source {
+		var e MessageEntity
+		switch val := item.(type) {
+		case *tg.MessageEntityBold:
+			e.Type, e.Offset, e.Length = "bold", val.Offset, val.Length
+		case *tg.MessageEntityItalic:
+			e.Type, e.Offset, e.Length = "italic", val.Offset, val.Length
+		case *tg.MessageEntityUnderline:
+			e.Type, e.Offset, e.Length = "underline", val.Offset, val.Length
+		case *tg.MessageEntityStrike:
+			e.Type, e.Offset, e.Length = "strikethrough", val.Offset, val.Length
+		case *tg.MessageEntityCode:
+			e.Type, e.Offset, e.Length = "code", val.Offset, val.Length
+		case *tg.MessageEntityPre:
+			e.Type, e.Offset, e.Length, e.Language = "pre", val.Offset, val.Length, val.Language
+		case *tg.MessageEntityTextURL:
+			e.Type, e.Offset, e.Length, e.URL = "text_link", val.Offset, val.Length, val.URL
+		case *tg.MessageEntityMention:
+			e.Type, e.Offset, e.Length = "mention", val.Offset, val.Length
+		case *tg.MessageEntityHashtag:
+			e.Type, e.Offset, e.Length = "hashtag", val.Offset, val.Length
+		case *tg.MessageEntityURL:
+			e.Type, e.Offset, e.Length = "url", val.Offset, val.Length
+		case *tg.MessageEntityBlockquote:
+			e.Type, e.Offset, e.Length = "blockquote", val.Offset, val.Length
+		case *tg.MessageEntitySpoiler:
+			e.Type, e.Offset, e.Length = "spoiler", val.Offset, val.Length
+		case *tg.MessageEntityCustomEmoji:
+			e.Type, e.Offset, e.Length, e.CustomEmojiID = "custom_emoji", val.Offset, val.Length, strconv.FormatInt(val.DocumentID, 10)
+		default:
+			continue
+		}
+		result = append(result, e)
+	}
+	return result
 }

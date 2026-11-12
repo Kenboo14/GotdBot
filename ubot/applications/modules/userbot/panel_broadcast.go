@@ -31,20 +31,23 @@ type panelBroadcastJob struct {
 }
 
 // saveAlbumMapping menyimpan mapping firstMsgID → semua album msgIDs
-// ke in-memory albumCache dan ke Redis (TTL 30 hari).
+// ke in-memory albumCache, Redis (TTL 30 hari), dan SQLite lokal.
 // Dipanggil saat handleCacheList berhasil menyimpan album ke AiotdCaches.
 func (s *Service) saveAlbumMapping(ctx context.Context, firstID int, allIDs []int) {
 	s.albumCache.Store(firstID, allIDs)
-	if s.redis != nil {
-		data, err := json.Marshal(allIDs)
-		if err == nil {
+	data, err := json.Marshal(allIDs)
+	if err == nil {
+		if s.redis != nil {
 			key := fmt.Sprintf("album:%d", firstID)
 			_ = s.redis.Client.Set(ctx, key, data, 30*24*time.Hour).Err()
+		}
+		if s.sqlite != nil {
+			_, _ = s.sqlite.DB.ExecContext(ctx, `INSERT OR REPLACE INTO album_mappings (first_id, all_ids) VALUES (?, ?)`, firstID, string(data))
 		}
 	}
 }
 
-// getAlbumMapping mengambil mapping album dari in-memory cache atau Redis.
+// getAlbumMapping mengambil mapping album dari in-memory cache, Redis, atau SQLite.
 // Mengembalikan nil jika tidak ditemukan (bukan album atau belum disimpan).
 func (s *Service) getAlbumMapping(ctx context.Context, firstID int) []int {
 	if v, ok := s.albumCache.Load(firstID); ok {
@@ -58,6 +61,17 @@ func (s *Service) getAlbumMapping(ctx context.Context, firstID int) []int {
 		if err == nil {
 			var ids []int
 			if json.Unmarshal(data, &ids) == nil && len(ids) > 1 {
+				s.albumCache.Store(firstID, ids) // warm in-memory
+				return ids
+			}
+		}
+	}
+	if s.sqlite != nil {
+		var allIDsJSON string
+		err := s.sqlite.DB.QueryRowContext(ctx, `SELECT all_ids FROM album_mappings WHERE first_id = ?`, firstID).Scan(&allIDsJSON)
+		if err == nil && allIDsJSON != "" {
+			var ids []int
+			if json.Unmarshal([]byte(allIDsJSON), &ids) == nil && len(ids) > 1 {
 				s.albumCache.Store(firstID, ids) // warm in-memory
 				return ids
 			}
@@ -210,7 +224,10 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 	var mediaCacheIDs []int
 	mediaType := "Teks"
 	if message.Media != nil {
-		if groupedID, ok := message.GetGroupedID(); ok && groupedID != 0 {
+		if album := s.getAlbumMapping(ctx, msgID); len(album) > 1 {
+			mediaCacheIDs = album
+			mediaType = fmt.Sprintf("Album (%d Media)", len(mediaCacheIDs))
+		} else if groupedID, ok := message.GetGroupedID(); ok && groupedID != 0 {
 			// Hanya jika berstatus album (grouped_id > 0) kita cari pesan saudara (siblings)
 			mediaCacheIDs = s.cacheForwardIDs(ctx, client, cachePeer, msgID)
 			if len(mediaCacheIDs) > 1 {
@@ -373,17 +390,51 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 	batch := s.fetchCacheMessagesBatch(ctx, client, cachePeer, cfg.Lists)
 
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<h1>📋 Daftar List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b>\n\n", len(cfg.Lists))
+	fmt.Fprintf(&builder, "<h1>📋 Daftar List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b><br/><br/>\n", len(cfg.Lists))
 	for index, msgID := range cfg.Lists {
-		content := "[Media / Non-teks]"
-		if message := batch[msgID]; message != nil && strings.TrimSpace(message.Message) != "" {
+		tag := ""
+		message := batch[msgID]
+		if album := s.getAlbumMapping(ctx, msgID); len(album) > 1 {
+			tag = fmt.Sprintf("🖼️ [Album %d] ", len(album))
+		} else if message != nil && message.Media != nil {
+			switch media := message.Media.(type) {
+			case *tg.MessageMediaPhoto:
+				tag = "📷 [Foto] "
+			case *tg.MessageMediaDocument:
+				tag = "📄 [Dokumen] "
+				if doc, ok := media.Document.(*tg.Document); ok {
+					for _, attr := range doc.Attributes {
+						switch attr.(type) {
+						case *tg.DocumentAttributeVideo:
+							tag = "🎥 [Video] "
+						case *tg.DocumentAttributeAudio:
+							tag = "🎵 [Audio] "
+						case *tg.DocumentAttributeAnimated:
+							tag = "🎞️ [GIF] "
+						}
+					}
+				}
+			default:
+				tag = "📦 [Media] "
+			}
+		} else {
+			tag = "💬 [Teks] "
+		}
+
+		content := ""
+		if message != nil && strings.TrimSpace(message.Message) != "" {
 			content = message.Message
 		}
 		words := strings.Fields(content)
 		if len(words) > 8 {
 			content = strings.Join(words[:8], " ") + "…"
 		}
-		fmt.Fprintf(&builder, "%d. <code>#%d</code> | %s\n", index+1, index+1, html.EscapeString(content))
+		if content == "" {
+			content = "<i>(Tanpa caption)</i>"
+		} else {
+			content = html.EscapeString(content)
+		}
+		fmt.Fprintf(&builder, "%d. <code>#%d</code> | %s%s<br/>\n", index+1, index+1, tag, content)
 	}
 	builder.WriteString("</blockquote>\n<hr/>\n<p>Pilih nomor di bawah untuk membuka detail atau mengelola materi.</p>")
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_previews", TaskID: strconv.Itoa(len(cfg.Lists)), Text: builder.String()})
@@ -524,8 +575,7 @@ func (s *Service) normalizePanelListIDs(ctx context.Context, client *telegram.Cl
 
 // relayPanelMediaToCache mengambil media asli yang dikirim pemilik akun ke
 // private chat bot, lalu meneruskannya langsung ke AiotdCaches dengan akun userbot.
-// Bot API message ID sengaja tidak dipakai sebagai ID cache karena scope ID
-// Bot API dan MTProto berbeda.
+// Mendeteksi otomatis apakah materi yang dikirim adalah media single atau media grup (album).
 func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.Client, count, topicID int) ([]int, error) {
 	username, err := s.botUsername(ctx)
 	if err != nil {
@@ -539,35 +589,69 @@ func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.C
 	if err != nil {
 		return nil, err
 	}
-	history, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: botPeer, Limit: count + 10})
+	limit := count + 15
+	if limit < 25 {
+		limit = 25
+	}
+	history, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: botPeer, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
-	var messages []tg.MessageClass
-	switch value := history.(type) {
-	case *tg.MessagesMessages:
-		messages = value.Messages
-	case *tg.MessagesMessagesSlice:
-		messages = value.Messages
+	messages := cacheMessages(history)
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("tidak ada pesan di riwayat chat bot")
 	}
-	sourceIDs := make([]int, 0, count)
+
+	// 1. Cari pesan media outgoing terbaru yang dikirim oleh akun userbot ke bot
+	var latestMediaMsg *tg.Message
 	for _, item := range messages {
-		message, ok := item.(*tg.Message)
-		if !ok || !message.Out || message.Media == nil {
-			continue
-		}
-		sourceIDs = append(sourceIDs, message.ID)
-		if len(sourceIDs) == count {
+		if m, ok := item.(*tg.Message); ok && m.Out && m.Media != nil {
+			latestMediaMsg = m
 			break
 		}
 	}
-	if len(sourceIDs) != count {
-		return nil, fmt.Errorf("menunggu media relay: ditemukan %d dari %d", len(sourceIDs), count)
+	if latestMediaMsg == nil {
+		return nil, fmt.Errorf("tidak ditemukan media terbaru di chat bot")
 	}
-	// History Telegram terbaru berada di depan; balik agar urutan album tetap.
-	for left, right := 0, len(sourceIDs)-1; left < right; left, right = left+1, right-1 {
-		sourceIDs[left], sourceIDs[right] = sourceIDs[right], sourceIDs[left]
+
+	sourceIDs := make([]int, 0, 10)
+	groupedID, hasGroup := latestMediaMsg.GetGroupedID()
+	if hasGroup && groupedID != 0 {
+		// DETEKSI OTOMATIS: MEDIA GRUP (ALBUM)
+		for _, item := range messages {
+			if m, ok := item.(*tg.Message); ok && m.Out && m.Media != nil {
+				if gid, ok := m.GetGroupedID(); ok && gid == groupedID {
+					sourceIDs = append(sourceIDs, m.ID)
+				}
+			}
+		}
+		// Jika count dari gateway lebih besar dari yang ditemukan di history saat ini,
+		// tunggu sebentar untuk memastikan Telegram selesai memproses seluruh album
+		if count > len(sourceIDs) {
+			time.Sleep(500 * time.Millisecond)
+			if retryHistory, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: botPeer, Limit: limit + 10}); err == nil {
+				sourceIDs = sourceIDs[:0]
+				for _, item := range cacheMessages(retryHistory) {
+					if m, ok := item.(*tg.Message); ok && m.Out && m.Media != nil {
+						if gid, ok := m.GetGroupedID(); ok && gid == groupedID {
+							sourceIDs = append(sourceIDs, m.ID)
+						}
+					}
+				}
+			}
+		}
+	} else {
+		// DETEKSI OTOMATIS: MEDIA SINGLE
+		sourceIDs = []int{latestMediaMsg.ID}
 	}
+
+	if len(sourceIDs) == 0 {
+		return nil, fmt.Errorf("tidak ditemukan media untuk disimpan")
+	}
+
+	// Urutkan ID source dari terkecil ke terbesar agar urutan album tetap sesuai aslinya
+	sort.Ints(sourceIDs)
+
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
 		return nil, err
@@ -584,9 +668,10 @@ func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.C
 		return nil, err
 	}
 	ids := panelForwardedMessageIDs(updates)
-	if len(ids) != len(sourceIDs) {
-		return nil, fmt.Errorf("ID pesan cache tidak lengkap: %d dari %d", len(ids), len(sourceIDs))
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("ID pesan cache tidak lengkap: 0 dari %d", len(sourceIDs))
 	}
+	sort.Ints(ids)
 	return ids, nil
 }
 
@@ -597,20 +682,30 @@ func panelForwardedMessageIDs(updates tg.UpdatesClass) []int {
 	result := make([]int, 0, 4)
 	messageIDs := make([]int, 0, 4)
 	updateIDs := make([]int, 0, 4)
+	seen := make(map[int]bool)
 	appendUpdate := func(update tg.UpdateClass) {
 		switch item := update.(type) {
 		case *tg.UpdateNewMessage:
 			if item.Message != nil {
-				messageIDs = append(messageIDs, item.Message.GetID())
+				id := item.Message.GetID()
+				if !seen[id] {
+					seen[id] = true
+					messageIDs = append(messageIDs, id)
+				}
 			}
 		case *tg.UpdateNewChannelMessage:
 			if item.Message != nil {
-				messageIDs = append(messageIDs, item.Message.GetID())
+				id := item.Message.GetID()
+				if !seen[id] {
+					seen[id] = true
+					messageIDs = append(messageIDs, id)
+				}
 			}
 		case *tg.UpdateMessageID:
-			// UpdateMessageID is an auxiliary mapping update. It is not an
-			// additional cache message and must not be counted separately.
-			updateIDs = append(updateIDs, item.ID)
+			if !seen[item.ID] {
+				seen[item.ID] = true
+				updateIDs = append(updateIDs, item.ID)
+			}
 		}
 	}
 	switch value := updates.(type) {
@@ -626,9 +721,11 @@ func panelForwardedMessageIDs(updates tg.UpdatesClass) []int {
 		}
 	}
 	if len(messageIDs) > 0 {
+		sort.Ints(messageIDs)
 		return messageIDs
 	}
 	result = append(result, updateIDs...)
+	sort.Ints(result)
 	return result
 }
 
@@ -970,12 +1067,16 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 			return
 		}
 	}
+	mediaTypeLabel := "Teks"
 	if len(mediaIDs) > 0 {
 		cachedMsgID = mediaIDs[0]
 		// Jika album (lebih dari 1 media), simpan mapping firstID → semua IDs
 		// agar cacheForwardIDs dapat mengembalikan seluruh anggota album tanpa RPC.
 		if len(mediaIDs) > 1 {
 			s.saveAlbumMapping(ctx, cachedMsgID, mediaIDs)
+			mediaTypeLabel = fmt.Sprintf("Media Grup / Album (%d media)", len(mediaIDs))
+		} else {
+			mediaTypeLabel = "Media Single"
 		}
 		// Satu album adalah satu List logis. Hanya ID pertama yang disimpan ke
 		// daftar Lists; anggota lainnya dipulihkan lewat saveAlbumMapping saat broadcast.
@@ -983,6 +1084,7 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	} else {
 		cachedMsgID, err = s.sendTextToAiotdCachesTopic(ctx, client, topicID, text, toMTProtoEntities(entities))
 		mediaIDs = []int{cachedMsgID}
+		mediaTypeLabel = "Teks"
 	}
 	if err != nil {
 		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan ke Cache:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
@@ -1012,7 +1114,7 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	s.publishConfigUpdated(ctx, ownerID)
 
 	totalList := s.countLists(ctx, ownerID)
-	report := fmt.Sprintf("✅ <b>List Berhasil Disimpan!</b>\n\n<blockquote><i>Pesan materi promosi telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></i></blockquote>\n\nTotal list tersimpan: <code>%d</code>", getGroupCache(), topicID, cachedMsgID, totalList)
+	report := fmt.Sprintf("✅ <b>List Berhasil Disimpan!</b>\n\n<blockquote><i>Materi promosi (<b>%s</b>) telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></i></blockquote>\n\nTotal list tersimpan: <code>%d</code>", mediaTypeLabel, getGroupCache(), topicID, cachedMsgID, totalList)
 	s.reply(ctx, chatID, report, "panel_notice")
 }
 
@@ -1329,12 +1431,16 @@ func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Cl
 	}
 
 	msgID := cfg.Lists[0]
+	forwardIDs := s.cacheForwardIDs(ctx, client, cachePeer, msgID)
 	selfPeer := &tg.InputPeerSelf{}
-	randomID := time.Now().UnixNano()
+	randomIDs := make([]int64, len(forwardIDs))
+	for i := range randomIDs {
+		randomIDs[i] = time.Now().UnixNano() + int64(i)
+	}
 	req := &tg.MessagesForwardMessagesRequest{
 		FromPeer:   cachePeer,
-		ID:         []int{msgID},
-		RandomID:   []int64{randomID},
+		ID:         forwardIDs,
+		RandomID:   randomIDs,
 		ToPeer:     selfPeer,
 		DropAuthor: true,
 	}
@@ -1343,7 +1449,11 @@ func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Cl
 		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Uji Coba Gagal:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
 		return
 	}
-	s.reply(ctx, chatID, fmt.Sprintf("✅ <b>Uji Coba Berhasil!</b>\n\n<blockquote><i>Materi promosi (Cache ID: <code>#%d</code>) telah berhasil dikirim ke Saved Messages akun Telegram Anda.</i></blockquote>", msgID), "panel_notice")
+	msgTypeInfo := "materi"
+	if len(forwardIDs) > 1 {
+		msgTypeInfo = fmt.Sprintf("album %d media", len(forwardIDs))
+	}
+	s.reply(ctx, chatID, fmt.Sprintf("✅ <b>Uji Coba Berhasil!</b>\n\n<blockquote><i>Materi promosi (Cache ID: <code>#%d</code>, %s) telah berhasil dikirim ke Saved Messages akun Telegram Anda.</i></blockquote>", msgID, msgTypeInfo), "panel_notice")
 }
 
 func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *telegram.Client, ownerID int64) {

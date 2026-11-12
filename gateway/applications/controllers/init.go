@@ -46,6 +46,7 @@ type panelMediaBatch struct {
 	SourceIDs []int
 	Caption   string
 	Entities  []models.MessageEntity
+	Timer     *time.Timer
 }
 
 type broadcastMonitor struct {

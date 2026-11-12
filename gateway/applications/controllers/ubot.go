@@ -309,7 +309,7 @@ func sendRichMessage(ctx context.Context, token string, chatID int64, htmlConten
 	payload := map[string]any{
 		"chat_id": chatID,
 		"rich_message": map[string]any{
-			"html": htmlContent,
+			"html": botgotd.FormatRichHTML(htmlContent),
 		},
 	}
 	if markup != nil {

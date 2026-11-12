@@ -220,6 +220,12 @@ func (s *SQLiteClient) initTables() error {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_ub_topics_owner ON userbot_topics(owner_id);`,
+
+		`CREATE TABLE IF NOT EXISTS album_mappings (
+			first_id INTEGER PRIMARY KEY,
+			all_ids TEXT NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {

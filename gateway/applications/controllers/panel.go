@@ -134,7 +134,7 @@ func (h *Handler) ShowMainMenu(ctx context.Context, b *botgotd.Bot, chatID, user
 	}
 
 	text := fmt.Sprintf(`<h1>🤖 GotdBot Control Panel</h1>
-<blockquote expandable>👋 <b>Halo, <a href="tg://user?id=%d">%s</a>!</b>
+<blockquote expandable>👋 <b>Halo, <a href="tg://user?id=%d">%s</a>!</b><br/>
 <i>Sesi userbot Anda sedang berjalan dan terhubung dengan aman via MTProto. Seluruh data disinkronkan secara real-time.</i></blockquote>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:status" style="primary">💎 Cek Status</tg-button>
@@ -186,8 +186,8 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 	sb.WriteString(fmt.Sprintf("  <tr><td>✉️ Email</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Email)))
 	sb.WriteString(fmt.Sprintf("  <tr><td>👤 Admin</td><td><code>%s</code></td></tr>\n", html.EscapeString(cfg.Admin)))
 	sb.WriteString("</table>\n")
-	sb.WriteString("<blockquote expandable>")
-	sb.WriteString(fmt.Sprintf("📋 <b>Tindakan Terkini :</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerkini)))
+	sb.WriteString("<blockquote expandable>\n")
+	sb.WriteString(fmt.Sprintf("📋 <b>Tindakan Terkini :</b> <i>%s</i><br/>\n", html.EscapeString(cfg.TindakanTerkini)))
 	sb.WriteString(fmt.Sprintf("📄 <b>Tindakan Terakhir :</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerakhir)))
 	sb.WriteString("</blockquote>\n")
 	sb.WriteString("<tg-button-row>\n  <tg-button type=\"callback_data\" data=\"panel:status\" style=\"primary\">🔄 Refresh Status</tg-button>\n</tg-button-row>\n")
@@ -206,10 +206,10 @@ func (h *Handler) ShowGrupList(ctx context.Context, b *botgotd.Bot, chatID, user
 	h.setPanelState(chatID, "")
 
 	text := `<h1>🔥 Grup &amp; List</h1>
-<blockquote expandable>💡 <b>Petunjuk Singkat:</b>
-• <b>List :</b> <i>Materi promosi / pesan teks / media yang akan disiarkan.</i>
-• <b>Grup :</b> <i>Daftar grup atau supergroup tujuan siaran.</i>
-• <b>Topic :</b> <i>Thread forum grup Telegram untuk penargetan topik khusus.</i></blockquote>
+<blockquote expandable>💡 <b>Petunjuk Singkat:</b><br/><br/>
+1. <b>List :</b> <i>Materi promosi (teks, media single, media grup) yang akan disiarkan.</i><br/>
+2. <b>Grup :</b> <i>Daftar grup atau supergroup tujuan siaran.</i><br/>
+3. <b>Topic :</b> <i>Thread forum grup Telegram untuk penargetan topik khusus.</i></blockquote>
 <hr/>
 <p>Atur target grup dan materi siaran Anda lewat tombol keyboard navigasi di bawah.</p>`
 
@@ -226,8 +226,10 @@ func (h *Handler) PromptTambahList(ctx context.Context, b *botgotd.Bot, chatID i
 	h.setPanelState(chatID, "waiting_add_list")
 
 	text := `<h1>📝 Tambah List Promosi</h1>
-<blockquote expandable><b>List adalah materi promosi yang akan disiarkan ke grup target.</b>
-Anda dapat mengirimkan pesan teks biasa, teks dengan format HTML/Markdown, atau konten media (foto, video, album, dokumen) dengan caption.</blockquote>
+<blockquote expandable>📌 <b>Format materi promosi yang didukung:</b><br/><br/>
+1. <b>Teks :</b> Pesan teks biasa atau berformat HTML / Markdown.<br/>
+2. <b>Media Single :</b> Foto, video, dokumen, audio, atau animasi / GIF (+ caption).<br/>
+3. <b>Media Grup :</b> Album kumpulan foto atau video (+ caption).</blockquote>
 <hr/>
 <p>Kirimkan materi promosi sekarang atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
@@ -244,9 +246,9 @@ func (h *Handler) PromptTambahGrup(ctx context.Context, b *botgotd.Bot, chatID i
 	h.setPanelState(chatID, "")
 
 	text := `<h1>➕ Tambah Grup Target</h1>
-<blockquote expandable>Pilih metode penambahan grup tujuan siaran:
-• <b>Otomatis :</b> Mengimpor semua grup tempat akun userbot bergabung saat ini.
-• <b>Manual :</b> Memasukkan username atau ID grup secara spesifik satu per satu atau multi-baris.</blockquote>
+<blockquote expandable>📌 <b>Pilih metode penambahan grup tujuan siaran:</b><br/><br/>
+1. <b>Otomatis :</b> Mengimpor semua grup tempat akun userbot bergabung saat ini.<br/>
+2. <b>Manual :</b> Memasukkan username atau ID grup secara spesifik satu per satu atau multi-baris.</blockquote>
 <hr/>
 <p>Silakan pilih opsi dari keyboard navigasi di bawah.</p>`
 
@@ -263,11 +265,10 @@ func (h *Handler) PromptTambahGrupManual(ctx context.Context, b *botgotd.Bot, ch
 	h.setPanelState(chatID, "waiting_add_group_manual")
 
 	text := `<h1>📝 Tambah Grup Manual</h1>
-<blockquote expandable><b>Format target yang didukung:</b>
-• Username grup (contoh: <code>@grupchat</code>)
-• Chat ID grup (contoh: <code>-1001234567890</code>)
-• Tautan grup (contoh: <code>t.me/namagrup</code>)
-
+<blockquote expandable>📌 <b>Format target yang didukung:</b><br/><br/>
+1. <b>Username grup</b> (contoh: <code>@grupchat</code>)<br/>
+2. <b>Chat ID grup</b> (contoh: <code>-1001234567890</code>)<br/>
+3. <b>Tautan grup</b> (contoh: <code>t.me/namagrup</code>)<br/><br/>
 <i>Jika lebih dari satu grup, pisahkan masing-masing target dengan baris baru.</i></blockquote>
 <hr/>
 <p>Kirimkan target grup sekarang atau klik tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
@@ -301,11 +302,11 @@ func (h *Handler) CekList(ctx context.Context, b *botgotd.Bot, chatID, userID in
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "<h1>📋 Ringkasan List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b>\n\n", len(lists))
+	fmt.Fprintf(&sb, "<h1>📋 Ringkasan List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b><br/><br/>\n", len(lists))
 	for i, msgID := range lists {
-		fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code>\n", i+1, i+1, msgID)
+		fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code><br/>\n", i+1, i+1, msgID)
 		if i >= 19 {
-			fmt.Fprintf(&sb, "\n<i>... dan <code>%d</code> list lainnya.</i>", len(lists)-20)
+			fmt.Fprintf(&sb, "<br/><i>... dan <code>%d</code> list lainnya.</i>", len(lists)-20)
 			break
 		}
 	}
@@ -339,15 +340,15 @@ func (h *Handler) CekGrup(ctx context.Context, b *botgotd.Bot, chatID, userID in
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "<h1>📚 Ringkasan Grup Target</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b>\n\n", len(groups))
+	fmt.Fprintf(&sb, "<h1>📚 Ringkasan Grup Target</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b><br/><br/>\n", len(groups))
 	for i, g := range groups {
 		title := g.Title
 		if title == "" {
 			title = g.Target
 		}
-		fmt.Fprintf(&sb, "%d. %s — <code>%s</code>\n", i+1, html.EscapeString(title), html.EscapeString(g.Target))
+		fmt.Fprintf(&sb, "%d. %s — <code>%s</code><br/>\n", i+1, html.EscapeString(title), html.EscapeString(g.Target))
 		if i >= 24 {
-			fmt.Fprintf(&sb, "\n<i>... dan <code>%d</code> grup lainnya.</i>", len(groups)-25)
+			fmt.Fprintf(&sb, "<br/><i>... dan <code>%d</code> grup lainnya.</i>", len(groups)-25)
 			break
 		}
 	}
@@ -429,7 +430,7 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 	}
 	h.setPanelState(chatID, "browse_group")
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<h1>📚 Display Grup</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b>\n\n", len(groups))
+	fmt.Fprintf(&builder, "<h1>📚 Display Grup</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b><br/><br/>\n", len(groups))
 	for i, group := range groups {
 		title := strings.Join(strings.Fields(group.Title), " ")
 		words := strings.Fields(title)
@@ -439,7 +440,7 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 		if title == "" {
 			title = group.Target
 		}
-		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
+		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s<br/>\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
 	}
 	builder.WriteString("</blockquote>\n<hr/>\n<p>Pilih nomor di bawah untuk melihat detail atau menghapus grup.</p>")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -1129,11 +1130,18 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 				batch.Entities = panelEntities(message)
 			}
 		}
+		if batch.Timer != nil {
+			batch.Timer.Stop()
+		}
+		batch.Timer = time.AfterFunc(1500*time.Millisecond, func() { h.flushPanelMediaGroup(context.Background(), b, key) })
 		h.mediaMu.Unlock()
-		time.AfterFunc(2*time.Second, func() { h.flushPanelMediaGroup(context.Background(), b, key) })
 		return
 	}
-	h.stagePanelMedia(ctx, b, message.Chat.ID, message.From.ID, state, []int{message.ID})
+	caption := message.Caption
+	if caption == "" {
+		caption = message.Text
+	}
+	h.stagePanelMediaWithCaption(ctx, b, message.Chat.ID, message.From.ID, state, []int{message.ID}, caption, panelEntities(message))
 }
 
 func (h *Handler) flushPanelMediaGroup(ctx context.Context, b *botgotd.Bot, key string) {

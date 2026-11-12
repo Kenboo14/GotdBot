@@ -358,7 +358,7 @@ func (b *Bot) SendMessage(ctx context.Context, params *SendMessageParams) (*Mess
 				})
 			}
 			if isRichContent(params.Text) {
-				req.SetRichMessage(rich.HTML(params.Text))
+				req.SetRichMessage(rich.HTML(FormatRichHTML(params.Text)))
 			}
 			updates, err := b.API.MessagesSendMessage(ctx, req)
 			if err == nil {
@@ -371,7 +371,7 @@ func (b *Bot) SendMessage(ctx context.Context, params *SendMessageParams) (*Mess
 
 	// If text contains Rich Message HTML tags, send via Rich Message endpoint
 	if isRichContent(params.Text) {
-		msgID, err := b.SendRichMessage(ctx, chatID, params.Text, params.ReplyMarkup)
+		msgID, err := b.SendRichMessage(ctx, chatID, FormatRichHTML(params.Text), params.ReplyMarkup)
 		if err == nil {
 			return &Message{ID: msgID, Chat: Chat{ID: chatID}}, nil
 		}
@@ -404,7 +404,7 @@ func (b *Bot) SendRichMessage(ctx context.Context, chatID int64, htmlContent str
 	body := map[string]any{
 		"chat_id": chatID,
 		"rich_message": map[string]any{
-			"html": htmlContent,
+			"html": FormatRichHTML(htmlContent),
 		},
 	}
 	if markup != nil {
@@ -542,7 +542,7 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 				ReplyMarkup: markup,
 			}
 			if isRichContent(params.Text) {
-				req.SetRichMessage(rich.HTML(params.Text))
+				req.SetRichMessage(rich.HTML(FormatRichHTML(params.Text)))
 			}
 			_, err := b.API.MessagesEditInlineBotMessage(ctx, req)
 			if err == nil {
@@ -565,7 +565,7 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 					ReplyMarkup: markup,
 				}
 				if isRichContent(params.Text) {
-					req.SetRichMessage(rich.HTML(params.Text))
+					req.SetRichMessage(rich.HTML(FormatRichHTML(params.Text)))
 				}
 				_, err := b.API.MessagesEditMessage(ctx, req)
 				if err == nil {
@@ -831,25 +831,55 @@ func (b *Bot) postHTTPBool(ctx context.Context, url string, body map[string]any)
 }
 
 var (
-	reImg = regexp.MustCompile(`<img[^>]+src=["']([^"']+)["'][^>]*>`)
-	reVid = regexp.MustCompile(`<video[^>]+src=["']([^"']+)["'][^>]*>.*?</video>`)
+	reImg        = regexp.MustCompile(`<img[^>]+src=["']([^"']+)["'][^>]*>`)
+	reVid        = regexp.MustCompile(`<video[^>]+src=["']([^"']+)["'][^>]*>.*?</video>`)
+	reBlockquote = regexp.MustCompile(`(?s)(<blockquote[^>]*>)(.*?)(</blockquote>)`)
+	reLineBreak  = regexp.MustCompile(`(?i)(<br\s*/?>)\s*\n`)
 )
 
+// FormatRichHTML ensures newlines inside blockquotes are converted to <br/>
+// so Telegram rich messages do not collapse them into a single line.
+func FormatRichHTML(htmlText string) string {
+	return reBlockquote.ReplaceAllStringFunc(htmlText, func(match string) string {
+		parts := reBlockquote.FindStringSubmatch(match)
+		if len(parts) < 4 {
+			return match
+		}
+		openTag := parts[1]
+		content := parts[2]
+		closeTag := parts[3]
+
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+		content = reLineBreak.ReplaceAllString(content, "$1")
+		content = strings.ReplaceAll(content, "\n", "<br/>")
+
+		return openTag + content + closeTag
+	})
+}
+
 func isRichContent(text string) bool {
+	// Jika pesan berisi blockquote, prioritaskan Telegram native blockquote entities
+	// agar baris baru (\n) dan nomor urut di dalam blockquote tidak di-collapse oleh client Telegram.
+	if strings.Contains(text, "<blockquote") {
+		return false
+	}
 	return strings.Contains(text, "<tg-button-row>") ||
-		strings.Contains(text, "<h1>") ||
-		strings.Contains(text, "<h2>") ||
 		strings.Contains(text, "<table") ||
 		strings.Contains(text, "<img") ||
-		strings.Contains(text, "<video") ||
-		strings.Contains(text, "<hr/>")
+		strings.Contains(text, "<video")
 }
 
 func cleanHTML(text string) string {
-	if !isRichContent(text) {
-		return text
-	}
-	s := strings.ReplaceAll(text, "<h1>", "<b>")
+	s := strings.ReplaceAll(text, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "<br/>\n", "\n")
+	s = strings.ReplaceAll(s, "<br />\n", "\n")
+	s = strings.ReplaceAll(s, "<br>\n", "\n")
+	s = strings.ReplaceAll(s, "<br/>", "\n")
+	s = strings.ReplaceAll(s, "<br />", "\n")
+	s = strings.ReplaceAll(s, "<br>", "\n")
+	s = strings.ReplaceAll(s, "<p>", "")
+	s = strings.ReplaceAll(s, "</p>", "\n")
+	s = strings.ReplaceAll(s, "<h1>", "<b>")
 	s = strings.ReplaceAll(s, "</h1>", "</b>\n\n")
 	s = strings.ReplaceAll(s, "<h2>", "<b>")
 	s = strings.ReplaceAll(s, "</h2>", "</b>\n\n")
