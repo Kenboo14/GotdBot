@@ -352,17 +352,17 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 	s.mu.Lock()
 	client := s.active[job.UserID]
-	targetID := job.UserID
+	sessionChatID := job.UserID
 	if client == nil {
 		client = s.active[job.ChatID]
-		targetID = job.ChatID
+		sessionChatID = job.ChatID
 	}
 	if client == nil {
 		for cid, oid := range s.owners {
 			if oid == job.UserID || oid == job.ChatID {
 				if c := s.active[cid]; c != nil {
 					client = c
-					targetID = cid
+					sessionChatID = cid
 					break
 				}
 			}
@@ -385,26 +385,35 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 					if oid == job.UserID || oid == job.ChatID {
 						if c := s.active[cid]; c != nil {
 							client = c
-							targetID = cid
+							sessionChatID = cid
 							break
 						}
 					}
 				}
 			}
 			if client != nil {
-				targetID = job.ChatID
+				sessionChatID = job.ChatID
 				break
 			}
 			s.mu.Unlock()
 		}
 	} else {
-		s.lastActive[targetID] = time.Now()
+		s.lastActive[sessionChatID] = time.Now()
 		s.mu.Unlock()
 	}
 	if client == nil {
 		s.reply(ctx, job.ChatID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")
 		return
 	}
+
+	ownerID := job.OwnerID
+	if ownerID == 0 {
+		ownerID = job.UserID
+	}
+	if ownerID == 0 {
+		ownerID = job.ChatID
+	}
+
 	dispatch := func(fn func(context.Context)) {
 		taskCtx, taskCancel := context.WithTimeout(s.root, 3*time.Minute)
 		select {
@@ -438,47 +447,47 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 
 	if job.Type == "fetch_groups" {
-		dispatch(func(c context.Context) { s.fetchAccountGroups(c, client, job.ChatID, targetID) })
+		dispatch(func(c context.Context) { s.fetchAccountGroups(c, client, job.ChatID, ownerID) })
 		return
 	}
 	if job.Type == "cache_list" {
-		dispatch(func(c context.Context) { s.handleCacheList(c, client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount) })
+		dispatch(func(c context.Context) { s.handleCacheList(c, client, job.ChatID, ownerID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount) })
 		return
 	}
 	if job.Type == "cache_watermark" {
-		dispatch(func(c context.Context) { s.handleCacheWatermark(c, client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount) })
+		dispatch(func(c context.Context) { s.handleCacheWatermark(c, client, job.ChatID, ownerID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount) })
 		return
 	}
 	if job.Type == "get_list_detail" {
-		dispatch(func(c context.Context) { s.handleListDetail(c, client, job.ChatID, targetID, job.TaskID) })
+		dispatch(func(c context.Context) { s.handleListDetail(c, client, job.ChatID, ownerID, job.TaskID) })
 		return
 	}
 	if job.Type == "get_list_previews" {
-		dispatch(func(c context.Context) { s.handleListPreviews(c, client, job.ChatID, targetID, job.TaskID) })
+		dispatch(func(c context.Context) { s.handleListPreviews(c, client, job.ChatID, ownerID, job.TaskID) })
 		return
 	}
 	if job.Type == "clear_panel_lists" || job.Type == "clear_panel_groups" {
-		dispatch(func(c context.Context) { s.clearPanelData(c, targetID, job.Type == "clear_panel_lists") })
+		dispatch(func(c context.Context) { s.clearPanelData(c, ownerID, job.Type == "clear_panel_lists") })
 		return
 	}
 	if job.Type == "delete_panel_list" {
-		dispatch(func(c context.Context) { s.deletePanelList(c, targetID, job.Text) })
+		dispatch(func(c context.Context) { s.deletePanelList(c, ownerID, job.Text) })
 		return
 	}
 	if job.Type == "delete_panel_group" {
-		dispatch(func(c context.Context) { s.deletePanelGroup(c, targetID, job.Text) })
+		dispatch(func(c context.Context) { s.deletePanelGroup(c, ownerID, job.Text) })
 		return
 	}
 	if job.Type == "sync_panel_config" {
-		dispatch(func(c context.Context) { s.syncJasebConfigFromMongo(c, targetID) })
+		dispatch(func(c context.Context) { s.syncJasebConfigFromMongo(c, ownerID) })
 		return
 	}
 	if job.Type == "start_panel_broadcast" {
-		dispatch(func(c context.Context) { s.handleStartPanelBroadcast(c, client, job.ChatID, targetID) })
+		dispatch(func(c context.Context) { s.handleStartPanelBroadcast(c, client, job.ChatID, ownerID) })
 		return
 	}
 	if job.Type == "test_rc_broadcast" {
-		dispatch(func(c context.Context) { s.handleTestRCBroadcast(c, client, job.ChatID, targetID) })
+		dispatch(func(c context.Context) { s.handleTestRCBroadcast(c, client, job.ChatID, ownerID) })
 		return
 	}
 	started := time.Now()
@@ -568,6 +577,9 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 		ON CONFLICT(owner_id) DO UPDATE SET groups = excluded.groups, updated_at = CURRENT_TIMESTAMP;`
 		_, _ = s.sqlite.DB.ExecContext(ctx, query, ownerID, string(groupsBytes))
 	}
+
+	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
+	s.publishConfigUpdated(ctx, ownerID)
 
 	report := fmt.Sprintf("✅ <b>Sinkronisasi Grup Berhasil!</b>\n\n<blockquote><i>Sebanyak <code>%d</code> grup dari akun Anda telah berhasil diimpor ke list sebar broadcast.</i></blockquote>", len(allGroups))
 	s.reply(ctx, chatID, report, "panel_notice")

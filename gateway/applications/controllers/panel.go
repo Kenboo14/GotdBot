@@ -283,6 +283,12 @@ func (h *Handler) PromptTambahGrupManual(ctx context.Context, b *botgotd.Bot, ch
 // CekList displays all saved promotional lists (summary view)
 func (h *Handler) CekList(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	lists := h.db.GetLists(ctx, userID)
+	if len(lists) == 0 {
+		// Sinkronisasi on-demand jika cache SQLite lokal masih kosong (misal baru disimpan via ubot)
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Lists) > 0 {
+			lists = refreshed.Lists
+		}
+	}
 
 	if len(lists) == 0 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -316,6 +322,11 @@ func (h *Handler) CekList(ctx context.Context, b *botgotd.Bot, chatID, userID in
 // CekGrup displays all registered broadcast groups (summary view)
 func (h *Handler) CekGrup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	groups := h.db.GetGroups(ctx, userID)
+	if len(groups) == 0 {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Groups) > 0 {
+			groups = refreshed.Groups
+		}
+	}
 
 	if len(groups) == 0 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -373,6 +384,11 @@ func browseGroupMarkup(count int) *botgotd.ReplyKeyboardMarkup {
 func (h *Handler) DisplayList(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	lists := h.db.GetLists(ctx, userID)
 	if len(lists) == 0 {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Lists) > 0 {
+			lists = refreshed.Lists
+		}
+	}
+	if len(lists) == 0 {
 		h.setPanelState(chatID, "")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
@@ -396,6 +412,11 @@ func (h *Handler) DisplayList(ctx context.Context, b *botgotd.Bot, chatID, userI
 
 func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	groups := h.db.GetGroups(ctx, userID)
+	if len(groups) == 0 {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Groups) > 0 {
+			groups = refreshed.Groups
+		}
+	}
 	if len(groups) == 0 {
 		h.setPanelState(chatID, "")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -432,6 +453,11 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 func (h *Handler) showListDetail(ctx context.Context, b *botgotd.Bot, chatID, userID int64, index int) {
 	lists := h.db.GetLists(ctx, userID)
 	if index < 0 || index >= len(lists) {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Lists) > 0 {
+			lists = refreshed.Lists
+		}
+	}
+	if index < 0 || index >= len(lists) {
 		h.DisplayList(ctx, b, chatID, userID)
 		return
 	}
@@ -449,6 +475,11 @@ func (h *Handler) showListDetail(ctx context.Context, b *botgotd.Bot, chatID, us
 
 func (h *Handler) showGroupDetail(ctx context.Context, b *botgotd.Bot, chatID, userID int64, index int) {
 	groups := h.db.GetGroups(ctx, userID)
+	if index < 0 || index >= len(groups) {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Groups) > 0 {
+			groups = refreshed.Groups
+		}
+	}
 	if index < 0 || index >= len(groups) {
 		h.DisplayGroup(ctx, b, chatID, userID)
 		return
@@ -537,6 +568,12 @@ func (h *Handler) PromptHapusGrup(ctx context.Context, b *botgotd.Bot, chatID, u
 func (h *Handler) CekTopic(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	cfg := h.db.GetUserConfig(ctx, userID)
 	topics := h.db.GetTopics(ctx, userID)
+	if len(topics) == 0 {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil && len(refreshed.Topics) > 0 {
+			topics = refreshed.Topics
+			cfg = refreshed
+		}
+	}
 
 	topicStatus := "🔴 Nonaktif"
 	if cfg.TopicEnabled {

@@ -967,6 +967,9 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 		s.syncAddListToSQLite(ctx, ownerID, cachedMsgID)
 	}
 
+	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
+	s.publishConfigUpdated(ctx, ownerID)
+
 	totalList := s.countLists(ctx, ownerID)
 	report := fmt.Sprintf("✅ <b>List Berhasil Disimpan!</b>\n\n<blockquote><i>Pesan materi promosi telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></i></blockquote>\n\nTotal list tersimpan: <code>%d</code>", getGroupCache(), topicID, cachedMsgID, totalList)
 	s.reply(ctx, chatID, report, "panel_notice")
@@ -1016,6 +1019,9 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 		ON CONFLICT(owner_id) DO UPDATE SET watermark = excluded.watermark, watermark_cache_id = excluded.watermark_cache_id, updated_at = CURRENT_TIMESTAMP;`
 		_, _ = s.sqlite.DB.ExecContext(ctx, query, ownerID, text, cachedMsgID)
 	}
+
+	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
+	s.publishConfigUpdated(ctx, ownerID)
 
 	report := fmt.Sprintf("✅ <b>Custom Watermark Berhasil Disimpan!</b>\n\n<blockquote><i>Watermark telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></i></blockquote>\n\nWatermark: <code>%s</code>", getGroupCache(), topicID, cachedMsgID, html.EscapeString(text))
 	s.reply(ctx, chatID, report, "panel_notice")
