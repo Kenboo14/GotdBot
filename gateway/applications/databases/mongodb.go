@@ -127,6 +127,24 @@ func (m *MongoClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConfi
 	return &c, nil
 }
 
+// FindAllConfigs mengambil semua dokumen jaseb_configurasi — hanya dipanggil sekali saat startup.
+func (m *MongoClient) FindAllConfigs(ctx context.Context) ([]*JasebConfig, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("jaseb_configurasi")
+	cursor, err := col.Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+	var results []*JasebConfig
+	if err := cursor.All(ctx, &results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func (m *MongoClient) AddListCacheID(ctx context.Context, ownerID int64, cacheMsgID int) error {
 	if m == nil || m.Database == nil {
 		return nil

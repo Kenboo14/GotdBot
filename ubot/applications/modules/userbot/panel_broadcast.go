@@ -29,6 +29,18 @@ type panelBroadcastJob struct {
 	cancel context.CancelFunc
 }
 
+// publishConfigUpdated memberitahu gateway via Redis Pub/Sub bahwa config ownerID berubah di MongoDB.
+// Gateway akan fetch ulang 1 doc ini dari MongoDB ke SQLite-nya.
+func (s *Service) publishConfigUpdated(ctx context.Context, ownerID int64) {
+	if s.redis == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]int64{"owner_id": ownerID})
+	if err := s.redis.Client.Publish(ctx, "config:updated", string(payload)).Err(); err != nil {
+		log.Printf("⚠️ publishConfigUpdated ownerID=%d: %v", ownerID, err)
+	}
+}
+
 func (s *Service) clearPanelData(ctx context.Context, ownerID int64, lists bool) {
 	if s.db != nil {
 		field := "groups"
@@ -36,6 +48,7 @@ func (s *Service) clearPanelData(ctx context.Context, ownerID int64, lists bool)
 			field = "lists"
 		}
 		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{"$set": bson.M{field: []int{}}}, options.Update().SetUpsert(true))
+		s.publishConfigUpdated(ctx, ownerID)
 	}
 	if s.sqlite != nil {
 		field := "groups"
@@ -66,6 +79,7 @@ func (s *Service) deletePanelList(ctx context.Context, ownerID int64, cacheIDTex
 	}
 	if s.db != nil {
 		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{"$set": bson.M{"lists": filtered, "updated_at": time.Now()}}, options.Update().SetUpsert(true))
+		s.publishConfigUpdated(ctx, ownerID)
 	}
 	if s.sqlite != nil {
 		listsJSON, _ := json.Marshal(filtered)
@@ -90,6 +104,7 @@ func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey 
 	}
 	if s.db != nil {
 		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{"$set": bson.M{"groups": filtered, "updated_at": time.Now()}}, options.Update().SetUpsert(true))
+		s.publishConfigUpdated(ctx, ownerID)
 	}
 	if s.sqlite != nil {
 		groupsJSON, _ := json.Marshal(filtered)
@@ -376,6 +391,7 @@ func (s *Service) normalizePanelListIDs(ctx context.Context, client *telegram.Cl
 	}
 	if s.db != nil {
 		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{"$set": bson.M{"lists": result, "updated_at": time.Now()}}, options.Update().SetUpsert(true))
+		s.publishConfigUpdated(ctx, ownerID)
 	}
 	if s.sqlite != nil {
 		listsJSON, _ := json.Marshal(result)

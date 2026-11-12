@@ -3,13 +3,22 @@ package databases
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
+
+// ConfigUpdateEvent adalah payload yang dipublish ubot ke Redis Pub/Sub
+// saat ada perubahan di jaseb_configurasi MongoDB.
+type ConfigUpdateEvent struct {
+	OwnerID int64 `json:"owner_id"`
+}
 
 type DataManager struct {
 	sqlite *SQLiteClient
@@ -29,20 +38,20 @@ func (dm *DataManager) getMongo() *MongoClient {
 	return dm.mongo
 }
 
-// NewDataManager creates a DataManager with SQLite (required) and MongoDB (optional, retried in background).
-// bgCtx: long-lived context for MongoDB retry loop (not subject to startup timeout).
-// initCtx: short context for SQLite init; can share the timeout context.
+// NewDataManager creates a DataManager dengan SQLite (primary) dan MongoDB (backup, retry di background).
+// bgCtx: parent context panjang untuk retry MongoDB.
+// initCtx: context pendek hanya untuk inisialisasi SQLite.
 func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mongoDBName, sqlitePath string) (*DataManager, error) {
 	dm := &DataManager{}
 
-	// Connect SQLite (must succeed immediately)
+	// Connect SQLite (harus sukses — primary DB)
 	sClient, err := NewSQLiteClient(sqlitePath)
 	if err != nil {
 		log.Printf("⚠️ SQLite connection failed: %v", err)
 	}
 	dm.sqlite = sClient
 
-	// Connect MongoDB in background with retry until success
+	// Connect MongoDB di background dengan retry, lalu sync ke SQLite sekali saat berhasil
 	if mongoURI != "" {
 		go func() {
 			mClient, retryErr := NewMongoClient(bgCtx, mongoURI, mongoDBName)
@@ -52,6 +61,9 @@ func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mo
 			}
 			dm.setMongo(mClient)
 			log.Printf("🍃 MongoDB is now active in DataManager")
+
+			// Sync sekali: tarik semua data dari MongoDB ke SQLite
+			dm.SyncAllFromMongoDB(bgCtx)
 		}()
 	}
 
@@ -61,6 +73,88 @@ func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mo
 
 	_ = initCtx
 	return dm, nil
+}
+
+// SyncAllFromMongoDB menarik semua dokumen jaseb_configurasi dari MongoDB ke SQLite.
+// Dipanggil sekali saat startup (setelah MongoDB berhasil konek).
+func (dm *DataManager) SyncAllFromMongoDB(ctx context.Context) {
+	mg := dm.getMongo()
+	if mg == nil || dm.sqlite == nil {
+		return
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	configs, err := mg.FindAllConfigs(syncCtx)
+	if err != nil {
+		log.Printf("⚠️ SyncFromMongoDB: gagal fetch semua config: %v", err)
+		return
+	}
+
+	count := 0
+	for _, cfg := range configs {
+		if cfg == nil {
+			continue
+		}
+		if saveErr := dm.sqlite.SaveConfig(ctx, cfg); saveErr != nil {
+			log.Printf("⚠️ SyncFromMongoDB: gagal simpan ownerID=%d: %v", cfg.OwnerID, saveErr)
+			continue
+		}
+		count++
+	}
+	log.Printf("🔄 SyncFromMongoDB selesai: %d config disinkronkan ke SQLite", count)
+}
+
+// SyncOneFromMongoDB menarik 1 dokumen ownerID dari MongoDB ke SQLite.
+// Dipanggil saat menerima event config:updated dari Redis Pub/Sub.
+func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) {
+	mg := dm.getMongo()
+	if mg == nil || dm.sqlite == nil {
+		return
+	}
+	mongoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	cfg, err := mg.GetConfig(mongoCtx, ownerID)
+	if err != nil || cfg == nil {
+		if err != nil {
+			log.Printf("⚠️ SyncOneFromMongoDB ownerID=%d: %v", ownerID, err)
+		}
+		return
+	}
+	if saveErr := dm.sqlite.SaveConfig(ctx, cfg); saveErr != nil {
+		log.Printf("⚠️ SyncOneFromMongoDB ownerID=%d simpan SQLite: %v", ownerID, saveErr)
+		return
+	}
+	log.Printf("🔄 SyncOneFromMongoDB: ownerID=%d diperbarui di SQLite", ownerID)
+}
+
+// WatchConfigUpdates subscribe ke Redis Pub/Sub channel "config:updated".
+// Saat ubot mengubah MongoDB, ubot publish ownerID ke channel ini.
+// Gateway lalu fetch ulang 1 doc dari MongoDB dan update SQLite.
+func (dm *DataManager) WatchConfigUpdates(ctx context.Context, rdb *redis.Client) {
+	const channel = "config:updated"
+	pubsub := rdb.Subscribe(ctx, channel)
+	defer pubsub.Close()
+
+	log.Printf("👂 Gateway watching Redis channel: %s", channel)
+	ch := pubsub.Channel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			var evt ConfigUpdateEvent
+			if err := json.Unmarshal([]byte(msg.Payload), &evt); err != nil {
+				log.Printf("⚠️ config:updated bad payload: %v", err)
+				continue
+			}
+			go dm.SyncOneFromMongoDB(ctx, evt.OwnerID)
+		}
+	}
 }
 
 func (m *DataManager) GetSQLiteDB() *sql.DB {

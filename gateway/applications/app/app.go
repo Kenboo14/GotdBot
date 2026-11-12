@@ -72,6 +72,11 @@ func Run(ctx context.Context) {
 		m.Register(ctx, botInstance, redis)
 	}
 
+	// 7a. Watch Redis "config:updated" — sync SQLite saat ubot ubah MongoDB
+	if dbManager != nil {
+		go dbManager.WatchConfigUpdates(ctx, redis.Client)
+	}
+
 	// Register Inline Query handler
 	botInstance.RegisterHandler(botgotd.HandlerTypeInlineQuery, "", botgotd.MatchTypePrefix, controllers.HandleInline)
 
