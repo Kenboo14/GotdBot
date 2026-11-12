@@ -30,13 +30,30 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 	parts := strings.Split(cb.Data, ":")
 	if len(parts) >= 3 && parts[0] == "panel" && parts[1] == "list" && parts[2] == "back" {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		msgIDs := h.clearAndGetDetailMessageIDs(ctx, cb.Message.Message.Chat.ID)
-		if len(msgIDs) > 0 {
-			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: cb.Message.Message.Chat.ID, MessageIDs: msgIDs})
-		} else if cb.Message.Message != nil {
-			_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: cb.Message.Message.Chat.ID, MessageID: cb.Message.Message.ID})
+		var chatID int64
+		if cb.Message != nil && cb.Message.Message != nil {
+			chatID = cb.Message.Message.Chat.ID
 		}
-		h.DisplayList(ctx, b, cb.Message.Message.Chat.ID, cb.From.ID)
+		if chatID == 0 {
+			chatID = cb.From.ID
+		}
+		msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
+		found := false
+		if cb.Message != nil && cb.Message.Message != nil {
+			for _, mid := range msgIDs {
+				if mid == cb.Message.Message.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				msgIDs = append(msgIDs, cb.Message.Message.ID)
+			}
+		}
+		if len(msgIDs) > 0 {
+			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
+		}
+		h.DisplayList(ctx, b, chatID, cb.From.ID)
 		return
 	}
 	if len(parts) >= 3 && parts[0] == "panel" && parts[1] == "group" && parts[2] == "back" {
@@ -73,10 +90,20 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		}
 		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "delete_panel_list", TaskID: strconv.Itoa(index), Text: strconv.Itoa(cacheID)})
 		msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
+		found := false
+		if cb.Message != nil && cb.Message.Message != nil {
+			for _, mid := range msgIDs {
+				if mid == cb.Message.Message.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				msgIDs = append(msgIDs, cb.Message.Message.ID)
+			}
+		}
 		if len(msgIDs) > 0 {
 			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
-		} else if cb.Message.Message != nil {
-			_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: cb.Message.Message.ID})
 		}
 		h.DisplayList(ctx, b, chatID, userID)
 	case "group":

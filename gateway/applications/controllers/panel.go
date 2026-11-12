@@ -361,7 +361,7 @@ func (h *Handler) DisplayList(ctx context.Context, b *botgotd.Bot, chatID, userI
 		h.setPanelState(chatID, "")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "<b>📋 List</b>\n━━━━━━━━━━━━━━━━━━━━\n\nList kosong. Belum ada materi tersimpan.",
+			Text:        "<h1>📋 Daftar List Promosi</h1><blockquote expandable>Belum ada materi promosi yang tersimpan.</blockquote><hr/><p>GotdBot • Promotional Content Manager</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})

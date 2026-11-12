@@ -850,6 +850,20 @@ func cleanHTML(text string) string {
 			s = s[:idx] + s[endIdx+len("</tg-button-row>"):]
 		}
 	}
+	s = strings.ReplaceAll(s, "<tr><th>", "• <b>")
+	s = strings.ReplaceAll(s, "</th><th>", " | ")
+	s = strings.ReplaceAll(s, "</th></tr>", "</b>\n")
+	s = strings.ReplaceAll(s, "<tr><td>", "• ")
+	s = strings.ReplaceAll(s, "</td><td>", ": ")
+	s = strings.ReplaceAll(s, "</td></tr>", "\n")
+	tableTags := []string{
+		"<table border=\"1\">", "<table>", "</table>",
+		"<tr>", "</tr>", "<th>", "</th>", "<td>", "</td>",
+		"<thead>", "</thead>", "<tbody>", "</tbody>",
+	}
+	for _, tag := range tableTags {
+		s = strings.ReplaceAll(s, tag, "")
+	}
 	s = strings.ReplaceAll(s, "<hr/>", "\n──────────\n")
 	return strings.TrimSpace(s)
 }

@@ -92,8 +92,10 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	if data.Type == "list_detail" {
 		detailMarkup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "🗑 Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}},
-				{{Text: "← Kembali ke List", CallbackData: "panel:list:back"}},
+				{
+					{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID},
+					{Text: "🔙 Kembali ke List", CallbackData: "panel:list:back"},
+				},
 			},
 		}
 
@@ -104,39 +106,34 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 
 		// KASUS 1: Media Album / Grup (lebih dari 1 media)
 		if len(data.MediaCacheIDs) > 1 {
+			var allMsgIDs []int
 			copied, err := b.CopyMessages(ctx, &botgotd.CopyMessagesParams{
 				ChatID:     data.ChatID,
 				FromChatID: "@" + cache,
 				MessageIDs: data.MediaCacheIDs,
 			})
 			if err == nil && len(copied) > 0 {
-				var copiedIDs []int
 				for _, c := range copied {
-					copiedIDs = append(copiedIDs, c.ID)
+					allMsgIDs = append(allMsgIDs, c.ID)
 				}
-				h.trackDetailMessageIDs(ctx, data.ChatID, copiedIDs)
-
-				// Pasang tombol pada salah satu pesan album
-				for _, copiedMessage := range copied {
-					var markupErr error
-					for attempt := 1; attempt <= 3; attempt++ {
-						_, markupErr = b.EditMessageReplyMarkup(ctx, &botgotd.EditMessageReplyMarkupParams{
-							ChatID:      data.ChatID,
-							MessageID:   copiedMessage.ID,
-							ReplyMarkup: detailMarkup,
-						})
-						if markupErr == nil || strings.Contains(strings.ToLower(markupErr.Error()), "message is not modified") {
-							break
-						}
-						time.Sleep(150 * time.Millisecond)
-					}
-					if markupErr == nil {
-						break
-					}
-				}
-				return
+			} else {
+				log.Printf("Telegram copy cached media group failed (cache=%s): %v", cache, err)
 			}
-			log.Printf("Telegram copy cached media group failed (cache=%s): %v", cache, err)
+
+			// Kirim pesan Rich Detail dengan tombol Rich Hapus List & Kembali
+			richSentMsg, richErr := b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      data.ChatID,
+				Text:        data.Text,
+				ParseMode:   "HTML",
+				ReplyMarkup: detailMarkup,
+			})
+			if richErr == nil && richSentMsg != nil {
+				allMsgIDs = append(allMsgIDs, richSentMsg.ID)
+			}
+			if len(allMsgIDs) > 0 {
+				h.trackDetailMessageIDs(ctx, data.ChatID, allMsgIDs)
+			}
+			return
 		}
 
 		// KASUS 2: Media Tunggal (1 media foto/video/dokumen)
@@ -145,6 +142,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			if targetMediaID == 0 && len(data.MediaCacheIDs) == 1 {
 				targetMediaID = data.MediaCacheIDs[0]
 			}
+			var allMsgIDs []int
 			copiedMsg, err := b.CopyMessage(ctx, &botgotd.CopyMessageParams{
 				ChatID:      data.ChatID,
 				FromChatID:  "@" + cache,
@@ -152,38 +150,38 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 				ReplyMarkup: detailMarkup,
 			})
 			if err == nil && copiedMsg != nil {
-				h.trackDetailMessageIDs(ctx, data.ChatID, []int{copiedMsg.ID})
-				return
+				allMsgIDs = append(allMsgIDs, copiedMsg.ID)
+			} else {
+				log.Printf("Telegram copy cached single media failed (cache=%s message=%d): %v", cache, targetMediaID, err)
 			}
-			log.Printf("Telegram copy cached single media failed (cache=%s message=%d): %v", cache, targetMediaID, err)
-		}
 
-		// KASUS 3: Teks Biasa (tidak ada media)
-		token := os.Getenv("BOT_TOKEN")
-		richBackMarkup := &botgotd.InlineKeyboardMarkup{
-			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "← Kembali ke List", CallbackData: "panel:list:back"}},
-			},
-		}
-		if msgID, sentErr := sendRichMessage(ctx, token, data.ChatID, data.Text, richBackMarkup); sentErr == nil {
-			if msgID > 0 {
-				h.trackDetailMessageIDs(ctx, data.ChatID, []int{msgID})
-			}
-			return
-		} else {
-			log.Printf("[gateway] sendRichMessage failed: %v, falling back to sendMessage", sentErr)
-			cleanText := stripRichTags(data.Text)
-			sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
+			// Kirim pesan Rich Detail sebagai companion card dengan info tabel & tombol Rich
+			richSentMsg, richErr := b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      data.ChatID,
-				Text:        cleanText,
+				Text:        data.Text,
 				ParseMode:   "HTML",
 				ReplyMarkup: detailMarkup,
 			})
-			if err == nil && sentMsg != nil {
-				h.trackDetailMessageIDs(ctx, data.ChatID, []int{sentMsg.ID})
+			if richErr == nil && richSentMsg != nil {
+				allMsgIDs = append(allMsgIDs, richSentMsg.ID)
+			}
+			if len(allMsgIDs) > 0 {
+				h.trackDetailMessageIDs(ctx, data.ChatID, allMsgIDs)
 			}
 			return
 		}
+
+		// KASUS 3: Teks Biasa (tidak ada media)
+		sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      data.ChatID,
+			Text:        data.Text,
+			ParseMode:   "HTML",
+			ReplyMarkup: detailMarkup,
+		})
+		if err == nil && sentMsg != nil {
+			h.trackDetailMessageIDs(ctx, data.ChatID, []int{sentMsg.ID})
+		}
+		return
 	}
 	if data.Type == "list_previews" {
 		params.ParseMode = "HTML"
@@ -420,10 +418,26 @@ func sendRichMessage(ctx context.Context, token string, chatID int64, htmlConten
 func stripRichTags(s string) string {
 	s = strings.ReplaceAll(s, "<h1>", "<b>")
 	s = strings.ReplaceAll(s, "</h1>", "</b>\n\n")
+	s = strings.ReplaceAll(s, "<h2>", "<b>")
+	s = strings.ReplaceAll(s, "</h2>", "</b>\n\n")
 	if idx := strings.Index(s, "<tg-button-row>"); idx != -1 {
 		if endIdx := strings.Index(s, "</tg-button-row>"); endIdx != -1 {
 			s = s[:idx] + s[endIdx+len("</tg-button-row>"):]
 		}
+	}
+	s = strings.ReplaceAll(s, "<tr><th>", "• <b>")
+	s = strings.ReplaceAll(s, "</th><th>", " | ")
+	s = strings.ReplaceAll(s, "</th></tr>", "</b>\n")
+	s = strings.ReplaceAll(s, "<tr><td>", "• ")
+	s = strings.ReplaceAll(s, "</td><td>", ": ")
+	s = strings.ReplaceAll(s, "</td></tr>", "\n")
+	tableTags := []string{
+		"<table border=\"1\">", "<table>", "</table>",
+		"<tr>", "</tr>", "<th>", "</th>", "<td>", "</td>",
+		"<thead>", "</thead>", "<tbody>", "</tbody>",
+	}
+	for _, tag := range tableTags {
+		s = strings.ReplaceAll(s, tag, "")
 	}
 	s = strings.ReplaceAll(s, "<hr/>", "\n──────────\n")
 	return strings.TrimSpace(s)

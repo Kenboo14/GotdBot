@@ -146,21 +146,59 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 		s.reply(ctx, chatID, "❌ Detail List tidak ditemukan di AiotdCaches. Silakan buka ulang Cek List.", "panel_notice")
 		return
 	}
-	displayContent := html.EscapeString(content)
+	displayContent := "<i>(Tidak ada teks / caption)</i>"
 	if message != nil && strings.TrimSpace(message.Message) != "" {
 		displayContent = convertEntitiesToHTML(message.Message, message.Entities)
 	}
-	text := fmt.Sprintf("<h1>📁 Detail List #%d</h1><blockquote expandable>%s</blockquote><tg-button-row><tg-button type=\"callback_data\" data=\"panel:list:delete:%s\" style=\"danger\">🗑️ Hapus List</tg-button></tg-button-row><hr/><p>Multi-configuration VPS control panel</p>", index+1, displayContent, taskID)
 	mediaCacheID := 0
 	var mediaCacheIDs []int
-	if message.Media != nil {
+	mediaType := "Teks"
+	if message != nil && message.Media != nil {
 		// The Bot API can copy the original cached message, preserving the
 		// media, caption, and caption entities without converting them.
 		mediaCacheIDs = s.cacheForwardIDs(ctx, client, cachePeer, msgID)
 		if len(mediaCacheIDs) == 1 {
 			mediaCacheID = mediaCacheIDs[0]
 		}
+		if len(mediaCacheIDs) > 1 {
+			mediaType = fmt.Sprintf("Album (%d Media)", len(mediaCacheIDs))
+		} else {
+			switch media := message.Media.(type) {
+			case *tg.MessageMediaPhoto:
+				mediaType = "Foto"
+			case *tg.MessageMediaDocument:
+				mediaType = "Dokumen"
+				if doc, ok := media.Document.(*tg.Document); ok {
+					for _, attr := range doc.Attributes {
+						switch attr.(type) {
+						case *tg.DocumentAttributeVideo:
+							mediaType = "Video"
+						case *tg.DocumentAttributeAudio:
+							mediaType = "Audio"
+						case *tg.DocumentAttributeAnimated:
+							mediaType = "Animasi / GIF"
+						}
+					}
+				}
+			default:
+				mediaType = "Media"
+			}
+		}
 	}
+	text := fmt.Sprintf(`<h1>📁 Detail List #%d</h1>
+<blockquote expandable>%s</blockquote>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>🏷️ Index</td><td><code>#%d</code></td></tr>
+  <tr><td>📦 Tipe</td><td>%s</td></tr>
+  <tr><td>💾 Cache ID</td><td><code>#%d</code></td></tr>
+</table>
+<tg-button-row>
+  <tg-button type="callback_data" data="panel:list:delete:%s" style="danger">🗑️ Hapus List</tg-button>
+  <tg-button type="callback_data" data="panel:list:back" style="primary">🔙 Kembali ke List</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot • Promotional Content Manager</p>`, index+1, displayContent, index+1, mediaType, msgID, taskID)
 	// Kirim data ke Redis agar BOT (Gateway) yang mengirimkan pesan detail langsung ke pengguna di chat bot.
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
 		ChatID:        chatID,
@@ -247,7 +285,7 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 	}
 	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<b>Display List</b>\n\nTotal List tersimpan: <code>%d</code>\n\n", len(cfg.Lists))
+	fmt.Fprintf(&builder, "<h1>📋 Daftar List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b>\n\n", len(cfg.Lists))
 	for index, msgID := range cfg.Lists {
 		content := "[Media / Non-teks]"
 		message, fetchErr := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
@@ -255,12 +293,12 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 			content = message.Message
 		}
 		words := strings.Fields(content)
-		if len(words) > 10 {
-			content = strings.Join(words[:10], " ") + "…"
+		if len(words) > 8 {
+			content = strings.Join(words[:8], " ") + "…"
 		}
-		fmt.Fprintf(&builder, "%d. %s\n", index+1, html.EscapeString(content))
+		fmt.Fprintf(&builder, "%d. <code>#%d</code> | %s\n", index+1, index+1, html.EscapeString(content))
 	}
-	builder.WriteString("\nPilih angka untuk membuka detail List.")
+	builder.WriteString("</blockquote>\n<hr/>\n<p>Pilih nomor di bawah untuk membuka detail atau mengelola materi.</p>")
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_previews", TaskID: strconv.Itoa(len(cfg.Lists)), Text: builder.String()})
 }
 
