@@ -79,6 +79,16 @@ func (m *rpcErrorMiddleware) Handle(next tg.Invoker) telegram.InvokeFunc {
 				return ctx.Err()
 			case <-time.After(wait):
 			}
+			// Anti-thundering-herd: Jika banyak RPC serentak bangun setelah cooldown yang sama,
+			// mereka akan menembak MTProto pada millisecond yang persis sama dan
+			// langsung memicu FLOOD_WAIT baru. Jitter acak [0, 250ms) mencegah burst tersebut.
+			if jitter := randJitterMs(250); jitter > 0 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(jitter):
+				}
+			}
 		}
 
 		err := next.Invoke(ctx, input, output)
@@ -271,6 +281,24 @@ func (s *Service) getFloodWaitRemaining(chatID int64) time.Duration {
 	return remaining
 }
 
+// randJitterMs menghasilkan durasi jitter acak [0, maxMs) ms menggunakan crypto/rand.
+// Digunakan untuk mencegah thundering-herd saat banyak goroutine bangun serentak
+// setelah FLOOD_WAIT selesai dan menembak MTProto pada millisecond yang sama.
+// Jika crypto/rand gagal (sangat jarang), fallback ke 0 (aman, tidak panik).
+func randJitterMs(maxMs int) time.Duration {
+	if maxMs <= 0 {
+		return 0
+	}
+	var b [8]byte
+	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+		return 0
+	}
+	// Interpretasi 8 byte sebagai uint64 lalu ambil modulo
+	v := uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
+		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
+	return time.Duration(v%uint64(maxMs)) * time.Millisecond
+}
+
 // getSender returns a cached message.Sender for the given client, avoiding
 // repeated allocation of the wrapper on every command invocation.
 func (s *Service) getSender(client *telegram.Client) *message.Sender {
@@ -389,13 +417,22 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 				fn(taskCtx)
 			}()
 		default:
+			// Semaphore penuh: tunggu slot kosong maksimal 5 detik sebelum menyerah.
+			// Ini mencegah goroutine baru tumbuh tanpa batas saat sistem sedang sibuk.
 			go func() {
-				s.cmdSem <- struct{}{}
-				defer func() {
-					<-s.cmdSem
+				defer taskCancel()
+				waitCtx, waitCancel := context.WithTimeout(s.root, 5*time.Second)
+				defer waitCancel()
+				select {
+				case s.cmdSem <- struct{}{}:
+					defer func() { <-s.cmdSem }()
+					fn(taskCtx)
+				case <-waitCtx.Done():
+					log.Printf("⚠️ [dispatch] cmdSem penuh selama 5 detik, job dibuang (chatID=%d)", job.ChatID)
 					taskCancel()
-				}()
-				fn(taskCtx)
+				case <-s.root.Done():
+					taskCancel()
+				}
 			}()
 		}
 	}
@@ -765,6 +802,17 @@ func (s *Service) reapStaleResources() {
 		}
 	}
 	s.sudoMu.Unlock()
+
+	// 3. Eviction floodCooldowns yang sudah kadaluarsa.
+	// sync.Map tidak memiliki Len(); kita hanya iterasi dan hapus entri yang sudah expired.
+	// Ini mencegah map tumbuh tanpa batas pada cluster dengan banyak akun yang pernah kena FLOOD_WAIT.
+	s.floodCooldowns.Range(func(key, val any) bool {
+		until, ok := val.(time.Time)
+		if !ok || now.After(until) {
+			s.floodCooldowns.Delete(key)
+		}
+		return true
+	})
 }
 
 func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
@@ -1277,25 +1325,56 @@ func (s *Service) startSessionHeartbeatWorker(ctx context.Context) {
 
 func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 	type candidate struct {
-		chatID int64
-		genID  uint64
-		client *telegram.Client
+		chatID   int64
+		genID    uint64
+		client   *telegram.Client
+		priority bool // true = akun bermasalah, selalu diperiksa lebih dulu
 	}
 
 	s.mu.Lock()
 	now := time.Now()
-	// Optimasi Network & CPU: Akun yang baru saja menerima update atau mengirim pesan dalam 60 detik terakhir
-	// terbukti 100% aktif dan AuthKey-nya valid. Tidak perlu mengirim RPC heartbeat tambahan.
+	// Strategi seleksi kandidat heartbeat:
+	//
+	// 1. Akun dengan state SUSPECTED/CONNECTING/RECONNECTING SELALU masuk kandidat tanpa pengecualian.
+	//    Ini memastikan akun bermasalah tidak luput dari deteksi kendati aktif menerima update.
+	//
+	// 2. Akun sehat (CONNECTED) di-skip jika:
+	//    a. Ada aktivitas dalam 60 detik terakhir (lastActive/lastUpdate), DAN
+	//    b. Sudah diverifikasi dalam 3 menit terakhir (lastVerified).
+	//    Kondisi (b) mencegah starvation permanen: sehat tapi tidak pernah diverifikasi
+	//    karena terus-menerus menerima update — AuthKey tetap harus dicek berkala.
 	const activityThreshold = 60 * time.Second
+	const verifyMaxGap = 3 * time.Minute
 
 	candidates := make([]candidate, 0, len(s.active))
 	for chatID, client := range s.active {
-		if client == nil || s.accountStates[chatID] == StateSessionInvalid || s.accountStates[chatID] == StateStopped {
+		if client == nil {
 			continue
 		}
-		if now.Sub(s.lastActive[chatID]) < activityThreshold || now.Sub(s.lastUpdate[chatID]) < activityThreshold {
+		state := s.accountStates[chatID]
+		if state == StateSessionInvalid || state == StateStopped {
 			continue
 		}
+
+		// Prioritas tinggi: akun dengan state bermasalah selalu diperiksa
+		isTroubled := state == StateSuspected || state == StateConnecting || state == StateReconnecting
+		if isTroubled {
+			candidates = append(candidates, candidate{
+				chatID:   chatID,
+				genID:    s.accountGens[chatID],
+				client:   client,
+				priority: true,
+			})
+			continue
+		}
+
+		// Akun sehat: skip jika baru aktif DAN sudah diverifikasi baru-baru ini
+		recentActivity := now.Sub(s.lastActive[chatID]) < activityThreshold || now.Sub(s.lastUpdate[chatID]) < activityThreshold
+		recentVerified := !s.lastVerified[chatID].IsZero() && now.Sub(s.lastVerified[chatID]) < verifyMaxGap
+		if recentActivity && recentVerified {
+			continue
+		}
+
 		candidates = append(candidates, candidate{
 			chatID: chatID,
 			genID:  s.accountGens[chatID],
@@ -1306,6 +1385,17 @@ func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 
 	if len(candidates) == 0 {
 		return
+	}
+
+	// Urutkan: akun prioritas (bermasalah) diproses lebih dulu agar slot worker pertama
+	// diisi oleh akun yang paling membutuhkan perhatian, bukan akun random.
+	// Gunakan insertion sort sederhana — jumlah kandidat biasanya kecil (<100).
+	for i := 1; i < len(candidates); i++ {
+		if candidates[i].priority && !candidates[i-1].priority {
+			for j := i; j > 0 && !candidates[j-1].priority; j-- {
+				candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
+			}
+		}
 	}
 
 	// Bounded Worker Pool (maksimal 8 worker simultan).

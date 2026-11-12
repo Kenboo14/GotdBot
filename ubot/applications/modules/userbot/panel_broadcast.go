@@ -902,7 +902,17 @@ func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int6
 		go func(oid int64, idx int, nAt int64) {
 			mCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(mCtx, bson.M{"_id": oid}, bson.M{
+			// Filter monotonic: hanya update jika broadcast_next_at di dokumen <= nAt ATAU field belum ada.
+			// Ini mencegah checkpoint lama (yang terlambat sampai karena jitter jaringan) menimpa checkpoint
+			// baru yang sudah tersimpan lebih dulu — race condition saat banyak goroutine checkpoint bersamaan.
+			filter := bson.M{
+				"_id": oid,
+				"$or": bson.A{
+					bson.M{"broadcast_next_at": bson.M{"$lte": nAt}},
+					bson.M{"broadcast_next_at": bson.M{"$exists": false}},
+				},
+			}
+			_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(mCtx, filter, bson.M{
 				"$set": bson.M{
 					"broadcast_index":   idx,
 					"broadcast_next_at": nAt,
