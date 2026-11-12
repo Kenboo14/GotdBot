@@ -293,6 +293,17 @@ func (h *Handler) SimulateLoad(ctx context.Context, b *botgotd.Bot, update *botg
 	h.Ubot(ctx, b, update)
 }
 
+var gatewayHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 5 * time.Second,
+	},
+}
+
 func sendRichMessage(ctx context.Context, token string, chatID int64, htmlContent string, markup any) (int, error) {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendRichMessage", token)
 	payload := map[string]any{
@@ -313,7 +324,7 @@ func sendRichMessage(ctx context.Context, token string, chatID int64, htmlConten
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := gatewayHTTPClient.Do(req)
 	if err != nil {
 		return 0, err
 	}

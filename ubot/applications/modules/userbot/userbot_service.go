@@ -28,6 +28,7 @@ import (
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"github.com/redis/go-redis/v9"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -70,10 +71,24 @@ type rpcErrorMiddleware struct {
 
 func (m *rpcErrorMiddleware) Handle(next tg.Invoker) telegram.InvokeFunc {
 	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+		// Flood control guard: jika akun sedang dalam periode cooldown FLOOD_WAIT Telegram,
+		// tahan request sejenak hingga cooldown selesai untuk mencegah eskalasi penalti ban Telegram.
+		if wait := m.service.getFloodWaitRemaining(m.chatID); wait > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+
 		err := next.Invoke(ctx, input, output)
-		if err != nil && isSessionRevokedError(err) {
-			// Menjalankan cleanup secara asynchronous agar tidak memblokir jalur Invoke RPC
-			go m.service.handleSessionRevoked(m.chatID, m.genID, err)
+		if err != nil {
+			if flood, ok := tgerr.AsFloodWait(err); ok {
+				m.service.recordFloodWait(m.chatID, flood)
+			} else if isSessionRevokedError(err) {
+				// Menjalankan cleanup secara asynchronous agar tidak memblokir jalur Invoke RPC
+				go m.service.handleSessionRevoked(m.chatID, m.genID, err)
+			}
 		}
 		return err
 	}
@@ -97,6 +112,8 @@ type Service struct {
 	userAccessHashes    sync.Map // key: int64 (userID) -> int64 (accessHash)
 	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
 	lastLogBotMsgID     sync.Map // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
+	floodCooldowns      sync.Map // key: int64 (chatID) -> time.Time (cooldownUntil)
+	cmdSem              chan struct{} // semaphore pembatas concurrent Redis command jobs (max 32)
 	inlineMu            sync.RWMutex
 	botUsernameCache    string
 	inlineBots          map[*telegram.Client]*tg.InputUser
@@ -224,7 +241,34 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		inlineBots:      make(map[*telegram.Client]*tg.InputUser),
 		sudoCache:       make(map[string]sudoCacheEntry),
 		broadcastSem:    make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
+		cmdSem:          make(chan struct{}, 32), // batas concurrency perintah background
 	}
+}
+
+// recordFloodWait mencatat masa cooldown FLOOD_WAIT Telegram untuk akun tertentu.
+func (s *Service) recordFloodWait(chatID int64, dur time.Duration) {
+	// Tambahkan jitter 500ms agar request berikutnya tidak menembak serentak tepat di detik ke-0
+	until := time.Now().Add(dur + 500*time.Millisecond)
+	s.floodCooldowns.Store(chatID, until)
+	log.Printf("⏳ [FloodControl] chatID=%d memasuki cooldown FLOOD_WAIT selama %v (hingga %s)", chatID, dur, until.Format("15:04:05"))
+}
+
+// getFloodWaitRemaining mengembalikan sisa durasi cooldown FLOOD_WAIT untuk akun ini.
+func (s *Service) getFloodWaitRemaining(chatID int64) time.Duration {
+	val, ok := s.floodCooldowns.Load(chatID)
+	if !ok {
+		return 0
+	}
+	until, ok := val.(time.Time)
+	if !ok {
+		return 0
+	}
+	remaining := time.Until(until)
+	if remaining <= 0 {
+		s.floodCooldowns.Delete(chatID)
+		return 0
+	}
+	return remaining
 }
 
 // getSender returns a cached message.Sender for the given client, avoiding
@@ -333,48 +377,71 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		s.reply(ctx, job.ChatID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")
 		return
 	}
+	dispatch := func(fn func(context.Context)) {
+		taskCtx, taskCancel := context.WithTimeout(s.root, 3*time.Minute)
+		select {
+		case s.cmdSem <- struct{}{}:
+			go func() {
+				defer func() {
+					<-s.cmdSem
+					taskCancel()
+				}()
+				fn(taskCtx)
+			}()
+		default:
+			go func() {
+				s.cmdSem <- struct{}{}
+				defer func() {
+					<-s.cmdSem
+					taskCancel()
+				}()
+				fn(taskCtx)
+			}()
+		}
+	}
+
 	if job.Type == "fetch_groups" {
-		go s.fetchAccountGroups(context.Background(), client, job.ChatID, targetID)
+		dispatch(func(c context.Context) { s.fetchAccountGroups(c, client, job.ChatID, targetID) })
 		return
 	}
 	if job.Type == "cache_list" {
-		go s.handleCacheList(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
+		dispatch(func(c context.Context) { s.handleCacheList(c, client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount) })
 		return
 	}
 	if job.Type == "cache_watermark" {
-		go s.handleCacheWatermark(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
+		dispatch(func(c context.Context) { s.handleCacheWatermark(c, client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount) })
 		return
 	}
 	if job.Type == "get_list_detail" {
-		go s.handleListDetail(context.Background(), client, job.ChatID, targetID, job.TaskID)
+		dispatch(func(c context.Context) { s.handleListDetail(c, client, job.ChatID, targetID, job.TaskID) })
 		return
 	}
 	if job.Type == "get_list_previews" {
-		go s.handleListPreviews(context.Background(), client, job.ChatID, targetID, job.TaskID)
+		dispatch(func(c context.Context) { s.handleListPreviews(c, client, job.ChatID, targetID, job.TaskID) })
 		return
 	}
 	if job.Type == "clear_panel_lists" || job.Type == "clear_panel_groups" {
-		go s.clearPanelData(context.Background(), targetID, job.Type == "clear_panel_lists")
+		dispatch(func(c context.Context) { s.clearPanelData(c, targetID, job.Type == "clear_panel_lists") })
 		return
 	}
 	if job.Type == "delete_panel_list" {
-		go s.deletePanelList(context.Background(), targetID, job.Text)
+		dispatch(func(c context.Context) { s.deletePanelList(c, targetID, job.Text) })
 		return
 	}
 	if job.Type == "delete_panel_group" {
-		go s.deletePanelGroup(context.Background(), targetID, job.Text)
+		dispatch(func(c context.Context) { s.deletePanelGroup(c, targetID, job.Text) })
 		return
 	}
 	if job.Type == "sync_panel_config" {
-		go s.syncJasebConfigFromMongo(context.Background(), targetID)
+		dispatch(func(c context.Context) { s.syncJasebConfigFromMongo(c, targetID) })
 		return
 	}
 	if job.Type == "start_panel_broadcast" {
-		go s.handleStartPanelBroadcast(context.Background(), client, job.ChatID, targetID)
+		dispatch(func(c context.Context) { s.handleStartPanelBroadcast(c, client, job.ChatID, targetID) })
 		return
 	}
 	if job.Type == "test_rc_broadcast" {
-		go s.handleTestRCBroadcast(context.Background(), client, job.ChatID, targetID)
+		dispatch(func(c context.Context) { s.handleTestRCBroadcast(c, client, job.ChatID, targetID) })
 		return
 	}
 	started := time.Now()
@@ -1216,9 +1283,17 @@ func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 	}
 
 	s.mu.Lock()
+	now := time.Now()
+	// Optimasi Network & CPU: Akun yang baru saja menerima update atau mengirim pesan dalam 60 detik terakhir
+	// terbukti 100% aktif dan AuthKey-nya valid. Tidak perlu mengirim RPC heartbeat tambahan.
+	const activityThreshold = 60 * time.Second
+
 	candidates := make([]candidate, 0, len(s.active))
 	for chatID, client := range s.active {
 		if client == nil || s.accountStates[chatID] == StateSessionInvalid || s.accountStates[chatID] == StateStopped {
+			continue
+		}
+		if now.Sub(s.lastActive[chatID]) < activityThreshold || now.Sub(s.lastUpdate[chatID]) < activityThreshold {
 			continue
 		}
 		candidates = append(candidates, candidate{
@@ -1229,10 +1304,34 @@ func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 	}
 	s.mu.Unlock()
 
-	for _, item := range candidates {
-		item := item
-		go s.heartbeatSession(ctx, item.chatID, item.genID, item.client)
+	if len(candidates) == 0 {
+		return
 	}
+
+	// Bounded Worker Pool (maksimal 8 worker simultan).
+	// Menggantikan pola goroutine burst (go per kandidat) untuk mencegah lonjakan ratusan goroutine per tick.
+	numWorkers := len(candidates)
+	if numWorkers > 8 {
+		numWorkers = 8
+	}
+
+	candCh := make(chan candidate, len(candidates))
+	for _, c := range candidates {
+		candCh <- c
+	}
+	close(candCh)
+
+	var wg sync.WaitGroup
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for item := range candCh {
+				s.heartbeatSession(ctx, item.chatID, item.genID, item.client)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func (s *Service) heartbeatSession(ctx context.Context, chatID int64, genID uint64, client *telegram.Client) {

@@ -892,17 +892,24 @@ func (s *Service) setPanelBroadcastStatus(ctx context.Context, ownerID int64, st
 }
 
 func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int64, nextIndex int, nextAt time.Time) {
-	if s.db != nil {
-		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{
-			"$set": bson.M{
-				"broadcast_index":   nextIndex,
-				"broadcast_next_at": nextAt.Unix(),
-				"updated_at":        time.Now(),
-			},
-		}, options.Update().SetUpsert(true))
-	}
+	// 1. Simpan ke SQLite lokal secara synchronous — sumber utama recovery lokal yang instan (< 1ms)
 	if s.sqlite != nil {
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET broadcast_index = ?, broadcast_next_at = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, nextIndex, nextAt.Unix(), ownerID)
+	}
+
+	// 2. Simpan ke MongoDB Atlas di background (async) agar latensi internet tidak memblokir perputaran broadcast
+	if s.db != nil {
+		go func(oid int64, idx int, nAt int64) {
+			mCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(mCtx, bson.M{"_id": oid}, bson.M{
+				"$set": bson.M{
+					"broadcast_index":   idx,
+					"broadcast_next_at": nAt,
+					"updated_at":        time.Now(),
+				},
+			}, options.Update().SetUpsert(true))
+		}(ownerID, nextIndex, nextAt.Unix())
 	}
 }
 
@@ -1226,8 +1233,8 @@ func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due tim
 			return true
 		}
 		wait := remaining
-		if wait > 500*time.Millisecond {
-			wait = 500 * time.Millisecond
+		if wait > 2500*time.Millisecond {
+			wait = 2500 * time.Millisecond
 		}
 		timer := time.NewTimer(wait)
 		select {
@@ -1236,9 +1243,12 @@ func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due tim
 			return false
 		case <-timer.C:
 		}
-		cfg := s.getJasebConfig(ctx, ownerID)
-		if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
-			return false
+		if wait < remaining {
+			// Hanya query status ke SQLite jika waktu tunggu masih panjang (menghemat >80% CPU & I/O)
+			cfg := s.getJasebConfig(ctx, ownerID)
+			if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
+				return false
+			}
 		}
 	}
 }
