@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -15,9 +16,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/go-telegram/bot"
-	t_models "github.com/go-telegram/bot/models"
 )
 
 // ──────────────────────────────────────────────────────
@@ -172,7 +170,7 @@ func (m *mockRPCLog) getRequests() []recordedRequest {
 	return dst
 }
 
-func setupMockTelegramServer(t *testing.T, customHandler http.HandlerFunc) (*httptest.Server, *bot.Bot, *mockRPCLog) {
+func setupMockTelegramServer(t *testing.T, customHandler http.HandlerFunc) (*httptest.Server, *botgotd.Bot, *mockRPCLog) {
 	rpcLog := &mockRPCLog{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bodyBytes, _ := io.ReadAll(r.Body)
@@ -219,10 +217,7 @@ func setupMockTelegramServer(t *testing.T, customHandler http.HandlerFunc) (*htt
 		}
 	}))
 
-	b, err := bot.New("test_token_123", bot.WithServerURL(server.URL))
-	if err != nil {
-		t.Fatalf("failed to create bot: %v", err)
-	}
+	b := botgotd.NewTestBot(server.URL, "test_token_123")
 	return server, b, rpcLog
 }
 
@@ -233,8 +228,8 @@ func TestNoteCallback_Pop_ExactOneACK(t *testing.T) {
 	defer server.Close()
 
 	h := &Handler{}
-	update := &t_models.Update{
-		CallbackQuery: &t_models.CallbackQuery{
+	update := &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
 			ID:              "cb_pop_001",
 			Data:            "note:pop:1001:rules",
 			InlineMessageID: "inl_msg_101",
@@ -272,8 +267,8 @@ func TestNoteCallback_Show_OneACKOneEdit(t *testing.T) {
 	defer server.Close()
 
 	h := &Handler{}
-	update := &t_models.Update{
-		CallbackQuery: &t_models.CallbackQuery{
+	update := &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
 			ID:              "cb_show_002",
 			Data:            "note:show:1001:rules",
 			InlineMessageID: "inl_msg_102",
@@ -303,8 +298,8 @@ func TestNoteCallback_InvalidData_ExactOneAlert(t *testing.T) {
 	defer server.Close()
 
 	h := &Handler{}
-	update := &t_models.Update{
-		CallbackQuery: &t_models.CallbackQuery{
+	update := &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
 			ID:   "cb_invalid_003",
 			Data: "note:malformed",
 		},
@@ -330,8 +325,8 @@ func TestHelpCallback_OneACKOneEdit(t *testing.T) {
 	defer server.Close()
 
 	h := &Handler{}
-	update := &t_models.Update{
-		CallbackQuery: &t_models.CallbackQuery{
+	update := &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
 			ID:              "cb_help_004",
 			Data:            "assist_help:notes",
 			InlineMessageID: "inl_msg_104",
@@ -361,8 +356,8 @@ func TestServerCallback_EarlyACK(t *testing.T) {
 	defer server.Close()
 
 	h := &Handler{}
-	update := &t_models.Update{
-		CallbackQuery: &t_models.CallbackQuery{
+	update := &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
 			ID:              "cb_server_005",
 			Data:            "assist_server:refresh",
 			InlineMessageID: "inl_msg_105",
@@ -402,8 +397,8 @@ func TestMessageNotModified_NonFatal(t *testing.T) {
 	defer server.Close()
 
 	h := &Handler{}
-	update := &t_models.Update{
-		CallbackQuery: &t_models.CallbackQuery{
+	update := &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
 			ID:              "cb_not_modified_006",
 			Data:            "assist_help:notes",
 			InlineMessageID: "inl_msg_106",
@@ -429,8 +424,8 @@ func TestCallback_ConcurrentSafe(t *testing.T) {
 	for i := 0; i < concurrency; i++ {
 		go func(id int) {
 			defer wg.Done()
-			update := &t_models.Update{
-				CallbackQuery: &t_models.CallbackQuery{
+			update := &botgotd.Update{
+				CallbackQuery: &botgotd.CallbackQuery{
 					ID:              fmt.Sprintf("cb_conc_%d", id),
 					Data:            "assist_help:ping",
 					InlineMessageID: fmt.Sprintf("inl_msg_%d", id),
@@ -454,7 +449,7 @@ func TestCallback_ConcurrentSafe(t *testing.T) {
 // Global sinks to prevent compiler dead-code elimination
 var (
 	benchSinkText   string
-	benchSinkMarkup *t_models.InlineKeyboardMarkup
+	benchSinkMarkup *botgotd.InlineKeyboardMarkup
 )
 
 // BenchmarkHelpPage_StaticCacheLookup measures O(1) in-memory map lookup.

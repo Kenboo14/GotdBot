@@ -42,4 +42,3 @@ func TestLogRouteSaveAndGet(t *testing.T) {
 		t.Fatalf("Route mismatch: got %+v", route)
 	}
 }
-

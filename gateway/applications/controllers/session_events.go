@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/models"
 	"context"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/go-telegram/bot"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -32,7 +32,7 @@ func startSessionEventWebSocket(ctx context.Context, r *broker.Redis) {
 		token:   strings.TrimSpace(os.Getenv("SESSION_WS_TOKEN")),
 	}
 
-	go r.Listener(ctx, nil, "session:events", "session:ws", "session:events", func(_ context.Context, _ *bot.Bot, msg redis.XMessage) {
+	go r.Listener(ctx, nil, "session:events", "session:ws", "session:events", func(_ context.Context, _ *botgotd.Bot, msg redis.XMessage) {
 		payload, ok := msg.Values["payload"].(string)
 		if !ok {
 			return

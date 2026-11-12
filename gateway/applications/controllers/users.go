@@ -1,16 +1,14 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"context"
 	"fmt"
 	"html"
 	"strings"
-
-	"github.com/go-telegram/bot"
-	t_models "github.com/go-telegram/bot/models"
 )
 
-func (h *Handler) User(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
@@ -39,12 +37,13 @@ func (h *Handler) User(ctx context.Context, b *bot.Bot, update *t_models.Update)
 
 	// Tampilan RichText bila sesi belum terpasang
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("👋 <b>Selamat Datang, <a href=\"tg://user?id=%d\">%s</a>!</b>\n\n", userID, html.EscapeString(userName)))
+	sb.WriteString(fmt.Sprintf("<h1>👋 Selamat Datang, %s</h1>", html.EscapeString(userName)))
 	sb.WriteString("<blockquote>⚠️ <b>Sesi Userbot Belum Aktif</b>\n")
 	sb.WriteString("<i>Akun Telegram Anda belum terhubung dengan mesin GotdBot Userbot.</i></blockquote>\n\n")
-	sb.WriteString("Silakan ketik <code>/create</code> untuk memasang dan mengaktifkan sesi userbot Anda, atau hubungi administrator untuk bantuan.")
+	sb.WriteString("<p>Silakan ketik <code>/create</code> untuk memasang dan mengaktifkan sesi userbot Anda, atau hubungi administrator untuk bantuan.</p>")
+	sb.WriteString("<hr/><p>GotdBot • Userbot Manager</p>")
 
-	b.SendMessage(ctx, &bot.SendMessageParams{
+	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:    chatID,
 		Text:      sb.String(),
 		ParseMode: "HTML",

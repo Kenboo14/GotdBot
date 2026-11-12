@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/models"
 	"assterisk/gateway/applications/utils"
 	"context"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-telegram/bot"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -74,7 +74,7 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 
 }
 
-func (r *Redis) Listener(ctx context.Context, b *bot.Bot, group string, worker string, stream string, callback func(context.Context, *bot.Bot, redis.XMessage)) {
+func (r *Redis) Listener(ctx context.Context, b *botgotd.Bot, group string, worker string, stream string, callback func(context.Context, *botgotd.Bot, redis.XMessage)) {
 	delay := 0 * time.Second
 
 	err := r.Client.XGroupCreateMkStream(ctx, stream, group, "0").Err()

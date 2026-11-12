@@ -1,48 +1,50 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/models"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-telegram/bot"
-	t_models "github.com/go-telegram/bot/models"
 	"github.com/redis/go-redis/v9"
 )
 
 // Ubot submits exactly one job to the worker. It deliberately never generates
 // background load from a Telegram command.
-func (h *Handler) Ubot(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) Ubot(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
 	allowed, estimated, err := h.broker.CheckLimit(ctx, fmt.Sprintf("ubot:broadcast:%d", update.Message.From.ID), 1, 5*time.Second)
 	if err != nil {
 		log.Printf("rate limiter error: %v", err)
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Layanan sementara tidak tersedia."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Layanan sementara tidak tersedia."})
 		return
 	}
 	if !allowed {
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Tunggu " + estimated.Round(time.Second).String() + " sebelum mengirim lagi."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Tunggu " + estimated.Round(time.Second).String() + " sebelum mengirim lagi."})
 		return
 	}
 	payload := models.PToService{ChatID: update.Message.Chat.ID, UserID: update.Message.From.ID, Username: update.Message.From.Username, Text: update.Message.Text, Type: "broadcast"}
 	if err := h.broker.To(ctx, "to:ubot:broadcast", payload); err != nil {
 		log.Printf("Redis stream: %v", err)
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Worker tidak dapat menerima pesan. Cek Redis."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Worker tidak dapat menerima pesan. Cek Redis."})
 		return
 	}
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Pesan sedang diproses."})
+	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Pesan sedang diproses."})
 }
 
-func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessage) {
+func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMessage) {
 	payload, ok := msg.Values["payload"].(string)
 	if !ok {
 		log.Printf("invalid Redis payload for %s", msg.ID)
@@ -67,7 +69,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 	if data.State != "" {
 		h.setInstallState(data.ChatID, data.State)
 	}
-	params := &bot.SendMessageParams{ChatID: data.ChatID, Text: data.Text}
+	params := &botgotd.SendMessageParams{ChatID: data.ChatID, Text: data.Text}
 	if strings.Contains(data.Text, "<") && strings.Contains(data.Text, ">") {
 		params.ParseMode = "HTML"
 	}
@@ -87,11 +89,103 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 		params.ParseMode = "HTML"
 		params.ReplyMarkup = grupListMenuMarkup
 	}
-	switch data.Type {
-	case "list_detail":
-		params.ParseMode = "HTML"
-		params.ReplyMarkup = &t_models.InlineKeyboardMarkup{InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}}}}
-	case "list_previews":
+	if data.Type == "list_detail" {
+		detailMarkup := &botgotd.InlineKeyboardMarkup{
+			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
+				{{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}},
+				{{Text: "🔙 Kembali ke List", CallbackData: "panel:list:back"}},
+			},
+		}
+
+		cache := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+		if cache == "" {
+			cache = "AiotdCaches"
+		}
+
+		// KASUS 1: Media Album / Grup (lebih dari 1 media)
+		if len(data.MediaCacheIDs) > 1 {
+			copied, err := b.CopyMessages(ctx, &botgotd.CopyMessagesParams{
+				ChatID:     data.ChatID,
+				FromChatID: "@" + cache,
+				MessageIDs: data.MediaCacheIDs,
+			})
+			if err == nil && len(copied) > 0 {
+				var copiedIDs []int
+				for _, c := range copied {
+					copiedIDs = append(copiedIDs, c.ID)
+				}
+				h.trackDetailMessageIDs(ctx, data.ChatID, copiedIDs)
+
+				// Pasang tombol pada salah satu pesan album
+				for _, copiedMessage := range copied {
+					var markupErr error
+					for attempt := 1; attempt <= 3; attempt++ {
+						_, markupErr = b.EditMessageReplyMarkup(ctx, &botgotd.EditMessageReplyMarkupParams{
+							ChatID:      data.ChatID,
+							MessageID:   copiedMessage.ID,
+							ReplyMarkup: detailMarkup,
+						})
+						if markupErr == nil || strings.Contains(strings.ToLower(markupErr.Error()), "message is not modified") {
+							break
+						}
+						time.Sleep(150 * time.Millisecond)
+					}
+					if markupErr == nil {
+						break
+					}
+				}
+				return
+			}
+			log.Printf("Telegram copy cached media group failed (cache=%s): %v", cache, err)
+		}
+
+		// KASUS 2: Media Tunggal (1 media foto/video/dokumen)
+		if data.MediaCacheID > 0 || len(data.MediaCacheIDs) == 1 {
+			targetMediaID := data.MediaCacheID
+			if targetMediaID == 0 && len(data.MediaCacheIDs) == 1 {
+				targetMediaID = data.MediaCacheIDs[0]
+			}
+			copiedMsg, err := b.CopyMessage(ctx, &botgotd.CopyMessageParams{
+				ChatID:      data.ChatID,
+				FromChatID:  "@" + cache,
+				MessageID:   targetMediaID,
+				ReplyMarkup: detailMarkup,
+			})
+			if err == nil && copiedMsg != nil {
+				h.trackDetailMessageIDs(ctx, data.ChatID, []int{copiedMsg.ID})
+				return
+			}
+			log.Printf("Telegram copy cached single media failed (cache=%s message=%d): %v", cache, targetMediaID, err)
+		}
+
+		// KASUS 3: Teks Biasa (tidak ada media)
+		token := os.Getenv("BOT_TOKEN")
+		richBackMarkup := &botgotd.InlineKeyboardMarkup{
+			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
+				{{Text: "🔙 Kembali ke List", CallbackData: "panel:list:back"}},
+			},
+		}
+		if msgID, sentErr := sendRichMessage(ctx, token, data.ChatID, data.Text, richBackMarkup); sentErr == nil {
+			if msgID > 0 {
+				h.trackDetailMessageIDs(ctx, data.ChatID, []int{msgID})
+			}
+			return
+		} else {
+			log.Printf("[gateway] sendRichMessage failed: %v, falling back to sendMessage", sentErr)
+			cleanText := stripRichTags(data.Text)
+			sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      data.ChatID,
+				Text:        cleanText,
+				ParseMode:   "HTML",
+				ReplyMarkup: detailMarkup,
+			})
+			if err == nil && sentMsg != nil {
+				h.trackDetailMessageIDs(ctx, data.ChatID, []int{sentMsg.ID})
+			}
+			return
+		}
+	}
+	if data.Type == "list_previews" {
 		params.ParseMode = "HTML"
 		count, _ := strconv.Atoi(data.TaskID)
 		params.ReplyMarkup = browseListMarkup(count)
@@ -101,7 +195,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 		if cache == "" {
 			cache = "AiotdCaches"
 		}
-		if _, err := b.CopyMessage(ctx, &bot.CopyMessageParams{
+		if _, err := b.CopyMessage(ctx, &botgotd.CopyMessageParams{
 			ChatID:      data.ChatID,
 			FromChatID:  "@" + cache,
 			MessageID:   data.MediaCacheID,
@@ -112,17 +206,60 @@ func (h *Handler) SendMessage(ctx context.Context, b *bot.Bot, msg redis.XMessag
 			log.Printf("Telegram copy cached media failed (cache=%s message=%d): %v", cache, data.MediaCacheID, err)
 		}
 	}
+	if len(data.MediaCacheIDs) > 0 {
+		cache := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+		if cache == "" {
+			cache = "AiotdCaches"
+		}
+		copied, err := b.CopyMessages(ctx, &botgotd.CopyMessagesParams{
+			ChatID:     data.ChatID,
+			FromChatID: "@" + cache,
+			MessageIDs: data.MediaCacheIDs,
+		})
+		if err == nil {
+			// copyMessages preserves the album, while the markup is attached
+			// afterward to the first copied media message.
+			if len(copied) == 0 {
+				log.Printf("Telegram copy cached media group returned no message IDs")
+				return
+			}
+			if params.ReplyMarkup != nil {
+				for _, copiedMessage := range copied {
+					var markupErr error
+					for attempt := 1; attempt <= 3; attempt++ {
+						_, markupErr = b.EditMessageReplyMarkup(ctx, &botgotd.EditMessageReplyMarkupParams{
+							ChatID: data.ChatID, MessageID: copiedMessage.ID, ReplyMarkup: params.ReplyMarkup,
+						})
+						if markupErr == nil || strings.Contains(strings.ToLower(markupErr.Error()), "message is not modified") {
+							log.Printf("Telegram detail media markup ready on message %d", copiedMessage.ID)
+							markupErr = nil
+							break
+						}
+						if attempt < 3 {
+							time.Sleep(300 * time.Millisecond)
+						}
+					}
+					if markupErr != nil {
+						log.Printf("Telegram detail media markup failed on message %d: %v", copiedMessage.ID, markupErr)
+					}
+				}
+			}
+			return
+		} else {
+			log.Printf("Telegram copy cached media group failed (cache=%s messages=%v): %v", cache, data.MediaCacheIDs, err)
+		}
+	}
 	if _, err := b.SendMessage(ctx, params); err != nil {
 		log.Printf("Telegram send failed: %v", err)
 	}
 }
 
-func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *bot.Bot, data models.PFromService) {
+func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *botgotd.Bot, data models.PFromService) {
 	if data.ChatID == 0 || data.TaskID == "" {
 		return
 	}
 	if data.Type == "broadcast_start" {
-		msg, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		msg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: data.ChatID, Text: broadcastMonitorText(data), ParseMode: "HTML",
 			ReplyMarkup: broadcastStopKeyboard(data.OwnerID, data.TaskID),
 		})
@@ -141,7 +278,7 @@ func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *bot.Bot, data m
 	if !ok {
 		return
 	}
-	params := &bot.EditMessageTextParams{
+	params := &botgotd.EditMessageTextParams{
 		ChatID: monitor.ChatID, MessageID: monitor.MessageID,
 		Text: broadcastMonitorText(data), ParseMode: "HTML",
 	}
@@ -204,22 +341,73 @@ func broadcastMonitorText(data models.PFromService) string {
 	return fmt.Sprintf("<pre>Proses Pengiriman\n\nTerkirim : %d\nGagal    : %d\nTotal    : %d\nStatus   : %s%s</pre>", data.Success, data.Failed, data.Total, bar, status)
 }
 
-func broadcastStopKeyboard(ownerID int64, taskID string) *t_models.InlineKeyboardMarkup {
-	return &t_models.InlineKeyboardMarkup{InlineKeyboard: [][]t_models.InlineKeyboardButton{{{
+func broadcastStopKeyboard(ownerID int64, taskID string) *botgotd.InlineKeyboardMarkup {
+	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{
 		Text: "Hentikan Broadcast", SwitchInlineQueryCurrentChat: fmt.Sprintf("gcancel %d %s", ownerID, taskID),
 	}}}}
 }
 
 // SimulateLoad is retained for compatibility. /broadcast now submits one job.
-func (h *Handler) SimulateLoad(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) SimulateLoad(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil {
 		return
 	}
 	message := strings.TrimSpace(strings.TrimPrefix(update.Message.Text, "/broadcast"))
 	if message == "" {
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Gunakan: /broadcast <pesan>"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Gunakan: /broadcast <pesan>"})
 		return
 	}
 	update.Message.Text = message
 	h.Ubot(ctx, b, update)
+}
+
+func sendRichMessage(ctx context.Context, token string, chatID int64, htmlContent string, markup any) (int, error) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendRichMessage", token)
+	payload := map[string]any{
+		"chat_id": chatID,
+		"rich_message": map[string]any{
+			"html": htmlContent,
+		},
+	}
+	if markup != nil {
+		payload["reply_markup"] = markup
+	}
+	bodyData, err := json.Marshal(payload)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyData))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
+	}
+	var res struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int `json:"message_id"`
+		} `json:"result"`
+	}
+	_ = json.Unmarshal(respBody, &res)
+	return res.Result.MessageID, nil
+}
+
+func stripRichTags(s string) string {
+	s = strings.ReplaceAll(s, "<h1>", "<b>")
+	s = strings.ReplaceAll(s, "</h1>", "</b>\n\n")
+	if idx := strings.Index(s, "<tg-button-row>"); idx != -1 {
+		if endIdx := strings.Index(s, "</tg-button-row>"); endIdx != -1 {
+			s = s[:idx] + s[endIdx+len("</tg-button-row>"):]
+		}
+	}
+	s = strings.ReplaceAll(s, "<hr/>", "\n──────────\n")
+	return strings.TrimSpace(s)
 }

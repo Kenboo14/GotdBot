@@ -34,19 +34,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// idleTimeoutMinutes controls how long an inactive session stays alive before
-// the reaper disconnects it. Override with IDLE_TIMEOUT_MINUTES env var.
 var idleTimeoutMinutes = 30
-
-// maxActiveSessions is the admission limit on simultaneously active/connecting MTProto clients.
-// Override with MAX_ACTIVE_SESSIONS env var. When reached, new activations are rejected
-// to protect existing active sessions from eviction (admission control policy).
 var maxActiveSessions = 100
-
-// sessionHeartbeatSeconds controls how often an active MTProto session is
-// checked with a lightweight UpdatesGetState RPC. Telegram does not always
-// close the transport immediately after a session is revoked from Devices,
-// so this heartbeat is the reliable fallback when no other RPC is running.
 var sessionHeartbeatSeconds = 30
 
 func init() {
@@ -349,11 +338,11 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 	if job.Type == "cache_list" {
-		go s.handleCacheList(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs)
+		go s.handleCacheList(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
 		return
 	}
 	if job.Type == "cache_watermark" {
-		go s.handleCacheWatermark(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs)
+		go s.handleCacheWatermark(context.Background(), client, job.ChatID, targetID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
 		return
 	}
 	if job.Type == "get_list_detail" {
@@ -370,6 +359,14 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 	if job.Type == "delete_panel_list" {
 		go s.deletePanelList(context.Background(), targetID, job.Text)
+		return
+	}
+	if job.Type == "delete_panel_group" {
+		go s.deletePanelGroup(context.Background(), targetID, job.Text)
+		return
+	}
+	if job.Type == "sync_panel_config" {
+		go s.syncJasebConfigFromMongo(context.Background(), targetID)
 		return
 	}
 	if job.Type == "start_panel_broadcast" {

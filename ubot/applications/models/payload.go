@@ -2,17 +2,18 @@ package models
 
 // GatewayToBackend adalah data yang dikirim ke backend
 type PToService struct {
-	ChatID   int64           `json:"chat_id"`
-	UserID   int64           `json:"user_id"`
-	OwnerID  int64           `json:"owner_id,omitempty"`
-	Username string          `json:"username"`
-	Text     string          `json:"text"`
-	IsBot    bool            `json:"is_bot"`
-	Type     string          `json:"type"`
-	TaskID   string          `json:"task_id,omitempty"`
-	Target   []int64         `json:"target,omitempty"` // Target user IDs untuk broadcast
-	Entities []MessageEntity `json:"entities,omitempty"`
-	MediaCacheIDs []int `json:"media_cache_ids,omitempty"`
+	ChatID           int64           `json:"chat_id"`
+	UserID           int64           `json:"user_id"`
+	OwnerID          int64           `json:"owner_id,omitempty"`
+	Username         string          `json:"username"`
+	Text             string          `json:"text"`
+	IsBot            bool            `json:"is_bot"`
+	Type             string          `json:"type"`
+	TaskID           string          `json:"task_id,omitempty"`
+	Target           []int64         `json:"target,omitempty"` // Target user IDs untuk broadcast
+	Entities         []MessageEntity `json:"entities,omitempty"`
+	MediaCacheIDs    []int           `json:"media_cache_ids,omitempty"`
+	MediaSourceCount int             `json:"media_source_count,omitempty"`
 }
 
 type MessageEntity struct {
@@ -27,18 +28,19 @@ type MessageEntity struct {
 
 // BackendToGateway adalah data balasan dari backend
 type PFromService struct {
-	ChatID   int64    `json:"chat_id"`
-	Text     string   `json:"text"`
-	State    string   `json:"state,omitempty"`
-	Type     string   `json:"type,omitempty"`
-	OwnerID  int64    `json:"owner_id,omitempty"`
-	TaskID   string   `json:"task_id,omitempty"`
-	Total    int      `json:"total,omitempty"`
-	Progress int      `json:"progress,omitempty"`
-	Success  int      `json:"success,omitempty"`
-	Failed   int      `json:"failed,omitempty"`
-	Errors   []string `json:"errors,omitempty"`
-	MediaCacheID int `json:"media_cache_id,omitempty"`
+	ChatID        int64    `json:"chat_id"`
+	Text          string   `json:"text"`
+	State         string   `json:"state,omitempty"`
+	Type          string   `json:"type,omitempty"`
+	OwnerID       int64    `json:"owner_id,omitempty"`
+	TaskID        string   `json:"task_id,omitempty"`
+	Total         int      `json:"total,omitempty"`
+	Progress      int      `json:"progress,omitempty"`
+	Success       int      `json:"success,omitempty"`
+	Failed        int      `json:"failed,omitempty"`
+	Errors        []string `json:"errors,omitempty"`
+	MediaCacheID  int      `json:"media_cache_id,omitempty"`
+	MediaCacheIDs []int    `json:"media_cache_ids,omitempty"`
 }
 
 // UserMessage untuk broadcast ke multiple users

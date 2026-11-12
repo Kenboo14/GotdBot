@@ -268,26 +268,36 @@ func (s *Service) preWarmInlineBot(clientCtx context.Context, client *telegram.C
 		case <-time.After(jitter):
 		}
 
-		ctx, cancel := context.WithTimeout(clientCtx, 15*time.Second)
-		defer cancel()
-		if _, err := s.inlineBotUser(ctx, client); err != nil {
-			log.Printf("[inline] preWarmInlineBot gagal: %v", err)
+		delay := 2 * time.Second
+		for attempt := 1; ; attempt++ {
+			ctx, cancel := context.WithTimeout(clientCtx, 15*time.Second)
+			_, err := s.inlineBotUser(ctx, client)
+			cancel()
+			if err == nil {
+				log.Printf("[inline] preWarmInlineBot berhasil setelah percobaan %d", attempt)
+				return
+			}
+			if clientCtx.Err() != nil {
+				return
+			}
+			log.Printf("[inline] preWarmInlineBot gagal (percobaan %d): %v; retry dalam %s", attempt, err, delay)
+			timer := time.NewTimer(delay)
+			select {
+			case <-clientCtx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if delay < 30*time.Second {
+				delay *= 2
+				if delay > 30*time.Second {
+					delay = 30 * time.Second
+				}
+			}
 		}
 	}()
 }
 
-// ──────────────────────────────────────────────────────
-// botUsername — resolves BOT_TOKEN → username via Bot API getMe
-//
-// Optimizations:
-//  1. Uses RWMutex for cached reads.
-//  2. Single shared HTTP client with connection pooling.
-//  3. Result cached permanently (bot username never changes).
-// ──────────────────────────────────────────────────────
-
-// sharedHTTPClient is reused across all botUsername() calls to avoid
-// creating a new TCP/TLS connection each time. Since the only target is
-// api.telegram.org, a single persistent client is enough.
 var sharedHTTPClient = &http.Client{
 	Timeout: 15 * time.Second,
 	Transport: &http.Transport{

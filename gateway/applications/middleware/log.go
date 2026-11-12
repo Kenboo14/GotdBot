@@ -1,25 +1,23 @@
 package middleware
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"context"
 	"log"
-
-	"github.com/go-telegram/bot"
-	"github.com/go-telegram/bot/models"
 )
 
-func Chain(next bot.HandlerFunc) bot.HandlerFunc {
-	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil {
+func Chain(next botgotd.HandlerFunc) botgotd.HandlerFunc {
+	return func(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
+		if update.Message != nil && update.Message.From != nil {
 			log.Printf("%d say: %s", update.Message.From.ID, update.Message.Text)
 		}
 		next(ctx, b, update)
 	}
 }
 
-func Denial(next bot.HandlerFunc) bot.HandlerFunc {
-	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil {
+func Denial(next botgotd.HandlerFunc) botgotd.HandlerFunc {
+	return func(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
+		if update.Message != nil && update.Message.From != nil {
 			log.Printf("%d denial: %s", update.Message.From.ID, update.Message.Text)
 		}
 		next(ctx, b, update)

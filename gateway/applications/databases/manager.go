@@ -2,6 +2,7 @@ package databases
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strconv"
@@ -38,6 +39,13 @@ func NewDataManager(ctx context.Context, mongoURI, mongoDBName, sqlitePath strin
 	}
 
 	return &DataManager{sqlite: sClient, mongo: mClient}, nil
+}
+
+func (m *DataManager) GetSQLiteDB() *sql.DB {
+	if m != nil && m.sqlite != nil {
+		return m.sqlite.DB
+	}
+	return nil
 }
 
 func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool {

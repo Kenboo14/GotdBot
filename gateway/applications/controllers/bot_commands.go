@@ -1,20 +1,20 @@
 package controllers
 
-import "github.com/go-telegram/bot"
+import "assterisk/gateway/applications/botgotd"
 
-// registerBotCommands is the single place for Bot API command routing.
+// registerBotCommands is the single place for Bot command routing.
 // Handler implementations remain in their feature files.
-func registerBotCommands(b *bot.Bot, h *Handler) {
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, h.User)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/status", bot.MatchTypeExact, h.User)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/create", bot.MatchTypeExact, h.Create)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/broadcast", bot.MatchTypePrefix, h.SimulateLoad)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/ping", bot.MatchTypeExact, h.PingCommand)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/help", bot.MatchTypeExact, h.HelpCommandMenu)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/server", bot.MatchTypeExact, h.ServerCommand)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "!server", bot.MatchTypeExact, h.ServerCommand)
-	b.RegisterHandler(bot.HandlerTypeMessageText, "!code", bot.MatchTypePrefix, h.CodeCommand)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "assist_help:", bot.MatchTypePrefix, h.HelpCallback)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "assist_server:", bot.MatchTypePrefix, h.HelpCallback)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, "note:", bot.MatchTypePrefix, h.NoteCallback)
+func registerBotCommands(b *botgotd.Bot, h *Handler) {
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/start", botgotd.MatchTypeExact, h.User)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/status", botgotd.MatchTypeExact, h.User)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/create", botgotd.MatchTypeExact, h.Create)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/broadcast", botgotd.MatchTypePrefix, h.SimulateLoad)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/ping", botgotd.MatchTypeExact, h.PingCommand)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/help", botgotd.MatchTypeExact, h.HelpCommandMenu)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/server", botgotd.MatchTypeExact, h.ServerCommand)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "!server", botgotd.MatchTypeExact, h.ServerCommand)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "!code", botgotd.MatchTypePrefix, h.CodeCommand)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_help:", botgotd.MatchTypePrefix, h.HelpCallback)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_server:", botgotd.MatchTypePrefix, h.HelpCallback)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "note:", botgotd.MatchTypePrefix, h.NoteCallback)
 }

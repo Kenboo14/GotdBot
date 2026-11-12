@@ -1,15 +1,13 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/models"
 	"context"
-
-	"github.com/go-telegram/bot"
-	t_models "github.com/go-telegram/bot/models"
 )
 
 // DefaultHandler untuk pesan teks yang tidak cocok dengan handler manapun
-func (h *Handler) DefaultHandler(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) DefaultHandler(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil {
 		return
 	}

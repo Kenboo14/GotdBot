@@ -1,12 +1,16 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/models"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
 	"html"
 	"log"
 	"net"
@@ -15,12 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/go-telegram/bot"
-	t_models "github.com/go-telegram/bot/models"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/mem"
 )
 
 var gatewayStartedAt = time.Now()
@@ -41,7 +39,7 @@ func NewSessionManager() *SessionManager {
 	return &SessionManager{sessions: make(map[int64]*UserSession)}
 }
 
-func (h *Handler) Create(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) Create(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
@@ -49,7 +47,7 @@ func (h *Handler) Create(ctx context.Context, b *bot.Bot, update *t_models.Updat
 	h.Sessions.mu.Lock()
 	if current := h.Sessions.sessions[chatID]; current != nil {
 		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Pemasangan sedang diproses. Tunggu atau ketik /cancel."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Pemasangan sedang diproses. Tunggu atau ketik /cancel."})
 		return
 	}
 	h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_phone"}
@@ -61,11 +59,11 @@ func (h *Handler) Create(ctx context.Context, b *bot.Bot, update *t_models.Updat
 		h.Sessions.mu.Lock()
 		delete(h.Sessions.sessions, chatID)
 		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Layanan pemasangan tidak tersedia. Coba lagi."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Layanan pemasangan tidak tersedia. Coba lagi."})
 	}
 }
 
-func (h *Handler) HandleMessage(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
@@ -88,7 +86,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *bot.Bot, update *t_model
 		return
 	}
 	if session.State == "waiting_check" {
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Sedang memeriksa sesi sebelumnya. Tunggu sebentar."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Sedang memeriksa sesi sebelumnya. Tunggu sebentar."})
 		return
 	}
 
@@ -98,19 +96,19 @@ func (h *Handler) HandleMessage(ctx context.Context, b *bot.Bot, update *t_model
 		if update.Message.Contact != nil {
 			contact := update.Message.Contact
 			if contact.UserID != 0 && contact.UserID != update.Message.From.ID {
-				b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Kirim kontak milik akun Telegram Anda sendiri."})
+				b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Kirim kontak milik akun Telegram Anda sendiri."})
 				return
 			}
 			text = normalizePhone(contact.PhoneNumber)
 		} else if !validPhone(text) {
-			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Nomor tidak valid. Gunakan contoh: +6281234567890"})
+			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Nomor tidak valid. Gunakan contoh: +6281234567890"})
 			return
 		}
 		event = "auth_phone"
 	case "waiting_otp":
 		text = strings.ReplaceAll(text, " ", "")
 		if len(text) < 4 || len(text) > 10 {
-			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "OTP harus berisi 4-10 digit."})
+			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "OTP harus berisi 4-10 digit."})
 			return
 		}
 		event = "auth_otp"
@@ -120,7 +118,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *bot.Bot, update *t_model
 		}
 		event = "auth_password"
 	default:
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Pemasangan sedang diproses. Tunggu atau ketik /cancel."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Pemasangan sedang diproses. Tunggu atau ketik /cancel."})
 		return
 	}
 
@@ -137,17 +135,17 @@ func (h *Handler) HandleMessage(ctx context.Context, b *bot.Bot, update *t_model
 			session.State = "waiting_" + session.State
 		}
 		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Layanan pemasangan tidak tersedia. Coba lagi."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Layanan pemasangan tidak tersedia. Coba lagi."})
 	}
 }
 
-func (h *Handler) cancelInstall(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) cancelInstall(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	chatID := update.Message.Chat.ID
 	h.Sessions.mu.Lock()
 	delete(h.Sessions.sessions, chatID)
 	h.Sessions.mu.Unlock()
 	_ = h.broker.To(ctx, "to:ubot:auth", models.PToService{ChatID: chatID, Type: "auth_cancel"})
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: "Pemasangan dibatalkan.", ReplyMarkup: cachedRemoveKeyboard})
+	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Pemasangan dibatalkan.", ReplyMarkup: cachedRemoveKeyboard})
 }
 
 func (h *Handler) setInstallState(chatID int64, state string) {
@@ -183,58 +181,58 @@ func normalizePhone(value string) string {
 }
 
 var (
-	cachedInstallPhoneMarkup = &t_models.ReplyKeyboardMarkup{
-		Keyboard: [][]t_models.KeyboardButton{{
+	cachedInstallPhoneMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard: [][]botgotd.KeyboardButton{{
 			{Text: "Kirim Kontak", RequestContact: true},
 			{Text: "Cancel"},
 		}},
 		ResizeKeyboard:  true,
 		OneTimeKeyboard: true,
 	}
-	cachedCancelMarkup = &t_models.ReplyKeyboardMarkup{
-		Keyboard:       [][]t_models.KeyboardButton{{{Text: "Cancel"}}},
+	cachedCancelMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard:       [][]botgotd.KeyboardButton{{{Text: "Cancel"}}},
 		ResizeKeyboard: true,
 	}
-	cachedServerMarkup = &t_models.InlineKeyboardMarkup{
-		InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
+	cachedServerMarkup = &botgotd.InlineKeyboardMarkup{
+		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
 	}
-	cachedRemoveKeyboard = &t_models.ReplyKeyboardRemove{RemoveKeyboard: true}
+	cachedRemoveKeyboard = &botgotd.ReplyKeyboardRemove{RemoveKeyboard: true}
 )
 
-func installPhoneKeyboard() *t_models.ReplyKeyboardMarkup {
+func installPhoneKeyboard() *botgotd.ReplyKeyboardMarkup {
 	return cachedInstallPhoneMarkup
 }
 
-func cancelKeyboard() *t_models.ReplyKeyboardMarkup {
+func cancelKeyboard() *botgotd.ReplyKeyboardMarkup {
 	return cachedCancelMarkup
 }
 
-func (h *Handler) PingCommand(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) PingCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
 	if err := h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: update.Message.Chat.ID, UserID: update.Message.From.ID, Text: "!ping", Type: "userbot_command"}); err != nil {
-		b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Ping gagal. Periksa koneksi dan status sesi userbot."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Ping gagal. Periksa koneksi dan status sesi userbot."})
 	}
 }
 
-func (h *Handler) HelpCommand(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) HelpCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil {
 		return
 	}
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "<b>Bantuan userbot</b>\n\n!ping / !p — ukur latency koneksi Telegram\n!help — tampilkan bantuan ini\n!code [bahasa] — format pesan reply\n!eval / !sh — jalankan perintah shell\n!setp none — hapus prefix command\n/create — pasang userbot baru\n/cancel — batalkan pemasangan", ParseMode: "HTML"})
+	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "<b>Bantuan userbot</b>\n\n!ping / !p — ukur latency koneksi Telegram\n!help — tampilkan bantuan ini\n!code [bahasa] — format pesan reply\n!eval / !sh — jalankan perintah shell\n!setp none — hapus prefix command\n/create — pasang userbot baru\n/cancel — batalkan pemasangan", ParseMode: "HTML"})
 }
 
 var (
 	cachedHelpHomeMarkup = buildHelpHomeKeyboard()
-	cachedHelpBackMarkup = &t_models.InlineKeyboardMarkup{
-		InlineKeyboard: [][]t_models.InlineKeyboardButton{{{Text: "‹ Kembali", CallbackData: "assist_help:home"}}},
+	cachedHelpBackMarkup = &botgotd.InlineKeyboardMarkup{
+		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "‹ Kembali", CallbackData: "assist_help:home"}}},
 	}
 )
 
 type helpPageSnapshot struct {
 	text   string
-	markup *t_models.InlineKeyboardMarkup
+	markup *botgotd.InlineKeyboardMarkup
 }
 
 var cachedHelpPages = map[string]helpPageSnapshot{
@@ -251,7 +249,7 @@ var cachedHelpPages = map[string]helpPageSnapshot{
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:code": {
-		text:   "<b>Code</b>\n\nReply pesan dengan <code>!code</code> atau <code>!code go</code> untuk memformat kode melalui inline bot.",
+		text:   "<b>Code</b>\n\nReply pesan dengan <code>!code</code> atau <code>!code go</code> untuk memformat kode melalui inline botgotd.",
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:server": {
@@ -270,24 +268,24 @@ func isMessageNotModifiedErr(err error) bool {
 		strings.Contains(msg, "cannot unmarshal bool into go value of type models.message")
 }
 
-func buildHelpHomeKeyboard() *t_models.InlineKeyboardMarkup {
+func buildHelpHomeKeyboard() *botgotd.InlineKeyboardMarkup {
 	labels := []string{"Admin", "Broadcast", "Code", "Extra", "Global", "Info", "Logs", "Notes", "Ping", "PM Permit", "Prefixes", "Profile", "Server", "Sticker", "Sudo", "VC Tools"}
 	keys := []string{"admin", "broadcast", "code", "extra", "globalz", "info", "logs", "notes", "ping", "pmpermit", "prefixes", "profile", "server", "sticker", "sudo", "vctools"}
-	rows := make([][]t_models.InlineKeyboardButton, 0, (len(labels)+2)/3)
+	rows := make([][]botgotd.InlineKeyboardButton, 0, (len(labels)+2)/3)
 	for i := range labels {
 		if i%3 == 0 {
-			rows = append(rows, []t_models.InlineKeyboardButton{})
+			rows = append(rows, []botgotd.InlineKeyboardButton{})
 		}
-		rows[len(rows)-1] = append(rows[len(rows)-1], t_models.InlineKeyboardButton{Text: labels[i], CallbackData: "assist_help:" + keys[i]})
+		rows[len(rows)-1] = append(rows[len(rows)-1], botgotd.InlineKeyboardButton{Text: labels[i], CallbackData: "assist_help:" + keys[i]})
 	}
-	return &t_models.InlineKeyboardMarkup{InlineKeyboard: rows}
+	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func helpHomeKeyboard() *t_models.InlineKeyboardMarkup {
+func helpHomeKeyboard() *botgotd.InlineKeyboardMarkup {
 	return cachedHelpHomeMarkup
 }
 
-func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -314,7 +312,7 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		ackNetStart := time.Now()
-		_, err := b.AnswerCallbackQuery(actx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cbID})
+		_, err := b.AnswerCallbackQuery(actx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID})
 		ackNetDur := time.Since(ackNetStart)
 		if err != nil {
 			log.Printf("[callback-ack] type=help cbID=%s net_dur=%v err=%v", cbID, ackNetDur, err)
@@ -341,8 +339,13 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 	}
 
 	// Step 3: Edit pesan
-	edit := &bot.EditMessageTextParams{Text: text, ParseMode: "HTML", ReplyMarkup: markup}
-	if update.CallbackQuery.InlineMessageID != "" {
+	edit := &botgotd.EditMessageTextParams{
+		Text:               text,
+		ParseMode:          "HTML",
+		ReplyMarkup:        markup,
+		RawInlineMessageID: update.CallbackQuery.RawInlineMessageID,
+	}
+	if update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != "" {
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
 	} else if update.CallbackQuery.Message.Message != nil {
 		edit.ChatID = update.CallbackQuery.Message.Message.Chat.ID
@@ -357,7 +360,19 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 	rpcCount++
 
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		cbErr = editErr
+		errStr := strings.ToLower(editErr.Error())
+		if strings.Contains(errStr, "can't be edited") {
+			if edit.ChatID != nil {
+				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      edit.ChatID,
+					Text:        text,
+					ParseMode:   "HTML",
+					ReplyMarkup: markup,
+				})
+			}
+		} else {
+			cbErr = editErr
+		}
 	}
 
 	totalDur := time.Since(start)
@@ -365,7 +380,7 @@ func (h *Handler) HelpCallback(ctx context.Context, b *bot.Bot, update *t_models
 		data, ackDispatch, cacheDur, renderDur, editDur, totalDur, rpcCount, cbErr)
 }
 
-func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	start := time.Now()
 	var (
 		ackDispatch time.Duration
@@ -381,7 +396,7 @@ func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_mode
 		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		ackNetStart := time.Now()
-		_, err := b.AnswerCallbackQuery(actx, &bot.AnswerCallbackQueryParams{
+		_, err := b.AnswerCallbackQuery(actx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cbID,
 			Text:            "Status diperbarui",
 		})
@@ -402,8 +417,13 @@ func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_mode
 		invokerID = update.CallbackQuery.From.ID
 	}
 	text := serverStatusText(invokerID, time.Since(start))
-	edit := &bot.EditMessageTextParams{Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()}
-	if update.CallbackQuery.InlineMessageID != "" {
+	edit := &botgotd.EditMessageTextParams{
+		Text:               text,
+		ParseMode:          "HTML",
+		ReplyMarkup:        serverKeyboard(),
+		RawInlineMessageID: update.CallbackQuery.RawInlineMessageID,
+	}
+	if update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != "" {
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
 	} else if update.CallbackQuery.Message.Message != nil {
 		edit.ChatID = update.CallbackQuery.Message.Message.Chat.ID
@@ -420,7 +440,19 @@ func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_mode
 	rpcCount++
 
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		cbErr = editErr
+		errStr := strings.ToLower(editErr.Error())
+		if strings.Contains(errStr, "can't be edited") {
+			if edit.ChatID != nil {
+				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      edit.ChatID,
+					Text:        text,
+					ParseMode:   "HTML",
+					ReplyMarkup: serverKeyboard(),
+				})
+			}
+		} else {
+			cbErr = editErr
+		}
 	}
 
 	totalDur := time.Since(start)
@@ -428,14 +460,14 @@ func (h *Handler) serverCallback(ctx context.Context, b *bot.Bot, update *t_mode
 		ackDispatch, renderDur, editDur, totalDur, rpcCount, cbErr)
 }
 
-func (h *Handler) HelpCommandMenu(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) HelpCommandMenu(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil {
 		return
 	}
-	b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.", ParseMode: "HTML", ReplyMarkup: helpHomeKeyboard()})
+	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.", ParseMode: "HTML", ReplyMarkup: helpHomeKeyboard()})
 }
 
-func (h *Handler) ServerCommand(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) ServerCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil {
 		return
 	}
@@ -445,15 +477,15 @@ func (h *Handler) ServerCommand(ctx context.Context, b *bot.Bot, update *t_model
 		invokerID = update.Message.From.ID
 	}
 	text := serverStatusText(invokerID, time.Since(invokeStart))
-	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()})
+	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()})
 }
 
-func (h *Handler) CodeCommand(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) CodeCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil {
 		return
 	}
 	if update.Message.ReplyToMessage == nil || strings.TrimSpace(update.Message.ReplyToMessage.Text) == "" {
-		_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Reply pesan yang mau di-code terlebih dahulu."})
+		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Reply pesan yang mau di-code terlebih dahulu."})
 		return
 	}
 	language := "go"
@@ -462,16 +494,16 @@ func (h *Handler) CodeCommand(ctx context.Context, b *bot.Bot, update *t_models.
 		language = fields[1]
 	}
 	text := fmt.Sprintf("<pre><code class=\"language-%s\">%s</code></pre>", html.EscapeString(language), html.EscapeString(update.Message.ReplyToMessage.Text))
-	_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyParameters: &t_models.ReplyParameters{MessageID: update.Message.ID}})
+	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyParameters: &botgotd.ReplyParameters{MessageID: update.Message.ID}})
 }
 
-func (h *Handler) HelpInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) HelpInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	HandleInline(ctx, b, update)
 }
 
 // HandleInline is called by the custom polling loop because the bot library
 // version used by this project does not expose an inline-query handler type.
-func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func HandleInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.InlineQuery == nil {
 		return
 	}
@@ -481,16 +513,16 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 		if len(fields) >= 4 {
 			ownerID, ownerErr := strconv.ParseInt(fields[1], 10, 64)
 			if ownerErr == nil {
-				result := &t_models.InlineQueryResultArticle{
+				result := &botgotd.InlineQueryResultArticle{
 					ID: "broadcast_monitor_" + fields[2], Title: "Proses Pengiriman",
 					Description: "Monitor broadcast userbot",
-					InputMessageContent: &t_models.InputTextMessageContent{
+					InputMessageContent: &botgotd.InputTextMessageContent{
 						MessageText: fmt.Sprintf("<b>Proses Pengiriman</b>\nCek bot untuk detail broadcast anda\n<code>#AIO:%s</code>", html.EscapeString(fields[2])),
 						ParseMode:   "HTML",
 					},
 					ReplyMarkup: broadcastStopKeyboard(ownerID, fields[2]),
 				}
-				_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
+				_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
 				return
 			}
 		}
@@ -506,12 +538,12 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 				})
 			}
 		}
-		result := &t_models.InlineQueryResultArticle{
+		result := &botgotd.InlineQueryResultArticle{
 			ID: "broadcast_cancel", Title: "Hentikan Broadcast",
 			Description:         "Permintaan penghentian broadcast dikirim.",
-			InputMessageContent: &t_models.InputTextMessageContent{MessageText: "Permintaan penghentian broadcast dikirim."},
+			InputMessageContent: &botgotd.InputTextMessageContent{MessageText: "Permintaan penghentian broadcast dikirim."},
 		}
-		_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
+		_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
 		return
 	}
 	if query == "server" {
@@ -521,8 +553,8 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 			invokerID = update.InlineQuery.From.ID
 		}
 		text := serverStatusText(invokerID, time.Since(invokeStart))
-		result := &t_models.InlineQueryResultArticle{ID: "assist_server", Title: "Server status", Description: "Status gateway dan resource sistem lengkap", InputMessageContent: &t_models.InputTextMessageContent{MessageText: text, ParseMode: "HTML"}, ReplyMarkup: serverKeyboard()}
-		_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{result}, CacheTime: 0, IsPersonal: false})
+		result := &botgotd.InlineQueryResultArticle{ID: "assist_server", Title: "Server status", Description: "Status gateway dan resource sistem lengkap", InputMessageContent: &botgotd.InputTextMessageContent{MessageText: text, ParseMode: "HTML"}, ReplyMarkup: serverKeyboard()}
+		_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: false})
 		return
 	}
 	if strings.HasPrefix(query, "code ") {
@@ -538,8 +570,8 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 			if err == nil {
 				lang := html.EscapeString(parts[1])
 				body := html.EscapeString(string(source))
-				result := &t_models.InlineQueryResultArticle{ID: "assist_code", Title: "Code", Description: "Format kode", InputMessageContent: &t_models.InputTextMessageContent{MessageText: fmt.Sprintf("<pre><code class=\"language-%s\">%s</code></pre>", lang, body), ParseMode: "HTML"}}
-				_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
+				result := &botgotd.InlineQueryResultArticle{ID: "assist_code", Title: "Code", Description: "Format kode", InputMessageContent: &botgotd.InputTextMessageContent{MessageText: fmt.Sprintf("<pre><code class=\"language-%s\">%s</code></pre>", lang, body), ParseMode: "HTML"}}
+				_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
 				return
 			}
 		}
@@ -567,19 +599,19 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 					if len(desc) > 80 {
 						desc = desc[:77] + "..."
 					}
-					result := &t_models.InlineQueryResultArticle{
+					result := &botgotd.InlineQueryResultArticle{
 						ID:          fmt.Sprintf("note_%d_%s", p.OwnerID, p.Name),
 						Title:       "Catatan: " + p.Name,
 						Description: desc,
-						InputMessageContent: &t_models.InputTextMessageContent{
+						InputMessageContent: &botgotd.InputTextMessageContent{
 							MessageText: msgText,
 							ParseMode:   "HTML",
 						},
 						ReplyMarkup: markup,
 					}
-					_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{
+					_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{
 						InlineQueryID: update.InlineQuery.ID,
-						Results:       []t_models.InlineQueryResult{result},
+						Results:       []botgotd.InlineQueryResult{result},
 						CacheTime:     0,
 						IsPersonal:    true,
 					})
@@ -587,17 +619,17 @@ func HandleInline(ctx context.Context, b *bot.Bot, update *t_models.Update) {
 				}
 			}
 		}
-		_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{}, CacheTime: 0, IsPersonal: true})
+		_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{}, CacheTime: 0, IsPersonal: true})
 		return
 	}
-	result := &t_models.InlineQueryResultArticle{
+	result := &botgotd.InlineQueryResultArticle{
 		ID:                  "assist_help",
 		Title:               "Bantuan userbot",
 		Description:         "Pilih kategori untuk melihat bantuan userbot.",
-		InputMessageContent: &t_models.InputTextMessageContent{MessageText: "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.", ParseMode: "HTML"},
+		InputMessageContent: &botgotd.InputTextMessageContent{MessageText: "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.", ParseMode: "HTML"},
 		ReplyMarkup:         helpHomeKeyboard(),
 	}
-	_, _ = b.AnswerInlineQuery(ctx, &bot.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []t_models.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
+	_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
 }
 
 func mustInt(value string) int {
@@ -608,7 +640,7 @@ func mustInt(value string) int {
 	return parsed
 }
 
-func serverKeyboard() *t_models.InlineKeyboardMarkup {
+func serverKeyboard() *botgotd.InlineKeyboardMarkup {
 	return cachedServerMarkup
 }
 
@@ -735,7 +767,7 @@ type NoteInlinePayload struct {
 	Mode    string             `json:"mode"`
 }
 
-func buildNoteInlineKeyboard(p NoteInlinePayload) *t_models.InlineKeyboardMarkup {
+func buildNoteInlineKeyboard(p NoteInlinePayload) *botgotd.InlineKeyboardMarkup {
 	buttons := p.Buttons
 	if len(buttons) == 0 {
 		if p.Mode == "callback" {
@@ -745,22 +777,22 @@ func buildNoteInlineKeyboard(p NoteInlinePayload) *t_models.InlineKeyboardMarkup
 		}
 	}
 
-	var rows [][]t_models.InlineKeyboardButton
-	var currentRow []t_models.InlineKeyboardButton
+	var rows [][]botgotd.InlineKeyboardButton
+	var currentRow []botgotd.InlineKeyboardButton
 
 	for _, b := range buttons {
-		var btn t_models.InlineKeyboardButton
+		var btn botgotd.InlineKeyboardButton
 		switch b.Kind {
 		case "url":
 			if b.URL != "" {
-				btn = t_models.InlineKeyboardButton{Text: b.Label, URL: b.URL}
+				btn = botgotd.InlineKeyboardButton{Text: b.Label, URL: b.URL}
 			}
 		case "popup":
 			target := b.Target
 			if target == "" {
 				target = p.Name
 			}
-			btn = t_models.InlineKeyboardButton{
+			btn = botgotd.InlineKeyboardButton{
 				Text:         b.Label,
 				CallbackData: fmt.Sprintf("note:pop:%d:%s", p.OwnerID, target),
 			}
@@ -769,7 +801,7 @@ func buildNoteInlineKeyboard(p NoteInlinePayload) *t_models.InlineKeyboardMarkup
 			if target == "" {
 				target = p.Name
 			}
-			btn = t_models.InlineKeyboardButton{
+			btn = botgotd.InlineKeyboardButton{
 				Text:         b.Label,
 				CallbackData: fmt.Sprintf("note:show:%d:%s", p.OwnerID, target),
 			}
@@ -788,10 +820,10 @@ func buildNoteInlineKeyboard(p NoteInlinePayload) *t_models.InlineKeyboardMarkup
 	if len(rows) == 0 {
 		return nil
 	}
-	return &t_models.InlineKeyboardMarkup{InlineKeyboard: rows}
+	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models.Update) {
+func (h *Handler) NoteCallback(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.CallbackQuery == nil {
 		return
 	}
@@ -812,7 +844,7 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 	if len(parts) < 4 {
 		// Single ACK untuk tombol tidak valid
 		ackStart := time.Now()
-		_, ackErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		_, ackErr := b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 			Text:            "Tombol catatan tidak valid.",
 			ShowAlert:       true,
@@ -854,7 +886,7 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 		}
 
 		ackStart := time.Now()
-		_, ackErr := b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+		_, ackErr := b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: update.CallbackQuery.ID,
 			Text:            popText,
 			ShowAlert:       true,
@@ -876,7 +908,7 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 		actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		ackNetStart := time.Now()
-		_, err := b.AnswerCallbackQuery(actx, &bot.AnswerCallbackQueryParams{
+		_, err := b.AnswerCallbackQuery(actx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cbID,
 		})
 		netDur := time.Since(ackNetStart)
@@ -916,7 +948,7 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 	// Step 3: Render keyboard & text
 	renderStart := time.Now()
 	var (
-		markup  *t_models.InlineKeyboardMarkup
+		markup  *botgotd.InlineKeyboardMarkup
 		msgText string
 	)
 	if !found {
@@ -932,13 +964,14 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 	renderDur = time.Since(renderStart)
 
 	// Step 4: Edit message
-	edit := &bot.EditMessageTextParams{
-		Text:        msgText,
-		ParseMode:   "HTML",
-		ReplyMarkup: markup,
+	edit := &botgotd.EditMessageTextParams{
+		Text:               msgText,
+		ParseMode:          "HTML",
+		ReplyMarkup:        markup,
+		RawInlineMessageID: update.CallbackQuery.RawInlineMessageID,
 	}
 
-	if update.CallbackQuery.InlineMessageID != "" {
+	if update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != "" {
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
 	} else if update.CallbackQuery.Message.Message != nil {
 		edit.ChatID = update.CallbackQuery.Message.Message.Chat.ID
@@ -953,7 +986,19 @@ func (h *Handler) NoteCallback(ctx context.Context, b *bot.Bot, update *t_models
 	rpcCount++
 
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		cbErr = editErr
+		errStr := strings.ToLower(editErr.Error())
+		if strings.Contains(errStr, "can't be edited") {
+			if edit.ChatID != nil {
+				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      edit.ChatID,
+					Text:        msgText,
+					ParseMode:   "HTML",
+					ReplyMarkup: markup,
+				})
+			}
+		} else {
+			cbErr = editErr
+		}
 	}
 
 	totalDur := time.Since(start)

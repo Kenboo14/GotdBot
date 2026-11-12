@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -11,6 +12,8 @@ import (
 type Config struct {
 	Telegram struct {
 		BotToken string `yaml:"bot_token"`
+		APIID    int    `yaml:"api_id"`
+		APIHash  string `yaml:"api_hash"`
 	} `yaml:"telegram"`
 
 	Mongo struct {
@@ -59,6 +62,12 @@ func applyEnv(cfg *Config) {
 
 	if value := os.Getenv("BOT_TOKEN"); value != "" {
 		cfg.Telegram.BotToken = value
+	}
+	if value := os.Getenv("API_ID"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Telegram.APIID)
+	}
+	if value := os.Getenv("API_HASH"); value != "" {
+		cfg.Telegram.APIHash = value
 	}
 	if value := os.Getenv("REDIS_ADDR"); value != "" {
 		cfg.Redis.Address = value

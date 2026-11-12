@@ -1,187 +1,127 @@
 package app
 
 import (
+	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/config"
 	"assterisk/gateway/applications/controllers"
 	"assterisk/gateway/applications/databases"
-	"assterisk/gateway/applications/middleware"
 	"context"
-	"encoding/json"
 	"log"
-	"net/http"
-	"net/url"
-	"strconv"
-	"sync"
 	"time"
 
-	"github.com/go-telegram/bot"
-	t_models "github.com/go-telegram/bot/models"
+	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tg"
 )
 
 type Module interface {
-	Register(context.Context, *bot.Bot, *broker.Redis)
+	Register(context.Context, *botgotd.Bot, *broker.Redis)
 }
 
 func Run(ctx context.Context) {
-
-	ctx_timeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Config
+	// 1. Config
 	cfg, err := config.Load("configs.yaml")
 	if err != nil {
 		log.Fatal("failed to load config:", err)
 	}
 
-	// Redis / Message Broker
-	redis, err := broker.NewRedis(ctx_timeout, cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.TLS)
+	// 2. Redis / Message Broker
+	redis, err := broker.NewRedis(ctxTimeout, cfg.Redis.Address, cfg.Redis.Password, cfg.Redis.TLS)
 	if err != nil {
 		log.Fatal("Failed Connect Redis:", err)
 	}
 
-	// Data Manager (MongoDB + SQLite Sync)
-	dbManager, err := databases.NewDataManager(ctx_timeout, cfg.Mongo.URI, cfg.Mongo.DBName, cfg.SQLite.Path)
+	// 3. Data Manager (MongoDB + SQLite Sync)
+	dbManager, err := databases.NewDataManager(ctxTimeout, cfg.Mongo.URI, cfg.Mongo.DBName, cfg.SQLite.Path)
 	if err != nil {
 		log.Printf("⚠️ DataManager warning: %v", err)
 	}
 
-	// Modules
+	// 4. Peer Storage for MTProto AccessHash resolution
+	var peerStorage *botgotd.PeerStorage
+	if dbManager != nil && dbManager.GetSQLiteDB() != nil {
+		peerStorage = botgotd.NewPeerStorage(dbManager.GetSQLiteDB())
+	} else {
+		peerStorage = botgotd.NewPeerStorage(nil)
+	}
+
+	// 5. Bot Token & Credentials
+	token := cfg.Telegram.BotToken
+	appID := cfg.Telegram.APIID
+	appHash := cfg.Telegram.APIHash
+	if appID == 0 {
+		appID = 25033414
+	}
+	if appHash == "" {
+		appHash = "c0b6f8537df9fa559e65a14a8e51a100"
+	}
+
+	// 6. Bot instance
+	botInstance := botgotd.NewBot(nil, token, peerStorage)
+
+	// 7. Register Modules
 	modules := []Module{
 		&controllers.Init{DB: dbManager},
 	}
-
-	baseTransport := &http.Transport{
-		ForceAttemptHTTP2:   true,
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 50,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
-	}
-
-	httpClient := &http.Client{
-		Timeout:   65 * time.Second,
-		Transport: newProtocolSpyTransport(baseTransport),
-	}
-
-	opts := []bot.Option{
-		bot.WithMiddlewares(middleware.Chain),
-		bot.WithHTTPClient(65*time.Second, httpClient),
-	}
-	// Telegram Bot
-	b, err := bot.New(cfg.Telegram.BotToken, opts...)
-	if err != nil {
-		log.Fatal("❌ Critical: Gagal inisialisasi bot:", err)
-	}
-
 	for _, m := range modules {
-		m.Register(ctx, b, redis)
+		m.Register(ctx, botInstance, redis)
 	}
+
+	// Register Inline Query handler
+	botInstance.RegisterHandler(botgotd.HandlerTypeInlineQuery, "", botgotd.MatchTypePrefix, controllers.HandleInline)
+
+	// Wire MTProto update handlers
+	botInstance.SetupUpdateHandlers()
+
+	// 8. MTProto Telegram Client with retry
+	opts := telegram.Options{
+		UpdateHandler: botInstance.Dispatcher,
+	}
+	client := telegram.NewClient(appID, appHash, opts)
+	botInstance.Client = client
+	botInstance.API = tg.NewClient(client)
 
 	go WaitShutdown(ctx)
 
-	startPolling(ctx, b, httpClient, controllers.HandleInline)
-}
-
-// startPolling owns the single getUpdates loop. go-telegram/bot v1.17 does
-// not expose an InlineQuery handler type, so inline_query updates are handled
-// by the supplied callback while all other updates use the library dispatcher.
-func startPolling(ctx context.Context, b *bot.Bot, client *http.Client, inlineHandler func(context.Context, *bot.Bot, *t_models.Update)) {
-	offset := int64(0)
-	var protoLogged sync.Once
-
-	// Bounded worker semaphore: cegah unbounded goroutine fan-out saat burst traffic / spam
-	const maxConcurrentUpdates = 100
-	updateSem := make(chan struct{}, maxConcurrentUpdates)
-
+	log.Println("🚀 Starting GotdBot MTProto Gateway...")
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		params := url.Values{
-			"timeout":         {"50"},
-			"limit":           {"100"},
-			"allowed_updates": {`["message","callback_query","inline_query"]`},
-		}
-		if offset > 0 {
-			params.Set("offset", strconv.FormatInt(offset, 10))
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.telegram.org/bot"+b.Token()+"/getUpdates?"+params.Encode(), nil)
-		if err != nil {
-			log.Printf("Telegram polling request: %v", err)
-			return
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
+
+		err := client.Run(ctx, func(runCtx context.Context) error {
+			status, err := client.Auth().Status(runCtx)
+			if err != nil {
+				return err
 			}
-			log.Printf("Telegram polling: %v", err)
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		protoLogged.Do(func() {
-			log.Printf("[gateway http] polling connected to %s using %s", req.URL.Host, resp.Proto)
+			if !status.Authorized {
+				log.Printf("🔑 Authenticating Bot via MTProto with token...")
+				if _, err := client.Auth().Bot(runCtx, token); err != nil {
+					return err
+				}
+			}
+
+			self, err := client.Self(runCtx)
+			if err == nil && self != nil {
+				log.Printf("✅ [MTProto Bot] Authenticated as @%s (ID: %d)", self.Username, self.ID)
+				peerStorage.SaveUser(self.ID, self.AccessHash)
+			}
+
+			// Keep client running
+			<-runCtx.Done()
+			return runCtx.Err()
 		})
-		var envelope struct {
-			OK     bool              `json:"ok"`
-			Result []json.RawMessage `json:"result"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&envelope)
-		resp.Body.Close()
-		if err != nil || !envelope.OK {
-			time.Sleep(3 * time.Second)
-			continue
-		}
-		for _, raw := range envelope.Result {
-			var update t_models.Update
-			if json.Unmarshal(raw, &update) != nil {
-				continue
-			}
-			if update.ID >= offset {
-				offset = update.ID + 1
-			}
-			up := update
 
-			// Akuisisi slot semaphore sebelum spawn goroutine
-			select {
-			case updateSem <- struct{}{}:
-			case <-ctx.Done():
-				return
-			}
-
-			if up.InlineQuery != nil && inlineHandler != nil {
-				go func(u t_models.Update) {
-					defer func() { <-updateSem }()
-					inlineHandler(ctx, b, &u)
-				}(up)
-				continue
-			}
-			go func(u t_models.Update) {
-				defer func() { <-updateSem }()
-				b.ProcessUpdate(ctx, &u)
-			}(up)
+		if err != nil && ctx.Err() == nil {
+			log.Printf("⚠️ MTProto client disconnected: %v; reconnecting in 5s...", err)
+			time.Sleep(5 * time.Second)
+		} else {
+			break
 		}
 	}
-}
-
-type protocolSpyTransport struct {
-	base http.RoundTripper
-	once sync.Once
-}
-
-func newProtocolSpyTransport(base http.RoundTripper) *protocolSpyTransport {
-	return &protocolSpyTransport{base: base}
-}
-
-func (p *protocolSpyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := p.base.RoundTrip(req)
-	if err == nil && resp != nil {
-		p.once.Do(func() {
-			log.Printf("[gateway bot rpc] protocol=%s url=%s host=%s proto_major=%d", resp.Proto, req.URL.Path, req.URL.Host, resp.ProtoMajor)
-		})
-	}
-	return resp, err
 }

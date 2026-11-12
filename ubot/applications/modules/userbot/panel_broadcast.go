@@ -2,6 +2,7 @@ package userbot
 
 import (
 	"assterisk/ubot/applications/models"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
+	"github.com/gotd/td/telegram/message/rich"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -70,6 +72,30 @@ func (s *Service) deletePanelList(ctx context.Context, ownerID int64, cacheIDTex
 	}
 }
 
+func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey string) {
+	cfg := s.getJasebConfig(ctx, ownerID)
+	filtered := make([]jasebGroupDoc, 0, len(cfg.Groups))
+	removed := false
+	for _, group := range cfg.Groups {
+		matches := group.Target == groupKey || strconv.FormatInt(group.ChatID, 10) == groupKey
+		if !removed && matches {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, group)
+	}
+	if !removed {
+		return
+	}
+	if s.db != nil {
+		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{"$set": bson.M{"groups": filtered, "updated_at": time.Now()}}, options.Update().SetUpsert(true))
+	}
+	if s.sqlite != nil {
+		groupsJSON, _ := json.Marshal(filtered)
+		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET groups = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(groupsJSON), ownerID)
+	}
+}
+
 func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client, chatID, ownerID int64, taskID string) {
 	index, err := strconv.Atoi(taskID)
 	if err != nil || index < 0 {
@@ -77,13 +103,14 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 		return
 	}
 	cfg := s.getJasebConfig(ctx, ownerID)
-	if index >= len(cfg.Lists) {
-		s.reply(ctx, chatID, "❌ List sudah tidak tersedia. Silakan buka ulang Cek List.", "panel_notice")
-		return
-	}
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
 		s.reply(ctx, chatID, "❌ Userbot tidak dapat mengakses cache List.", "panel_notice")
+		return
+	}
+	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
+	if index >= len(cfg.Lists) {
+		s.reply(ctx, chatID, "❌ List sudah tidak tersedia. Silakan buka ulang Cek List.", "panel_notice")
 		return
 	}
 	msgID := cfg.Lists[index]
@@ -123,14 +150,92 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 	if message != nil && strings.TrimSpace(message.Message) != "" {
 		displayContent = convertEntitiesToHTML(message.Message, message.Entities)
 	}
-	text := fmt.Sprintf("<b>Detail List #%d</b>\n\n%s", index+1, displayContent)
+	text := fmt.Sprintf("<h1>📁 Detail List #%d</h1><blockquote expandable>%s</blockquote><tg-button-row><tg-button type=\"callback_data\" data=\"panel:list:delete:%s\" style=\"danger\">🗑️ Hapus List</tg-button></tg-button-row><hr/><p>Multi-configuration VPS control panel</p>", index+1, displayContent, taskID)
 	mediaCacheID := 0
+	var mediaCacheIDs []int
 	if message.Media != nil {
 		// The Bot API can copy the original cached message, preserving the
 		// media, caption, and caption entities without converting them.
-		mediaCacheID = msgID
+		mediaCacheIDs = s.cacheForwardIDs(ctx, client, cachePeer, msgID)
+		if len(mediaCacheIDs) == 1 {
+			mediaCacheID = mediaCacheIDs[0]
+		}
 	}
-	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_detail", TaskID: taskID, Text: text, MediaCacheID: mediaCacheID})
+	// Kirim data ke Redis agar BOT (Gateway) yang mengirimkan pesan detail langsung ke pengguna di chat bot.
+	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
+		ChatID:        chatID,
+		Type:          "list_detail",
+		TaskID:        taskID,
+		Text:          text,
+		MediaCacheID:  mediaCacheID,
+		MediaCacheIDs: mediaCacheIDs,
+	})
+}
+
+// sendPanelRichDetail builds a structured rich message and dispatches it directly
+// to the user's Saved Messages (&tg.InputPeerSelf{}) using the gotd Builder.RichMessage
+// as shown in td/examples/rich-message/main.go.
+func (s *Service) sendPanelRichDetail(ctx context.Context, client *telegram.Client, itemNum int, htmlContent string, cachePeer tg.InputPeerClass, mediaIDs []int) error {
+	blocks, err := rich.ParseHTML(bytes.NewBufferString(htmlContent))
+	if err != nil || len(blocks) == 0 {
+		blocks = []tg.PageBlockClass{rich.Paragraph(rich.Plain(htmlContent))}
+	}
+
+	allBlocks := []tg.PageBlockClass{
+		rich.Heading1(rich.Plain(fmt.Sprintf("Detail List #%d", itemNum))),
+		rich.Divider(),
+	}
+	allBlocks = append(allBlocks, blocks...)
+
+	var photos []tg.InputPhotoClass
+	var documents []tg.InputDocumentClass
+	for index, id := range mediaIDs {
+		cached, err := s.fetchCacheMessage(ctx, client, cachePeer, id)
+		if err != nil || cached == nil {
+			return fmt.Errorf("cache media %d tidak dapat dibaca: %w", id, err)
+		}
+		switch media := cached.Media.(type) {
+		case *tg.MessageMediaPhoto:
+			photo, ok := media.Photo.(*tg.Photo)
+			if !ok {
+				continue
+			}
+			photos = append(photos, &tg.InputPhoto{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference})
+			allBlocks = append(allBlocks, rich.Photo(photo.ID, rich.Caption(rich.Plain(""), rich.Empty())))
+		case *tg.MessageMediaDocument:
+			doc, ok := media.Document.(*tg.Document)
+			if !ok {
+				continue
+			}
+			docInput := &tg.InputDocument{ID: doc.ID, AccessHash: doc.AccessHash, FileReference: doc.FileReference}
+			documents = append(documents, docInput)
+			kind := "document"
+			for _, attribute := range doc.Attributes {
+				switch attribute.(type) {
+				case *tg.DocumentAttributeVideo:
+					kind = "video"
+				case *tg.DocumentAttributeAudio:
+					kind = "audio"
+				}
+			}
+			caption := rich.Caption(rich.Plain(""), rich.Empty())
+			switch kind {
+			case "video":
+				allBlocks = append(allBlocks, rich.Video(doc.ID, caption))
+			case "audio":
+				allBlocks = append(allBlocks, rich.Audio(doc.ID, caption))
+			default:
+				// Rich Message v0.163 has no generic document page block.
+				allBlocks = append(allBlocks, rich.Paragraph(rich.Plain(fmt.Sprintf("[Dokumen %d]", index+1))))
+			}
+		}
+	}
+
+	msg := rich.New(allBlocks...).Photos(photos...).Documents(documents...)
+	// Send structured rich message to Saved Messages directly via Builder.RichMessage
+	// matching td/examples/rich-message/main.go
+	_, err = s.getSender(client).Self().RichMessage(ctx, msg.Input())
+	return err
 }
 
 func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Client, chatID, ownerID int64, taskID string) {
@@ -140,6 +245,7 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 		s.reply(ctx, chatID, "❌ Userbot tidak dapat mengakses cache List.", "panel_notice")
 		return
 	}
+	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "<b>Display List</b>\n\nTotal List tersimpan: <code>%d</code>\n\n", len(cfg.Lists))
 	for index, msgID := range cfg.Lists {
@@ -155,7 +261,7 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 		fmt.Fprintf(&builder, "%d. %s\n", index+1, html.EscapeString(content))
 	}
 	builder.WriteString("\nPilih angka untuk membuka detail List.")
-	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_previews", TaskID: taskID, Text: builder.String()})
+	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_previews", TaskID: strconv.Itoa(len(cfg.Lists)), Text: builder.String()})
 }
 
 func (s *Service) fetchCacheMessage(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
@@ -178,6 +284,154 @@ func (s *Service) fetchCacheMessage(ctx context.Context, client *telegram.Client
 		return message, nil
 	}
 	return nil, fmt.Errorf("message %d tidak ditemukan", msgID)
+}
+
+// normalizePanelListIDs menyatukan pesan-pesan yang berasal dari satu album
+// Telegram menjadi satu List. Saat broadcast, cacheForwardIDs tetap mengambil
+// seluruh anggota album dari ID pertama tersebut.
+func (s *Service) normalizePanelListIDs(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, ownerID int64, source []int) []int {
+	if len(source) < 2 {
+		return source
+	}
+	result := make([]int, 0, len(source))
+	seenAlbums := make(map[int64]struct{})
+	changed := false
+	for _, msgID := range source {
+		message, err := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
+		if err != nil || message == nil {
+			result = append(result, msgID)
+			continue
+		}
+		if groupedID, ok := message.GetGroupedID(); ok && groupedID != 0 {
+			if _, exists := seenAlbums[groupedID]; exists {
+				changed = true
+				continue
+			}
+			seenAlbums[groupedID] = struct{}{}
+		}
+		result = append(result, msgID)
+	}
+	if !changed {
+		return result
+	}
+	if s.db != nil {
+		_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{"$set": bson.M{"lists": result, "updated_at": time.Now()}}, options.Update().SetUpsert(true))
+	}
+	if s.sqlite != nil {
+		listsJSON, _ := json.Marshal(result)
+		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET lists = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(listsJSON), ownerID)
+	}
+	return result
+}
+
+// relayPanelMediaToCache mengambil media asli yang dikirim pemilik akun ke
+// private chat bot, lalu meneruskannya langsung ke AiotdCaches dengan akun userbot.
+// Bot API message ID sengaja tidak dipakai sebagai ID cache karena scope ID
+// Bot API dan MTProto berbeda.
+func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.Client, count, topicID int) ([]int, error) {
+	username, err := s.botUsername(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("gagal resolve bot relay: %w", err)
+	}
+	resolved, err := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: username})
+	if err != nil {
+		return nil, err
+	}
+	botPeer, err := peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
+	if err != nil {
+		return nil, err
+	}
+	history, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: botPeer, Limit: count + 10})
+	if err != nil {
+		return nil, err
+	}
+	var messages []tg.MessageClass
+	switch value := history.(type) {
+	case *tg.MessagesMessages:
+		messages = value.Messages
+	case *tg.MessagesMessagesSlice:
+		messages = value.Messages
+	}
+	sourceIDs := make([]int, 0, count)
+	for _, item := range messages {
+		message, ok := item.(*tg.Message)
+		if !ok || !message.Out || message.Media == nil {
+			continue
+		}
+		sourceIDs = append(sourceIDs, message.ID)
+		if len(sourceIDs) == count {
+			break
+		}
+	}
+	if len(sourceIDs) != count {
+		return nil, fmt.Errorf("menunggu media relay: ditemukan %d dari %d", len(sourceIDs), count)
+	}
+	// History Telegram terbaru berada di depan; balik agar urutan album tetap.
+	for left, right := 0, len(sourceIDs)-1; left < right; left, right = left+1, right-1 {
+		sourceIDs[left], sourceIDs[right] = sourceIDs[right], sourceIDs[left]
+	}
+	cachePeer, err := s.resolveCachePeer(ctx, client)
+	if err != nil {
+		return nil, err
+	}
+	randomIDs := make([]int64, len(sourceIDs))
+	for i := range randomIDs {
+		randomIDs[i] = time.Now().UnixNano() + int64(i)
+	}
+	updates, err := client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+		FromPeer: botPeer, ToPeer: cachePeer, ID: sourceIDs, RandomID: randomIDs,
+		DropAuthor: true, ReplyTo: &tg.InputReplyToMessage{ReplyToMsgID: topicID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	ids := panelForwardedMessageIDs(updates)
+	if len(ids) != len(sourceIDs) {
+		return nil, fmt.Errorf("ID pesan cache tidak lengkap: %d dari %d", len(ids), len(sourceIDs))
+	}
+	return ids, nil
+}
+
+func panelForwardedMessageIDs(updates tg.UpdatesClass) []int {
+	if updates == nil {
+		return nil
+	}
+	result := make([]int, 0, 4)
+	messageIDs := make([]int, 0, 4)
+	updateIDs := make([]int, 0, 4)
+	appendUpdate := func(update tg.UpdateClass) {
+		switch item := update.(type) {
+		case *tg.UpdateNewMessage:
+			if item.Message != nil {
+				messageIDs = append(messageIDs, item.Message.GetID())
+			}
+		case *tg.UpdateNewChannelMessage:
+			if item.Message != nil {
+				messageIDs = append(messageIDs, item.Message.GetID())
+			}
+		case *tg.UpdateMessageID:
+			// UpdateMessageID is an auxiliary mapping update. It is not an
+			// additional cache message and must not be counted separately.
+			updateIDs = append(updateIDs, item.ID)
+		}
+	}
+	switch value := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		messageIDs = append(messageIDs, value.ID)
+	case *tg.Updates:
+		for _, item := range value.Updates {
+			appendUpdate(item)
+		}
+	case *tg.UpdatesCombined:
+		for _, item := range value.Updates {
+			appendUpdate(item)
+		}
+	}
+	if len(messageIDs) > 0 {
+		return messageIDs
+	}
+	result = append(result, updateIDs...)
+	return result
 }
 
 func cacheMessages(result tg.MessagesMessagesClass) []tg.MessageClass {
@@ -318,8 +572,57 @@ func (s *Service) countLists(ctx context.Context, ownerID int64) int {
 	return len(cfg.Lists)
 }
 
+func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
+	if s.db == nil || s.sqlite == nil {
+		return
+	}
+	var doc jasebConfigDoc
+	if err := s.db.Collection("jaseb_configurasi").FindOne(ctx, bson.M{"_id": ownerID}).Decode(&doc); err != nil {
+		return
+	}
+	lists, _ := json.Marshal(doc.Lists)
+	groups, _ := json.Marshal(doc.Groups)
+	topics, _ := json.Marshal(doc.Topics)
+	updatedAt := doc.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	_, _ = s.sqlite.DB.ExecContext(ctx, `
+		INSERT INTO jaseb_configurasi (
+			owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode,
+			status, masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id,
+			topic_enabled, tindakan_terkini, tindakan_terakhir, lists, groups, topics,
+			broadcast_index, broadcast_next_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(owner_id) DO UPDATE SET
+			type=excluded.type, delay=excluded.delay, skip_floodwait=excluded.skip_floodwait,
+			timer=excluded.timer, extra=excluded.extra, mode=excluded.mode, safemode=excluded.safemode,
+			status=excluded.status, masa_aktif=excluded.masa_aktif, notifikasi=excluded.notifikasi,
+			email=excluded.email, admin=excluded.admin, watermark=excluded.watermark,
+			watermark_cache_id=excluded.watermark_cache_id, topic_enabled=excluded.topic_enabled,
+			tindakan_terkini=excluded.tindakan_terkini, tindakan_terakhir=excluded.tindakan_terakhir,
+			lists=excluded.lists, groups=excluded.groups, topics=excluded.topics,
+			broadcast_index=excluded.broadcast_index, broadcast_next_at=excluded.broadcast_next_at,
+			updated_at=excluded.updated_at`,
+		doc.OwnerID, doc.Type, doc.Delay, boolInt(doc.SkipFloodWait), doc.Timer, doc.Extra,
+		doc.Mode, boolInt(doc.Safemode), doc.Status, doc.MasaAktif, doc.Notifikasi, doc.Email,
+		doc.Admin, doc.Watermark, doc.WatermarkCacheID, boolInt(doc.TopicEnabled),
+		doc.TindakanTerkini, doc.TindakanTerakhir, string(lists), string(groups), string(topics),
+		doc.BroadcastIndex, doc.BroadcastNextAt, updatedAt)
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfigDoc {
-	// 1. Coba dari SQLite
+	// SQLite menjadi sumber baca cepat. Mongo disinkronkan saat start/resume
+	// broadcast dan hanya dipakai sebagai fallback bila SQLite tidak tersedia.
+
+	// Fallback dari SQLite jika MongoDB tidak tersedia.
 	if s.sqlite != nil {
 		var listsJSON, groupsJSON, topicsJSON string
 		var delay, sfw, sfm, tpe, extra, wmCacheID int
@@ -375,13 +678,9 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 			return doc
 		}
 	}
-
-	// 2. Coba dari MongoDB
 	if s.db != nil {
-		col := s.db.Collection("jaseb_configurasi")
 		var doc jasebConfigDoc
-		err := col.FindOne(ctx, bson.M{"_id": ownerID}).Decode(&doc)
-		if err == nil {
+		if err := s.db.Collection("jaseb_configurasi").FindOne(ctx, bson.M{"_id": ownerID}).Decode(&doc); err == nil {
 			return doc
 		}
 	}
@@ -445,12 +744,22 @@ func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int6
 	}
 }
 
-func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int) {
+func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
 	topicID := getTeksCacheTopicID()
 	cachedMsgID := 0
 	var err error
+	if sourceCount > 0 {
+		mediaIDs, err = s.relayPanelMediaToCache(ctx, client, sourceCount, topicID)
+		if err != nil {
+			s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan Media:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+			return
+		}
+	}
 	if len(mediaIDs) > 0 {
 		cachedMsgID = mediaIDs[0]
+		// Satu album adalah satu List logis. Saat broadcast, ID pertama
+		// akan memperluas kembali seluruh album lewat cacheForwardIDs.
+		mediaIDs = []int{cachedMsgID}
 	} else {
 		cachedMsgID, err = s.sendTextToAiotdCachesTopic(ctx, client, topicID, text, toMTProtoEntities(entities))
 		mediaIDs = []int{cachedMsgID}
@@ -484,10 +793,17 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	s.reply(ctx, chatID, report, "panel_notice")
 }
 
-func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int) {
+func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
 	topicID := getWatermarkCacheTopicID()
 	cachedMsgID := 0
 	var err error
+	if sourceCount > 0 {
+		mediaIDs, err = s.relayPanelMediaToCache(ctx, client, sourceCount, topicID)
+		if err != nil {
+			s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan Media:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+			return
+		}
+	}
 	if len(mediaIDs) > 0 {
 		cachedMsgID = mediaIDs[0]
 	} else {
@@ -527,10 +843,12 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 }
 
 func (s *Service) handleStartPanelBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+	s.syncJasebConfigFromMongo(ctx, ownerID)
 	s.launchPanelBroadcast(client, chatID, ownerID, false)
 }
 
 func (s *Service) resumePanelBroadcast(client *telegram.Client, chatID, ownerID int64) {
+	s.syncJasebConfigFromMongo(context.Background(), ownerID)
 	cfg := s.getJasebConfig(context.Background(), ownerID)
 	if strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
 		s.launchPanelBroadcast(client, chatID, ownerID, true)
@@ -572,6 +890,12 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 	if err != nil {
 		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menghubungi @%s:</b> <code>%s</code>", getGroupCache(), html.EscapeString(err.Error())), "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", "Gagal menghubungi cache")
+		return
+	}
+	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
+	if len(cfg.Lists) == 0 {
+		s.reply(ctx, chatID, "⚠️ <b>Siaran Tidak Dapat Berjalan:</b> Materi list kosong setelah normalisasi.", "panel_notice")
+		s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", "Materi list kosong")
 		return
 	}
 
@@ -649,20 +973,28 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 		_, err = client.API().MessagesForwardMessages(ctx, req)
 		if err != nil {
 			log.Printf("[panelBroadcast] forward to %s (%d) error: %v", grp.Title, grp.ChatID, err)
-			if flood, ok := tgerr.AsFloodWait(err); ok {
-				if cfg.SkipFloodWait {
-					log.Printf("[panelBroadcast] FloodWait %v skipped", flood)
-					nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
-					s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
-					continue
-				}
+			if flood, ok := tgerr.AsFloodWait(err); ok && !cfg.SkipFloodWait {
 				sleepDur := flood + time.Second
 				select {
 				case <-ctx.Done():
 					return
 				case <-time.After(sleepDur):
 				}
-				_, _ = client.API().MessagesForwardMessages(ctx, req)
+				_, err = client.API().MessagesForwardMessages(ctx, req)
+			}
+			if err != nil {
+				if flood, ok := tgerr.AsFloodWait(err); ok && cfg.SkipFloodWait {
+					log.Printf("[panelBroadcast] FloodWait %v skipped for %s", flood, grp.Title)
+					// SkipFloodWait memang mengizinkan target dilewati.
+					nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
+					s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
+					continue
+				}
+				// Checkpoint selalu maju, termasuk saat pengiriman gagal, agar
+				// worker tidak berhenti di satu target bermasalah.
+				nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
+				s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
+				continue
 			}
 		}
 

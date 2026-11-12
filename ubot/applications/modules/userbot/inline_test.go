@@ -439,4 +439,3 @@ func BenchmarkResultGetID(b *testing.B) {
 		benchSinkString = iface.GetID()
 	}
 }
-
