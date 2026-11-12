@@ -101,42 +101,8 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			cache = "AiotdCaches"
 		}
 
-		// KASUS 1: Media Album / Grup (lebih dari 1 media)
-		if len(data.MediaCacheIDs) > 1 {
-			copied, err := b.CopyMessages(ctx, &botgotd.CopyMessagesParams{
-				ChatID:     data.ChatID,
-				FromChatID: "@" + cache,
-				MessageIDs: data.MediaCacheIDs,
-			})
-			if err == nil && len(copied) > 0 {
-				var copiedIDs []int
-				for _, c := range copied {
-					copiedIDs = append(copiedIDs, c.ID)
-				}
-				lastMsg := copied[len(copied)-1]
-				_, markupErr := b.EditMessageReplyMarkup(ctx, &botgotd.EditMessageReplyMarkupParams{
-					ChatID:      data.ChatID,
-					MessageID:   lastMsg.ID,
-					ReplyMarkup: detailMarkup,
-				})
-				if markupErr != nil {
-					richSentMsg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
-						ChatID:    data.ChatID,
-						Text:      data.Text,
-						ParseMode: "HTML",
-					})
-					if richSentMsg != nil {
-						copiedIDs = append(copiedIDs, richSentMsg.ID)
-					}
-				}
-				h.trackDetailMessageIDs(ctx, data.ChatID, copiedIDs)
-				return
-			}
-			log.Printf("Telegram copy cached media group failed (cache=%s): %v", cache, err)
-		}
-
-		// KASUS 2: Media Tunggal (1 media foto/video/dokumen)
-		if data.MediaCacheID > 0 || len(data.MediaCacheIDs) == 1 {
+		// KASUS 1: Media Tunggal (1 media foto/video/dokumen) -> Tampilkan langsung medianya dengan 1 tombol Hapus List
+		if (data.MediaCacheID > 0 || len(data.MediaCacheIDs) == 1) && len(data.MediaCacheIDs) <= 1 {
 			targetMediaID := data.MediaCacheID
 			if targetMediaID == 0 && len(data.MediaCacheIDs) == 1 {
 				targetMediaID = data.MediaCacheIDs[0]
@@ -154,7 +120,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			log.Printf("Telegram copy cached single media failed (cache=%s message=%d): %v", cache, targetMediaID, err)
 		}
 
-		// KASUS 3: Teks Biasa (tidak ada media)
+		// KASUS 2: Media Album atau Teks Biasa -> Kirim 1 respon pesan Rich Detail lengkap dengan info tabel & tombol Rich Hapus List
 		sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    data.ChatID,
 			Text:      data.Text,
