@@ -71,16 +71,9 @@ func (m *DataManager) GetSQLiteDB() *sql.DB {
 }
 
 func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool {
+	// SQLite adalah satu-satunya sumber read — MongoDB hanya backup write
 	if m.sqlite != nil {
 		has, err := m.sqlite.HasSession(ctx, ownerID)
-		if err == nil && has {
-			return true
-		}
-	}
-	if mg := m.getMongo(); mg != nil {
-		mongoCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		has, err := mg.HasSession(mongoCtx, ownerID)
 		if err == nil && has {
 			return true
 		}
@@ -89,25 +82,11 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 }
 
 func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebConfig {
-	// Baca dari SQLite lokal dulu (lokal, instan) — sumber paling cepat.
-	// SQLite sudah selalu disinkronkan setiap SaveUserConfig dipanggil.
+	// Baca hanya dari SQLite — cepat, lokal, tidak ada network call.
+	// MongoDB hanya digunakan sebagai backup write (async).
 	if m.sqlite != nil {
 		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
 		if err == nil && cfg != nil {
-			return cfg
-		}
-	}
-
-	// Fallback: query MongoDB jika SQLite belum punya data (mis. pertama kali).
-	if mg := m.getMongo(); mg != nil {
-		mongoCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		cfg, err := mg.GetConfig(mongoCtx, ownerID)
-		if err == nil && cfg != nil {
-			// Simpan ke SQLite agar query berikutnya langsung dari lokal
-			if m.sqlite != nil {
-				_ = m.sqlite.SaveConfig(ctx, cfg)
-			}
 			return cfg
 		}
 	}
