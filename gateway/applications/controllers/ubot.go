@@ -92,8 +92,8 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	if data.Type == "list_detail" {
 		detailMarkup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "🗑️ Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}},
-				{{Text: "🔙 Kembali ke List", CallbackData: "panel:list:back"}},
+				{{Text: "🗑 Hapus List", CallbackData: "panel:list:delete:" + data.TaskID}},
+				{{Text: "← Kembali ke List", CallbackData: "panel:list:back"}},
 			},
 		}
 
@@ -162,7 +162,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		token := os.Getenv("BOT_TOKEN")
 		richBackMarkup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "🔙 Kembali ke List", CallbackData: "panel:list:back"}},
+				{{Text: "← Kembali ke List", CallbackData: "panel:list:back"}},
 			},
 		}
 		if msgID, sentErr := sendRichMessage(ctx, token, data.ChatID, data.Text, richBackMarkup); sentErr == nil {
@@ -303,21 +303,24 @@ func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *botgotd.Bot, da
 
 func broadcastDetailText(data models.PFromService) string {
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<pre>Laporan Broadcast\n\nTerkirim : %d\nGagal    : %d\nTotal    : %d\n\nDetail:\n", data.Success, data.Failed, data.Total)
+	builder.WriteString("<b>📊 Laporan Akhir Broadcast</b>\n━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(&builder, "<b>Terkirim:</b> <code>%d</code>\n<b>Gagal:</b>    <code>%d</code>\n<b>Total:</b>    <code>%d</code>\n", data.Success, data.Failed, data.Total)
 	if len(data.Errors) == 0 {
-		builder.WriteString("Tidak ada error pengiriman.")
+		builder.WriteString("\n<i>Semua pesan berhasil dikirim tanpa kendala.</i>")
 	} else {
+		builder.WriteString("\n<b>Catatan Kendala:</b>\n<pre>")
 		for index, item := range data.Errors {
-			if index >= 100 {
+			if index >= 30 {
+				fmt.Fprintf(&builder, "... dan %d kendala lainnya\n", len(data.Errors)-30)
 				break
 			}
 			fmt.Fprintf(&builder, "%d. %s\n", index+1, html.EscapeString(item))
 		}
+		builder.WriteString("</pre>")
 	}
-	builder.WriteString("</pre>")
 	text := builder.String()
 	if len(text) > 4000 {
-		return text[:4000] + "</pre>"
+		return text[:3990] + "\n...</pre>"
 	}
 	return text
 }
@@ -331,19 +334,24 @@ func broadcastMonitorText(data models.PFromService) string {
 		progress = 100
 	}
 	filled := progress / 10
-	bar := strings.Repeat("■ ", filled) + strings.Repeat("□ ", 10-filled)
+	bar := strings.Repeat("■", filled) + strings.Repeat("□", 10-filled)
 	status := fmt.Sprintf("%d%%", progress)
-	if data.Type == "broadcast_done" && progress == 100 {
-		status = "100% selesai"
-	} else if data.Type == "broadcast_done" {
-		status = fmt.Sprintf("%d%% dibatalkan", progress)
+	title := "📡 <b>Broadcast Sedang Berjalan</b>"
+	if data.Type == "broadcast_done" {
+		if progress == 100 {
+			title = "✅ <b>Broadcast Selesai</b>"
+			status = "100% selesai"
+		} else {
+			title = "🛑 <b>Broadcast Dibatalkan</b>"
+			status = fmt.Sprintf("%d%% dibatalkan", progress)
+		}
 	}
-	return fmt.Sprintf("<pre>Proses Pengiriman\n\nTerkirim : %d\nGagal    : %d\nTotal    : %d\nStatus   : %s%s</pre>", data.Success, data.Failed, data.Total, bar, status)
+	return fmt.Sprintf("%s\n━━━━━━━━━━━━━━━━━━━━\n<b>Progress:</b> <code>[%s] %s</code>\n<b>Terkirim:</b> <code>%d</code>\n<b>Gagal:</b>    <code>%d</code>\n<b>Total:</b>    <code>%d</code>", title, bar, status, data.Success, data.Failed, data.Total)
 }
 
 func broadcastStopKeyboard(ownerID int64, taskID string) *botgotd.InlineKeyboardMarkup {
 	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{
-		Text: "Hentikan Broadcast", SwitchInlineQueryCurrentChat: fmt.Sprintf("gcancel %d %s", ownerID, taskID),
+		Text: "🛑 Hentikan Broadcast", SwitchInlineQueryCurrentChat: fmt.Sprintf("gcancel %d %s", ownerID, taskID),
 	}}}}
 }
 

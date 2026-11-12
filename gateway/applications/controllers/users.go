@@ -35,13 +35,13 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 		return
 	}
 
-	// Tampilan RichText bila sesi belum terpasang
+	// Tampilan pesan bila sesi belum terpasang
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<h1>👋 Selamat Datang, %s</h1>", html.EscapeString(userName)))
-	sb.WriteString("<blockquote>⚠️ <b>Sesi Userbot Belum Aktif</b>\n")
-	sb.WriteString("<i>Akun Telegram Anda belum terhubung dengan mesin GotdBot Userbot.</i></blockquote>\n\n")
-	sb.WriteString("<p>Silakan ketik <code>/create</code> untuk memasang dan mengaktifkan sesi userbot Anda, atau hubungi administrator untuk bantuan.</p>")
-	sb.WriteString("<hr/><p>GotdBot • Userbot Manager</p>")
+	sb.WriteString(fmt.Sprintf("<b>👋 Halo, %s!</b>\n━━━━━━━━━━━━━━━━━━━━\n\n", html.EscapeString(userName)))
+	sb.WriteString("⚠️ <b>Sesi Userbot Belum Terpasang</b>\n")
+	sb.WriteString("Akun Telegram Anda belum terhubung ke sistem GotdBot.\n\n")
+	sb.WriteString("Ketik <code>/create</code> untuk memulai proses pemasangan userbot.\n\n")
+	sb.WriteString("<i>GotdBot • Userbot Manager</i>")
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:    chatID,

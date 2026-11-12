@@ -39,6 +39,14 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		h.DisplayList(ctx, b, cb.Message.Message.Chat.ID, cb.From.ID)
 		return
 	}
+	if len(parts) >= 3 && parts[0] == "panel" && parts[1] == "group" && parts[2] == "back" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		if cb.Message != nil && cb.Message.Message != nil {
+			_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: cb.Message.Message.Chat.ID, MessageID: cb.Message.Message.ID})
+			h.DisplayGroup(ctx, b, cb.Message.Message.Chat.ID, cb.From.ID)
+		}
+		return
+	}
 	if len(parts) != 4 || parts[0] != "panel" || parts[3] == "" {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "Mohon pilih kembali list yang ingin dihapus.", ShowAlert: true})
 		return

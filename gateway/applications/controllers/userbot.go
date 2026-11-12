@@ -220,7 +220,15 @@ func (h *Handler) HelpCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 	if update.Message == nil {
 		return
 	}
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "<b>Bantuan userbot</b>\n\n!ping / !p — ukur latency koneksi Telegram\n!help — tampilkan bantuan ini\n!code [bahasa] — format pesan reply\n!eval / !sh — jalankan perintah shell\n!setp none — hapus prefix command\n/create — pasang userbot baru\n/cancel — batalkan pemasangan", ParseMode: "HTML"})
+	text := "<b>📖 Panduan Cepat Perintah</b>\n━━━━━━━━━━━━━━━━━━━━\n" +
+		"• <code>!ping</code> / <code>!p</code> — Ukur latency koneksi\n" +
+		"• <code>!help</code> — Buka menu bantuan interaktif\n" +
+		"• <code>!code [bahasa]</code> — Format kode pesan reply\n" +
+		"• <code>!eval</code> / <code>!sh</code> — Eksekusi command shell\n" +
+		"• <code>!setp none</code> — Nonaktifkan prefix command\n" +
+		"• <code>/create</code> — Setup userbot baru\n" +
+		"• <code>/cancel</code> — Batalkan instalasi"
+	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML"})
 }
 
 var (
@@ -237,23 +245,23 @@ type helpPageSnapshot struct {
 
 var cachedHelpPages = map[string]helpPageSnapshot{
 	"assist_help:home": {
-		text:   "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.",
+		text:   "<b>🤖 Asisten Pribadi Userbot</b>\n━━━━━━━━━━━━━━━━━━━━\nPilih kategori di bawah untuk melihat daftar bantuan perintah userbot.",
 		markup: cachedHelpHomeMarkup,
 	},
 	"assist_help:ping": {
-		text:   "<b>Ping</b>\n\n<code>!ping</code> mengukur latency koneksi MTProto userbot.\n<code>!p</code> adalah alias.",
+		text:   "<b>⚡ Ping &amp; Latency</b>\n━━━━━━━━━━━━━━━━━━━━\n<code>!ping</code> — Mengukur latency koneksi MTProto userbot ke Telegram.\n<code>!p</code> — Alias cepat.",
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:notes": {
-		text:   "<b>Notes</b>\n\nPerintah catatan:\n<code>!save &lt;nama&gt; [-cb|-pop]</code> — Simpan catatan\n<code>!get &lt;nama&gt;</code> atau <code>#&lt;nama&gt;</code> — Ambil catatan\n<code>!lsnote</code> — Daftar catatan\n<code>!delnote &lt;nama&gt;</code> — Hapus catatan\n<code>!clearnote</code> — Hapus semua catatan\n<code>!exportnote</code> — Ekspor catatan\n<code>!importnote</code> — Impor catatan",
+		text:   "<b>📝 Manajemen Catatan</b>\n━━━━━━━━━━━━━━━━━━━━\n• <code>!save &lt;nama&gt; [-cb|-pop]</code> — Simpan catatan\n• <code>!get &lt;nama&gt;</code> / <code>#&lt;nama&gt;</code> — Ambil catatan\n• <code>!lsnote</code> — Daftar semua catatan\n• <code>!delnote &lt;nama&gt;</code> — Hapus catatan\n• <code>!clearnote</code> — Hapus semua catatan\n• <code>!exportnote</code> — Ekspor catatan\n• <code>!importnote</code> — Impor catatan",
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:code": {
-		text:   "<b>Code</b>\n\nReply pesan dengan <code>!code</code> atau <code>!code go</code> untuk memformat kode melalui inline botgotd.",
+		text:   "<b>💻 Format Kode</b>\n━━━━━━━━━━━━━━━━━━━━\nReply pesan apapun dengan <code>!code</code> atau <code>!code go</code> untuk memformat syntax highlighting via inline query.",
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:server": {
-		text:   "<b>Server</b>\n\n<code>!server</code> menampilkan status resource gateway dan tombol refresh.",
+		text:   "<b>🖥 Status Server</b>\n━━━━━━━━━━━━━━━━━━━━\n<code>!server</code> — Menampilkan status resource sistem &amp; gateway botgotd secara real-time.",
 		markup: cachedHelpBackMarkup,
 	},
 }
@@ -333,7 +341,7 @@ func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botg
 	if !ok {
 		renderStart := time.Now()
 		category := strings.TrimPrefix(data, "assist_help:")
-		text = fmt.Sprintf("<b>%s</b>\n\nKategori ini tersedia pada menu bantuan.", html.EscapeString(category))
+		text = fmt.Sprintf("<b>📖 Bantuan: %s</b>\n━━━━━━━━━━━━━━━━━━━━\nKategori ini tersedia pada menu bantuan userbot.", html.EscapeString(strings.ToUpper(category)))
 		markup = cachedHelpBackMarkup
 		renderDur = time.Since(renderStart)
 	}
@@ -711,23 +719,26 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 		userInvokeStr = fmt.Sprintf("<code>%d</code>", invokerID)
 	}
 
-	return fmt.Sprintf(`<b>⚡ Status Server GotdBot</b>
+	return fmt.Sprintf(`<b>🖥 Dashboard Server</b>
+━━━━━━━━━━━━━━━━━━━━
+<b>User:</b> %s  <b>Invoke:</b> <code>%s</code>
+<b>Ping:</b> <code>%s</code>  <b>Uptime:</b> <code>%s</code>
 
-👤 <b>User Invoke:</b> %s
-⏱ <b>Latency Invoke:</b> <code>%s</code>
-🌐 <b>Ping Server:</b> <code>%s</code>
+<b>Sistem:</b>
+• CPU: <code>%.1f%%</code> (%d Cores)
+• RAM: <code>%.1f / %.1f MB (%.1f%%)</code>
+• Swap: <code>%.1f / %.1f MB (%.1f%%)</code>
+• Disk: <code>R: %.1f MB | W: %.1f MB</code>
 
-⚙️ <b>CPU:</b> <code>%.1f%%</code> (%d Cores)
-🧠 <b>System RAM:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
-💾 <b>Swapon:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
-🔄 <b>Disk I/O:</b> <code>R: %.1f MB | W: %.1f MB</code>
-
-📦 <b>RAM Proses (Go):</b> <code>%.1f MB</code> (Heap: <code>%.1f MB</code>)
-🧵 <b>Goroutine:</b> <code>%d</code>
-⏳ <b>Uptime:</b> <code>%s</code>`,
+<b>Runtime Go:</b>
+• Mem: <code>%.1f MB</code> (Heap: <code>%.1f MB</code>)
+• Goroutine: <code>%d</code>
+━━━━━━━━━━━━━━━━━━━━
+<i>GotdBot • Infrastructure Monitor</i>`,
 		userInvokeStr,
 		invokeStr,
 		serverPingStr,
+		formatUptime(time.Since(gatewayStartedAt)),
 		cpuUsage,
 		runtime.NumCPU(),
 		usedRAMMB,
@@ -741,7 +752,6 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 		float64(m.Sys)/1024/1024,
 		float64(m.HeapAlloc)/1024/1024,
 		runtime.NumGoroutine(),
-		formatUptime(time.Since(gatewayStartedAt)),
 	)
 }
 
