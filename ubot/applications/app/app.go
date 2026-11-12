@@ -31,16 +31,29 @@ func Run(ctx context.Context) {
 		log.Fatal("Failed Connect SQLite:", err)
 	}
 
-	// 2. Offsite Backup Database: MongoDB Cloud (Optional / Graceful Bypass)
+	// 2. Offsite Backup Database: MongoDB Cloud (Optional, retried in background)
 	var mongoClient *databases.MongoClient
 	var mongoDB *mongo.Database
 	if cfg.MongoBackup.URI != "" {
-		mClient, err := databases.NewMongoClient(ctx_timeout, cfg.MongoBackup.URI, cfg.MongoBackup.DBName)
-		if err != nil {
-			log.Printf("⚠️ Failed to initialize MongoDB backup (bypassing): %v", err)
-		} else if mClient != nil {
-			mongoClient = mClient
-			mongoDB = mClient.Database
+		mongoCh := make(chan *databases.MongoClient, 1)
+		go func() {
+			// ctx (parent, long-lived) agar retry tidak dipotong ctx_timeout 10s
+			mClient, retryErr := databases.NewMongoClient(ctx, cfg.MongoBackup.URI, cfg.MongoBackup.DBName)
+			if retryErr != nil {
+				log.Printf("⚠️ Failed to initialize MongoDB backup (bypassing): %v", retryErr)
+			}
+			mongoCh <- mClient
+		}()
+		// Tunggu sebentar (non-blocking) agar startup cepat; MongoDB tersambung di background
+		select {
+		case mClient := <-mongoCh:
+			if mClient != nil {
+				mongoClient = mClient
+				mongoDB = mClient.Database
+			}
+		case <-ctx_timeout.Done():
+			// MongoDB belum siap saat startup — akan tersambung di goroutine background
+			log.Printf("ℹ️ MongoDB not ready at startup, connecting in background...")
 		}
 	}
 

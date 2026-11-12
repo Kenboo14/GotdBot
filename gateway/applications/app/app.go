@@ -35,7 +35,9 @@ func Run(ctx context.Context) {
 	}
 
 	// 3. Data Manager (MongoDB + SQLite Sync)
-	dbManager, err := databases.NewDataManager(ctxTimeout, cfg.Mongo.URI, cfg.Mongo.DBName, cfg.SQLite.Path)
+	// ctx        = parent context (long-lived, for MongoDB retry goroutine)
+	// ctxTimeout = short 10s context (for immediate startup steps only)
+	dbManager, err := databases.NewDataManager(ctx, ctxTimeout, cfg.Mongo.URI, cfg.Mongo.DBName, cfg.SQLite.Path)
 	if err != nil {
 		log.Printf("⚠️ DataManager warning: %v", err)
 	}

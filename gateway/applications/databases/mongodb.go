@@ -24,24 +24,60 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 		dbName = "gotdbot"
 	}
 
+	const baseDelay = 3 * time.Second
+	const maxDelay = 30 * time.Second
+	const perAttemptTimeout = 10 * time.Second
+
 	opts := options.Client().ApplyURI(uri)
 	opts.SetServerSelectionTimeout(8 * time.Second)
 	opts.SetConnectTimeout(8 * time.Second)
 
-	client, err := mongo.Connect(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect mongodb: %w", err)
-	}
+	for attempt := 1; ; attempt++ {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("mongodb context cancelled: %w", ctx.Err())
+		}
 
-	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := client.Ping(pingCtx, nil); err != nil {
-		return nil, fmt.Errorf("failed to ping mongodb: %w", err)
-	}
+		attemptCtx, cancel := context.WithTimeout(ctx, perAttemptTimeout)
+		client, err := mongo.Connect(attemptCtx, opts)
+		if err != nil {
+			cancel()
+			delay := time.Duration(attempt) * baseDelay
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			log.Printf("⚠️ MongoDB connect attempt %d failed: %v. Retrying in %v...", attempt, err, delay)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("mongodb context cancelled: %w", ctx.Err())
+			case <-time.After(delay):
+			}
+			continue
+		}
 
-	db := client.Database(dbName)
-	log.Printf("🍃 Gateway MongoDB connected: %s (db: %s)", uri[:min(len(uri), 25)]+"...", dbName)
-	return &MongoClient{Client: client, Database: db}, nil
+		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+		pingErr := client.Ping(pingCtx, nil)
+		pingCancel()
+		cancel()
+
+		if pingErr != nil {
+			_ = client.Disconnect(context.Background())
+			delay := time.Duration(attempt) * baseDelay
+			if delay > maxDelay {
+				delay = maxDelay
+			}
+			log.Printf("⚠️ MongoDB ping attempt %d failed: %v. Retrying in %v...", attempt, pingErr, delay)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("mongodb context cancelled: %w", ctx.Err())
+			case <-time.After(delay):
+			}
+			continue
+		}
+
+		db := client.Database(dbName)
+		log.Printf("🍃 Gateway MongoDB connected (attempt %d): %s (db: %s)", attempt, uri[:min(len(uri), 25)]+"...", dbName)
+		return &MongoClient{Client: client, Database: db}, nil
+	}
 }
 
 func (m *MongoClient) HasSession(ctx context.Context, ownerID int64) (bool, error) {

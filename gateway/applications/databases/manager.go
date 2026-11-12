@@ -7,38 +7,60 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 type DataManager struct {
 	sqlite *SQLiteClient
+	mu     sync.RWMutex
 	mongo  *MongoClient
 }
 
-func NewDataManager(ctx context.Context, mongoURI, mongoDBName, sqlitePath string) (*DataManager, error) {
-	var sClient *SQLiteClient
-	var mClient *MongoClient
-	var err error
+func (dm *DataManager) setMongo(mc *MongoClient) {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	dm.mongo = mc
+}
 
-	// Connect SQLite
-	sClient, err = NewSQLiteClient(sqlitePath)
+func (dm *DataManager) getMongo() *MongoClient {
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+	return dm.mongo
+}
+
+// NewDataManager creates a DataManager with SQLite (required) and MongoDB (optional, retried in background).
+// bgCtx: long-lived context for MongoDB retry loop (not subject to startup timeout).
+// initCtx: short context for SQLite init; can share the timeout context.
+func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mongoDBName, sqlitePath string) (*DataManager, error) {
+	dm := &DataManager{}
+
+	// Connect SQLite (must succeed immediately)
+	sClient, err := NewSQLiteClient(sqlitePath)
 	if err != nil {
 		log.Printf("⚠️ SQLite connection failed: %v", err)
 	}
+	dm.sqlite = sClient
 
-	// Connect MongoDB
+	// Connect MongoDB in background with retry until success
 	if mongoURI != "" {
-		mClient, err = NewMongoClient(ctx, mongoURI, mongoDBName)
-		if err != nil {
-			log.Printf("⚠️ MongoDB connection failed: %v", err)
-		}
+		go func() {
+			mClient, retryErr := NewMongoClient(bgCtx, mongoURI, mongoDBName)
+			if retryErr != nil {
+				log.Printf("⚠️ MongoDB permanently failed (context cancelled): %v", retryErr)
+				return
+			}
+			dm.setMongo(mClient)
+			log.Printf("🍃 MongoDB is now active in DataManager")
+		}()
 	}
 
-	if sClient == nil && mClient == nil {
+	if sClient == nil && mongoURI == "" {
 		return nil, fmt.Errorf("both sqlite and mongodb are unavailable")
 	}
 
-	return &DataManager{sqlite: sClient, mongo: mClient}, nil
+	_ = initCtx
+	return dm, nil
 }
 
 func (m *DataManager) GetSQLiteDB() *sql.DB {
@@ -55,8 +77,8 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 			return true
 		}
 	}
-	if m.mongo != nil {
-		has, err := m.mongo.HasSession(ctx, ownerID)
+	if mg := m.getMongo(); mg != nil {
+		has, err := mg.HasSession(ctx, ownerID)
 		if err == nil && has {
 			return true
 		}
@@ -67,8 +89,8 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebConfig {
 	// MongoDB adalah sumber utama karena userbot menyimpan List/Grup di
 	// collection jaseb_configurasi. SQLite Gateway hanya cache lokal.
-	if m.mongo != nil {
-		cfg, err := m.mongo.GetConfig(ctx, ownerID)
+	if mg := m.getMongo(); mg != nil {
+		cfg, err := mg.GetConfig(ctx, ownerID)
 		if err == nil && cfg != nil {
 			if m.sqlite != nil {
 				_ = m.sqlite.SaveConfig(ctx, cfg)
@@ -120,8 +142,8 @@ func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) erro
 	cfg.UpdatedAt = time.Now()
 
 	// 1. Simpan ke MongoDB sebagai database utama
-	if m.mongo != nil {
-		if err := m.mongo.SaveConfig(ctx, cfg); err != nil {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.SaveConfig(ctx, cfg); err != nil {
 			log.Printf("⚠️ MongoDB SaveConfig error: %v", err)
 		}
 	}
