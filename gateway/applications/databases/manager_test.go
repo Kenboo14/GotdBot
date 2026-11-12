@@ -12,7 +12,7 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 	defer os.Remove(dbPath)
 
 	ctx := context.Background()
-	dm, err := NewDataManager(ctx, "", "", dbPath)
+	dm, err := NewDataManager(ctx, ctx, "", "", dbPath)
 	if err != nil {
 		t.Fatalf("failed to init DataManager: %v", err)
 	}

@@ -51,7 +51,7 @@ func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mo
 	}
 	dm.sqlite = sClient
 
-	// Connect MongoDB di background dengan retry, lalu sync ke SQLite sekali saat berhasil
+	// Connect MongoDB di background dengan retry
 	if mongoURI != "" {
 		go func() {
 			mClient, retryErr := NewMongoClient(bgCtx, mongoURI, mongoDBName)
@@ -60,10 +60,7 @@ func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mo
 				return
 			}
 			dm.setMongo(mClient)
-			log.Printf("🍃 MongoDB is now active in DataManager")
-
-			// Sync sekali: tarik semua data dari MongoDB ke SQLite
-			dm.SyncAllFromMongoDB(bgCtx)
+			log.Printf("🍃 MongoDB is now active in DataManager (on-demand per-user cache)")
 		}()
 	}
 
@@ -75,44 +72,15 @@ func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mo
 	return dm, nil
 }
 
-// SyncAllFromMongoDB menarik semua dokumen jaseb_configurasi dari MongoDB ke SQLite.
-// Dipanggil sekali saat startup (setelah MongoDB berhasil konek).
-func (dm *DataManager) SyncAllFromMongoDB(ctx context.Context) {
-	mg := dm.getMongo()
-	if mg == nil || dm.sqlite == nil {
-		return
-	}
-	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	configs, err := mg.FindAllConfigs(syncCtx)
-	if err != nil {
-		log.Printf("⚠️ SyncFromMongoDB: gagal fetch semua config: %v", err)
-		return
-	}
-
-	count := 0
-	for _, cfg := range configs {
-		if cfg == nil {
-			continue
-		}
-		if saveErr := dm.sqlite.SaveConfig(ctx, cfg); saveErr != nil {
-			log.Printf("⚠️ SyncFromMongoDB: gagal simpan ownerID=%d: %v", cfg.OwnerID, saveErr)
-			continue
-		}
-		count++
-	}
-	log.Printf("🔄 SyncFromMongoDB selesai: %d config disinkronkan ke SQLite", count)
-}
-
 // SyncOneFromMongoDB menarik 1 dokumen ownerID dari MongoDB ke SQLite.
-// Dipanggil saat menerima event config:updated dari Redis Pub/Sub.
-func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) {
+// Dipanggil saat menerima event config:updated dari Redis Pub/Sub,
+// atau saat user belum ada di cache SQLite lokal.
+func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) *JasebConfig {
 	mg := dm.getMongo()
-	if mg == nil || dm.sqlite == nil {
-		return
+	if mg == nil {
+		return nil
 	}
-	mongoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	mongoCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	cfg, err := mg.GetConfig(mongoCtx, ownerID)
@@ -120,18 +88,21 @@ func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) {
 		if err != nil {
 			log.Printf("⚠️ SyncOneFromMongoDB ownerID=%d: %v", ownerID, err)
 		}
-		return
+		return nil
 	}
-	if saveErr := dm.sqlite.SaveConfig(ctx, cfg); saveErr != nil {
-		log.Printf("⚠️ SyncOneFromMongoDB ownerID=%d simpan SQLite: %v", ownerID, saveErr)
-		return
+	if dm.sqlite != nil {
+		if saveErr := dm.sqlite.SaveConfig(ctx, cfg); saveErr != nil {
+			log.Printf("⚠️ SyncOneFromMongoDB ownerID=%d simpan SQLite: %v", ownerID, saveErr)
+		} else {
+			log.Printf("🔄 SyncOneFromMongoDB: ownerID=%d berhasil di-cache ke SQLite", ownerID)
+		}
 	}
-	log.Printf("🔄 SyncOneFromMongoDB: ownerID=%d diperbarui di SQLite", ownerID)
+	return cfg
 }
 
 // WatchConfigUpdates subscribe ke Redis Pub/Sub channel "config:updated".
 // Saat ubot mengubah MongoDB, ubot publish ownerID ke channel ini.
-// Gateway lalu fetch ulang 1 doc dari MongoDB dan update SQLite.
+// Gateway lalu fetch ulang 1 doc user tersebut dari MongoDB dan update SQLite.
 func (dm *DataManager) WatchConfigUpdates(ctx context.Context, rdb *redis.Client) {
 	const channel = "config:updated"
 	pubsub := rdb.Subscribe(ctx, channel)
@@ -165,9 +136,18 @@ func (m *DataManager) GetSQLiteDB() *sql.DB {
 }
 
 func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool {
-	// SQLite adalah satu-satunya sumber read — MongoDB hanya backup write
+	// 1. Cek SQLite dulu (lokal, instan)
 	if m.sqlite != nil {
 		has, err := m.sqlite.HasSession(ctx, ownerID)
+		if err == nil && has {
+			return true
+		}
+	}
+	// 2. Fallback per-user ke MongoDB jika belum ada di SQLite
+	if mg := m.getMongo(); mg != nil {
+		mongoCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		has, err := mg.HasSession(mongoCtx, ownerID)
 		if err == nil && has {
 			return true
 		}
@@ -176,8 +156,7 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 }
 
 func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebConfig {
-	// Baca hanya dari SQLite — cepat, lokal, tidak ada network call.
-	// MongoDB hanya digunakan sebagai backup write (async).
+	// 1. Cek SQLite lokal dulu (cache) — jika ada, langsung kembalikan (0 hit ke MongoDB)
 	if m.sqlite != nil {
 		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
 		if err == nil && cfg != nil {
@@ -185,7 +164,12 @@ func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebCo
 		}
 	}
 
-	// 3. Konfigurasi default jika belum terdaftar sama sekali
+	// 2. Cache miss di SQLite: ambil hanya untuk user ini dari MongoDB (1x hit per user)
+	if cfg := m.SyncOneFromMongoDB(ctx, ownerID); cfg != nil {
+		return cfg
+	}
+
+	// 3. Konfigurasi default jika belum terdaftar di MongoDB maupun SQLite
 	defaultCfg := &JasebConfig{
 		OwnerID:          ownerID,
 		Type:             "Broadcast",
