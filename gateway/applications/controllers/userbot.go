@@ -3,32 +3,42 @@ package controllers
 import (
 	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/broker"
+	"assterisk/gateway/applications/databases"
 	"assterisk/gateway/applications/models"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/mem"
 	"html"
 	"log"
 	"net"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 var gatewayStartedAt = time.Now()
 var inlineRedis *broker.Redis
+var reValidMasterToken = regexp.MustCompile(`^GOTD:[A-Za-z]{32}$`)
 
 func SetInlineRedis(redis *broker.Redis) { inlineRedis = redis }
 
 type UserSession struct {
-	ChatID int64
-	State  string
+	ChatID             int64
+	State              string
+	PendingMasterToken string
+	PendingTokenSHA    string
+	PendingTier        string
+	PendingDuration    int64
+	OldOwnerID         int64
+	ClaimedLicense     *databases.UserLicense
 }
 type SessionManager struct {
 	sessions map[int64]*UserSession
@@ -39,37 +49,8 @@ func NewSessionManager() *SessionManager {
 	return &SessionManager{sessions: make(map[int64]*UserSession)}
 }
 
-func (h *Handler) Create(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
-	if update.Message == nil || update.Message.From == nil {
-		return
-	}
-	chatID := update.Message.Chat.ID
-	h.Sessions.mu.Lock()
-	if current := h.Sessions.sessions[chatID]; current != nil {
-		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Pemasangan sedang diproses. Tunggu atau ketik /cancel."})
-		return
-	}
-	h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_phone"}
-	h.Sessions.mu.Unlock()
-	h.Sessions.mu.Lock()
-	h.Sessions.sessions[chatID].State = "waiting_check"
-	h.Sessions.mu.Unlock()
-	if err := h.broker.To(ctx, "to:ubot:auth", models.PToService{ChatID: chatID, UserID: update.Message.From.ID, Type: "auth_check"}); err != nil {
-		h.Sessions.mu.Lock()
-		delete(h.Sessions.sessions, chatID)
-		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Layanan pemasangan tidak tersedia. Coba lagi."})
-	}
-}
-
 func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.Message == nil || update.Message.From == nil {
-		return
-	}
-
-	// Intersep tombol ReplyKeyboard dan state input panel kontrol
-	if h.RoutePanelButton(ctx, b, update) {
 		return
 	}
 
@@ -77,14 +58,208 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	h.Sessions.mu.RLock()
 	session := h.Sessions.sessions[chatID]
 	h.Sessions.mu.RUnlock()
+
+	// Jika user tidak sedang dalam proses pemasangan userbot (/start)
 	if session == nil {
+		// Intersep tombol ReplyKeyboard dan state input panel kontrol
+		if h.RoutePanelButton(ctx, b, update) {
+			return
+		}
 		h.DefaultHandler(ctx, b, update)
 		return
 	}
-	if text == "/cancel" || strings.EqualFold(text, "cancel") {
+
+	if text == "/cancel" || strings.EqualFold(text, "cancel") || text == "⬅️ Batal ⬅️" {
 		h.cancelInstall(ctx, b, update)
 		return
 	}
+
+	if session.State == "waiting_create_choice" {
+		if text == "🔑 Input Token 🔑" {
+			h.Sessions.mu.Lock()
+			session.State = "waiting_token"
+			h.Sessions.mu.Unlock()
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID: chatID,
+				Text: `<b>🔑 Input Token Lisensi</b>
+━━━━━━━━━━━━━━━━━━━━
+Masukkan Token, berguna untuk hak klaim kepemilikan database.
+
+<i>Kirimkan Token Master (<code>GOTD:...</code>) atau Token SHA Backup (<code>GOTD_SHA:...</code>) Anda.</i>`,
+				ParseMode:   "HTML",
+				ReplyMarkup: cachedCancelMarkup,
+			})
+			return
+		}
+
+		if text == "🚀 Buat Userbot 🚀" {
+			lic, err := h.db.GetActiveUserLicense(ctx, chatID)
+			if err != nil || lic == nil {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID: chatID,
+					Text: `⚠️ <b>Akses Ditolak</b>
+━━━━━━━━━━━━━━━━━━━━
+Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan gunakan tombol <b>🔑 Input Token 🔑</b> untuk memasukkan token dari Owner.`,
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCreateChoiceMarkup,
+				})
+				return
+			}
+
+			sisaDur := FormatDurationID(time.Until(lic.ExpiresAt))
+			h.Sessions.mu.Lock()
+			session.ClaimedLicense = lic
+			session.PendingTokenSHA = lic.TokenSHA
+			session.PendingMasterToken = lic.MasterToken
+			session.PendingTier = lic.Tier
+			session.PendingDuration = int64(time.Until(lic.ExpiresAt).Seconds())
+			session.OldOwnerID = lic.OwnerChatID
+			session.State = "waiting_phone"
+			h.Sessions.mu.Unlock()
+
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID: chatID,
+				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Sisa: %s)\n"+
+					"━━━━━━━━━━━━━━━━━━━━\n"+
+					"Seluruh data (List, Grup, Notes, Prefix) otomatis terhubung kembali.\n\n"+
+					"📱 <b>Masukkan nomor Telegram</b> dalam format internasional.\n"+
+					"<i>Contoh: +6281234567890</i>", lic.Tier, sisaDur),
+				ParseMode:   "HTML",
+				ReplyMarkup: installPhoneKeyboard(),
+			})
+			return
+		}
+
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        "Silakan pilih opsi dari tombol keyboard di bawah atau tekan <b>⬅️ Batal ⬅️</b>.",
+			ParseMode:   "HTML",
+			ReplyMarkup: cachedCreateChoiceMarkup,
+		})
+		return
+	}
+
+	if session.State == "waiting_token" {
+		if strings.HasPrefix(text, "GOTD_SHA:") {
+			lic, err := h.db.GetUserLicenseBySHA(ctx, text)
+			if err != nil || lic == nil {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "❌ <b>Token SHA Tidak Ditemukan.</b>\nPastikan token yang Anda masukkan benar atau hubungi Owner.",
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCancelMarkup,
+				})
+				return
+			}
+			if lic.Status != "active" || time.Now().After(lic.ExpiresAt) {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        fmt.Sprintf("❌ <b>Token SHA Sudah Kedaluwarsa.</b>\nMasa aktif token ini telah habis pada %s. Silakan minta token baru kepada Owner.", lic.ExpiresAt.Format("02-01-2006 15:04")),
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCancelMarkup,
+				})
+				return
+			}
+
+			sisaDur := FormatDurationID(time.Until(lic.ExpiresAt))
+			h.Sessions.mu.Lock()
+			session.ClaimedLicense = lic
+			session.PendingTokenSHA = lic.TokenSHA
+			session.PendingMasterToken = lic.MasterToken
+			session.PendingTier = lic.Tier
+			session.PendingDuration = int64(time.Until(lic.ExpiresAt).Seconds())
+			session.OldOwnerID = lic.OwnerChatID
+			session.State = "waiting_phone"
+			h.Sessions.mu.Unlock()
+
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID: chatID,
+				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Sisa: %s)\n"+
+					"━━━━━━━━━━━━━━━━━━━━\n"+
+					"Hak kepemilikan database &amp; seluruh data berhasil diklaim!\n\n"+
+					"📱 <b>Masukkan nomor Telegram</b> dalam format internasional.\n"+
+					"<i>Contoh: +6281234567890</i>", lic.Tier, sisaDur),
+				ParseMode:   "HTML",
+				ReplyMarkup: installPhoneKeyboard(),
+			})
+			return
+		}
+
+		if strings.HasPrefix(text, "GOTD:") {
+			if !reValidMasterToken.MatchString(text) {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "❌ <b>Format Token Salah.</b>\nToken Master harus berupa <code>GOTD:&lt;32_huruf_alfabet&gt;</code>.",
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCancelMarkup,
+				})
+				return
+			}
+
+			tm, err := h.db.GetTokenMaster(ctx, text)
+			if err != nil || tm == nil {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "❌ <b>Token Tidak Ditemukan.</b>\nToken voucher tidak terdaftar dalam sistem.",
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCancelMarkup,
+				})
+				return
+			}
+
+			if tm.Status != "active" {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "❌ <b>Token Tidak Aktif.</b>\nToken voucher ini telah dinonaktifkan.",
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCancelMarkup,
+				})
+				return
+			}
+
+			if !tm.IsShared && tm.ClaimCount >= 1 {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "❌ <b>Token Sudah Digunakan.</b>\nToken voucher personal ini sudah pernah diklaim sebelumnya.",
+					ParseMode:   "HTML",
+					ReplyMarkup: cachedCancelMarkup,
+				})
+				return
+			}
+
+			durStr := FormatDurationID(time.Duration(tm.DurationSeconds) * time.Second)
+			h.Sessions.mu.Lock()
+			session.PendingMasterToken = tm.Token
+			session.PendingTier = tm.Tier
+			session.PendingDuration = tm.DurationSeconds
+			session.PendingTokenSHA = ""
+			session.ClaimedLicense = nil
+			session.OldOwnerID = 0
+			session.State = "waiting_phone"
+			h.Sessions.mu.Unlock()
+
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID: chatID,
+				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Masa aktif: %s)\n"+
+					"━━━━━━━━━━━━━━━━━━━━\n"+
+					"Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim!\n\n"+
+					"📱 <b>Masukkan nomor Telegram</b> dalam format internasional.\n"+
+					"<i>Contoh: +6281234567890</i>", tm.Tier, durStr),
+				ParseMode:   "HTML",
+				ReplyMarkup: installPhoneKeyboard(),
+			})
+			return
+		}
+
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        "❌ <b>Token Tidak Dikenali.</b>\nToken harus diawali dengan <code>GOTD:</code> (Voucher) atau <code>GOTD_SHA:</code> (Backup).\nSilakan masukkan token yang valid atau tekan <b>⬅️ Batal ⬅️</b>.",
+			ParseMode:   "HTML",
+			ReplyMarkup: cachedCancelMarkup,
+		})
+		return
+	}
+
 	if session.State == "waiting_check" {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Sedang memeriksa sesi sebelumnya. Tunggu sebentar."})
 		return
@@ -141,11 +316,30 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 
 func (h *Handler) cancelInstall(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	chatID := update.Message.Chat.ID
+	userID := update.Message.From.ID
 	h.Sessions.mu.Lock()
 	delete(h.Sessions.sessions, chatID)
 	h.Sessions.mu.Unlock()
 	_ = h.broker.To(ctx, "to:ubot:auth", models.PToService{ChatID: chatID, Type: "auth_cancel"})
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Pemasangan dibatalkan.", ReplyMarkup: cachedRemoveKeyboard})
+
+	hasActive := false
+	if h.db != nil {
+		hasActive = h.db.HasActiveSession(ctx, userID)
+	}
+
+	if hasActive {
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        "Pemasangan dibatalkan.",
+			ReplyMarkup: mainMenuMarkup,
+		})
+	} else {
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        "Pemasangan dibatalkan. Ketik /start untuk memasang userbot.",
+			ReplyMarkup: cachedRemoveKeyboard,
+		})
+	}
 }
 
 func (h *Handler) setInstallState(chatID int64, state string) {
@@ -184,14 +378,27 @@ var (
 	cachedInstallPhoneMarkup = &botgotd.ReplyKeyboardMarkup{
 		Keyboard: [][]botgotd.KeyboardButton{{
 			{Text: "Kirim Kontak", RequestContact: true},
-			{Text: "Cancel"},
+			{Text: "⬅️ Batal ⬅️"},
 		}},
 		ResizeKeyboard:  true,
 		OneTimeKeyboard: true,
 	}
 	cachedCancelMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard:       [][]botgotd.KeyboardButton{{{Text: "Cancel"}}},
+		Keyboard:       [][]botgotd.KeyboardButton{{{Text: "⬅️ Batal ⬅️"}}},
 		ResizeKeyboard: true,
+	}
+	cachedCreateChoiceMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard: [][]botgotd.KeyboardButton{
+			{
+				{Text: "🔑 Input Token 🔑"},
+				{Text: "🚀 Buat Userbot 🚀"},
+			},
+			{
+				{Text: "⬅️ Batal ⬅️"},
+			},
+		},
+		ResizeKeyboard:  true,
+		OneTimeKeyboard: true,
 	}
 	cachedServerMarkup = &botgotd.InlineKeyboardMarkup{
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
@@ -205,6 +412,10 @@ func installPhoneKeyboard() *botgotd.ReplyKeyboardMarkup {
 
 func cancelKeyboard() *botgotd.ReplyKeyboardMarkup {
 	return cachedCancelMarkup
+}
+
+func createChoiceKeyboard() *botgotd.ReplyKeyboardMarkup {
+	return cachedCreateChoiceMarkup
 }
 
 func (h *Handler) PingCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
@@ -226,7 +437,7 @@ func (h *Handler) HelpCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 		"• <code>!code [bahasa]</code> — Format kode pesan reply\n" +
 		"• <code>!eval</code> / <code>!sh</code> — Eksekusi command shell\n" +
 		"• <code>!setp none</code> — Nonaktifkan prefix command\n" +
-		"• <code>/create</code> — Setup userbot baru\n" +
+		"• <code>/start</code> — Setup userbot baru\n" +
 		"• <code>/cancel</code> — Batalkan instalasi"
 	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML"})
 }
@@ -424,14 +635,25 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 	if update.CallbackQuery != nil && update.CallbackQuery.From.ID > 0 {
 		invokerID = update.CallbackQuery.From.ID
 	}
-	text := serverStatusText(invokerID, time.Since(start))
+
+	isInline := update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != ""
+	var text string
+	var markup any
+	if isInline {
+		text = serverStatusTextPlain(invokerID, time.Since(start))
+		markup = serverKeyboard()
+	} else {
+		text = serverStatusTextRich(invokerID, time.Since(start))
+		markup = nil
+	}
+
 	edit := &botgotd.EditMessageTextParams{
 		Text:               text,
 		ParseMode:          "HTML",
-		ReplyMarkup:        serverKeyboard(),
+		ReplyMarkup:        markup,
 		RawInlineMessageID: update.CallbackQuery.RawInlineMessageID,
 	}
-	if update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != "" {
+	if isInline {
 		edit.InlineMessageID = update.CallbackQuery.InlineMessageID
 	} else if update.CallbackQuery.Message.Message != nil {
 		edit.ChatID = update.CallbackQuery.Message.Message.Chat.ID
@@ -455,7 +677,7 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 					ChatID:      edit.ChatID,
 					Text:        text,
 					ParseMode:   "HTML",
-					ReplyMarkup: serverKeyboard(),
+					ReplyMarkup: markup,
 				})
 			}
 		} else {
@@ -484,8 +706,9 @@ func (h *Handler) ServerCommand(ctx context.Context, b *botgotd.Bot, update *bot
 	if update.Message.From != nil {
 		invokerID = update.Message.From.ID
 	}
-	text := serverStatusText(invokerID, time.Since(invokeStart))
-	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyMarkup: serverKeyboard()})
+	text := serverStatusTextRich(invokerID, time.Since(invokeStart))
+	// /server menggunakan tombol rich saja di dalam body pesan (tg-button-row), tanpa ReplyMarkup tombol keyboard biasa di bawah
+	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML"})
 }
 
 func (h *Handler) CodeCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
@@ -560,7 +783,8 @@ func HandleInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 		if update.InlineQuery != nil && update.InlineQuery.From.ID > 0 {
 			invokerID = update.InlineQuery.From.ID
 		}
-		text := serverStatusText(invokerID, time.Since(invokeStart))
+		// !server via inline bot menggunakan teks biasa terstruktur (Gambar 1) agar kompatibel di semua chat Telegram
+		text := serverStatusTextPlain(invokerID, time.Since(invokeStart))
 		result := &botgotd.InlineQueryResultArticle{ID: "assist_server", Title: "Server status", Description: "Status gateway dan resource sistem lengkap", InputMessageContent: &botgotd.InputTextMessageContent{MessageText: text, ParseMode: "HTML"}, ReplyMarkup: serverKeyboard()}
 		_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: false})
 		return
@@ -652,7 +876,27 @@ func serverKeyboard() *botgotd.InlineKeyboardMarkup {
 	return cachedServerMarkup
 }
 
-func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
+type serverStats struct {
+	userInvokeStr string
+	invokeStr     string
+	serverPingStr string
+	cpuUsage      float64
+	numCPU        int
+	usedRAMMB     float64
+	totalRAMMB    float64
+	ramPercent    float64
+	usedSwapMB    float64
+	totalSwapMB   float64
+	swapPercent   float64
+	readMB        float64
+	writeMB       float64
+	heapAllocMB   float64
+	sysMemMB      float64
+	goroutines    int
+	uptimeStr     string
+}
+
+func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverStats {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
@@ -719,6 +963,30 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 		userInvokeStr = fmt.Sprintf("<code>%d</code>", invokerID)
 	}
 
+	return &serverStats{
+		userInvokeStr: userInvokeStr,
+		invokeStr:     invokeStr,
+		serverPingStr: serverPingStr,
+		cpuUsage:      cpuUsage,
+		numCPU:        runtime.NumCPU(),
+		usedRAMMB:     usedRAMMB,
+		totalRAMMB:    totalRAMMB,
+		ramPercent:    ramPercent,
+		usedSwapMB:    usedSwapMB,
+		totalSwapMB:   totalSwapMB,
+		swapPercent:   swapPercent,
+		readMB:        readMB,
+		writeMB:       writeMB,
+		heapAllocMB:   float64(m.HeapAlloc) / 1024 / 1024,
+		sysMemMB:      float64(m.Sys) / 1024 / 1024,
+		goroutines:    runtime.NumGoroutine(),
+		uptimeStr:     formatUptime(time.Since(gatewayStartedAt)),
+	}
+}
+
+// serverStatusTextRich renders the table-based Rich Message format for /server
+func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string {
+	st := collectServerStats(invokerID, invokeDuration)
 	return fmt.Sprintf(`<h1>⚡ Status Server GotdBot</h1>
 <table border="1">
   <tr><th>🖥 Resource</th><th>📊 Nilai</th><th>⚙️ Kapasitas</th></tr>
@@ -737,24 +1005,65 @@ func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
 </tg-button-row>
 <hr/>
 <p>GotdBot Infrastructure • Layer 227 MTProto</p>`,
-		cpuUsage,
-		runtime.NumCPU(),
-		usedRAMMB,
-		totalRAMMB,
-		ramPercent,
-		usedSwapMB,
-		totalSwapMB,
-		swapPercent,
-		readMB,
-		writeMB,
-		float64(m.HeapAlloc)/1024/1024,
-		float64(m.Sys)/1024/1024,
-		runtime.NumGoroutine(),
-		serverPingStr,
-		invokeStr,
-		userInvokeStr,
-		formatUptime(time.Since(gatewayStartedAt)),
+		st.cpuUsage,
+		st.numCPU,
+		st.usedRAMMB,
+		st.totalRAMMB,
+		st.ramPercent,
+		st.usedSwapMB,
+		st.totalSwapMB,
+		st.swapPercent,
+		st.readMB,
+		st.writeMB,
+		st.heapAllocMB,
+		st.sysMemMB,
+		st.goroutines,
+		st.serverPingStr,
+		st.invokeStr,
+		st.userInvokeStr,
+		st.uptimeStr,
 	)
+}
+
+// serverStatusTextPlain renders the structured clean text format for !server (via inline bot)
+func serverStatusTextPlain(invokerID int64, invokeDuration time.Duration) string {
+	st := collectServerStats(invokerID, invokeDuration)
+	return fmt.Sprintf(`<b>⚡ Status Server GotdBot</b>
+
+👤 <b>User Invoke:</b> %s
+⏱️ <b>Latency Invoke:</b> <code>%s</code>
+🌐 <b>Ping Server:</b> <code>%s</code>
+
+⚙️ <b>CPU:</b> <code>%.1f%%</code> (%d Cores)
+🧠 <b>System RAM:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
+💾 <b>Swapon:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
+🔄 <b>Disk I/O:</b> <code>R: %.1f MB | W: %.1f MB</code>
+
+📦 <b>RAM Proses (Go):</b> <code>%.1f MB</code> (Heap: <code>%.1f MB</code>)
+🧵 <b>Goroutine:</b> <code>%d</code>
+⏳ <b>Uptime:</b> <code>%s</code>`,
+		st.userInvokeStr,
+		st.invokeStr,
+		st.serverPingStr,
+		st.cpuUsage,
+		st.numCPU,
+		st.usedRAMMB,
+		st.totalRAMMB,
+		st.ramPercent,
+		st.usedSwapMB,
+		st.totalSwapMB,
+		st.swapPercent,
+		st.readMB,
+		st.writeMB,
+		st.sysMemMB,
+		st.heapAllocMB,
+		st.goroutines,
+		st.uptimeStr,
+	)
+}
+
+func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
+	return serverStatusTextRich(invokerID, invokeDuration)
 }
 
 func formatUptime(d time.Duration) string {

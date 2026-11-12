@@ -206,11 +206,10 @@ func (h *Handler) ShowGrupList(ctx context.Context, b *botgotd.Bot, chatID, user
 	h.setPanelState(chatID, "")
 
 	text := `<h1>🔥 Grup &amp; List</h1>
-<blockquote expandable>💡 <b>Petunjuk Singkat:</b><br/><br/>
-1. <b>List :</b> <i>Materi promosi (teks, media single, media grup) yang akan disiarkan.</i><br/>
-2. <b>Grup :</b> <i>Daftar grup atau supergroup tujuan siaran.</i><br/>
+<blockquote expandable>💡 <b>Petunjuk Singkat:</b>
+1. <b>List :</b> <i>Materi promosi (teks, media single, media grup) yang akan disiarkan.</i>
+2. <b>Grup :</b> <i>Daftar grup atau supergroup tujuan siaran.</i>
 3. <b>Topic :</b> <i>Thread forum grup Telegram untuk penargetan topik khusus.</i></blockquote>
-<hr/>
 <p>Atur target grup dan materi siaran Anda lewat tombol keyboard navigasi di bawah.</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -226,11 +225,10 @@ func (h *Handler) PromptTambahList(ctx context.Context, b *botgotd.Bot, chatID i
 	h.setPanelState(chatID, "waiting_add_list")
 
 	text := `<h1>📝 Tambah List Promosi</h1>
-<blockquote expandable>📌 <b>Format materi promosi yang didukung:</b><br/><br/>
-1. <b>Teks :</b> Pesan teks biasa atau berformat HTML / Markdown.<br/>
-2. <b>Media Single :</b> Foto, video, dokumen, audio, atau animasi / GIF (+ caption).<br/>
+<blockquote expandable>📌 <b>Format materi promosi yang didukung:</b>
+1. <b>Teks :</b> Pesan teks biasa atau berformat HTML / Markdown.
+2. <b>Media Single :</b> Foto, video, dokumen, audio, atau animasi / GIF (+ caption).
 3. <b>Media Grup :</b> Album kumpulan foto atau video (+ caption).</blockquote>
-<hr/>
 <p>Kirimkan materi promosi sekarang atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -246,10 +244,9 @@ func (h *Handler) PromptTambahGrup(ctx context.Context, b *botgotd.Bot, chatID i
 	h.setPanelState(chatID, "")
 
 	text := `<h1>➕ Tambah Grup Target</h1>
-<blockquote expandable>📌 <b>Pilih metode penambahan grup tujuan siaran:</b><br/><br/>
-1. <b>Otomatis :</b> Mengimpor semua grup tempat akun userbot bergabung saat ini.<br/>
+<blockquote expandable>📌 <b>Pilih metode penambahan grup tujuan siaran:</b>
+1. <b>Otomatis :</b> Mengimpor semua grup tempat akun userbot bergabung saat ini.
 2. <b>Manual :</b> Memasukkan username atau ID grup secara spesifik satu per satu atau multi-baris.</blockquote>
-<hr/>
 <p>Silakan pilih opsi dari keyboard navigasi di bawah.</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -265,12 +262,12 @@ func (h *Handler) PromptTambahGrupManual(ctx context.Context, b *botgotd.Bot, ch
 	h.setPanelState(chatID, "waiting_add_group_manual")
 
 	text := `<h1>📝 Tambah Grup Manual</h1>
-<blockquote expandable>📌 <b>Format target yang didukung:</b><br/><br/>
-1. <b>Username grup</b> (contoh: <code>@grupchat</code>)<br/>
-2. <b>Chat ID grup</b> (contoh: <code>-1001234567890</code>)<br/>
-3. <b>Tautan grup</b> (contoh: <code>t.me/namagrup</code>)<br/><br/>
+<blockquote expandable>📌 <b>Format target yang didukung:</b>
+1. <b>Username grup</b> (contoh: <code>@grupchat</code>)
+2. <b>Chat ID grup</b> (contoh: <code>-1001234567890</code>)
+3. <b>Tautan grup</b> (contoh: <code>t.me/namagrup</code>)
+
 <i>Jika lebih dari satu grup, pisahkan masing-masing target dengan baris baru.</i></blockquote>
-<hr/>
 <p>Kirimkan target grup sekarang atau klik tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -302,15 +299,15 @@ func (h *Handler) CekList(ctx context.Context, b *botgotd.Bot, chatID, userID in
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "<h1>📋 Ringkasan List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b><br/><br/>\n", len(lists))
+	fmt.Fprintf(&sb, "<h1>📋 Ringkasan List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b>\n", len(lists))
 	for i, msgID := range lists {
-		fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code><br/>\n", i+1, i+1, msgID)
+		fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code>\n", i+1, i+1, msgID)
 		if i >= 19 {
-			fmt.Fprintf(&sb, "<br/><i>... dan <code>%d</code> list lainnya.</i>", len(lists)-20)
+			fmt.Fprintf(&sb, "<i>... dan <code>%d</code> list lainnya.</i>", len(lists)-20)
 			break
 		}
 	}
-	sb.WriteString("</blockquote>\n<hr/>\n<p>Gunakan menu <b>📋 Cek List</b> untuk melihat preview detail interaktif.</p>")
+	sb.WriteString("</blockquote>\n<p>Gunakan menu <b>📋 Cek List</b> untuk melihat preview detail interaktif.</p>")
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -340,19 +337,19 @@ func (h *Handler) CekGrup(ctx context.Context, b *botgotd.Bot, chatID, userID in
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "<h1>📚 Ringkasan Grup Target</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b><br/><br/>\n", len(groups))
+	fmt.Fprintf(&sb, "<h1>📚 Ringkasan Grup Target</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b>\n", len(groups))
 	for i, g := range groups {
 		title := g.Title
 		if title == "" {
 			title = g.Target
 		}
-		fmt.Fprintf(&sb, "%d. %s — <code>%s</code><br/>\n", i+1, html.EscapeString(title), html.EscapeString(g.Target))
+		fmt.Fprintf(&sb, "%d. %s — <code>%s</code>\n", i+1, html.EscapeString(title), html.EscapeString(g.Target))
 		if i >= 24 {
-			fmt.Fprintf(&sb, "<br/><i>... dan <code>%d</code> grup lainnya.</i>", len(groups)-25)
+			fmt.Fprintf(&sb, "<i>... dan <code>%d</code> grup lainnya.</i>", len(groups)-25)
 			break
 		}
 	}
-	sb.WriteString("</blockquote>\n<hr/>\n<p>Gunakan menu <b>📚 Cek Grup</b> untuk melihat daftar lengkap tiap grup.</p>")
+	sb.WriteString("</blockquote>\n<p>Gunakan menu <b>📚 Cek Grup</b> untuk melihat daftar lengkap tiap grup.</p>")
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -430,7 +427,7 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 	}
 	h.setPanelState(chatID, "browse_group")
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<h1>📚 Display Grup</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b><br/><br/>\n", len(groups))
+	fmt.Fprintf(&builder, "<h1>📚 Display Grup</h1>\n<blockquote expandable>Total tersimpan: <b>%d grup</b>\n", len(groups))
 	for i, group := range groups {
 		title := strings.Join(strings.Fields(group.Title), " ")
 		words := strings.Fields(title)
@@ -440,9 +437,9 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 		if title == "" {
 			title = group.Target
 		}
-		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s<br/>\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
+		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
 	}
-	builder.WriteString("</blockquote>\n<hr/>\n<p>Pilih nomor di bawah untuk melihat detail atau menghapus grup.</p>")
+	builder.WriteString("</blockquote>\n<p>Pilih nomor di bawah untuk melihat detail atau menghapus grup.</p>")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        builder.String(),
@@ -810,6 +807,20 @@ func (h *Handler) ToggleNotifikasi(ctx context.Context, b *botgotd.Bot, chatID, 
 
 // PromptWatermark prompts user for watermark text
 func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	lic, _ := h.db.GetActiveUserLicense(ctx, chatID)
+	tier := "Free"
+	if lic != nil && lic.Tier != "" {
+		tier = lic.Tier
+	}
+	if tier == "Free" || tier == "Pro" {
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:    chatID,
+			Text:      fmt.Sprintf("⚠️ Lisensi Anda (<b>%s</b>) tidak mendukung Custom Watermark. Silakan upgrade ke lisensi <b>PRO++</b> atau <b>VIP</b>.", tier),
+			ParseMode: "HTML",
+		})
+		return
+	}
+
 	h.setPanelState(chatID, "waiting_set_watermark")
 	cfg := h.db.GetUserConfig(ctx, userID)
 
@@ -826,7 +837,6 @@ func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, u
   <tr><td>🏷️ Watermark Saat Ini</td><td>%s</td></tr>
 </table>
 <blockquote expandable>Kirimkan teks watermark baru. Watermark akan disematkan pada baris paling akhir setiap pesan siaran.</blockquote>
-<hr/>
 <p>Kirimkan teks sekarang atau ketik <b>/cancel</b> untuk membatalkan.</p>`, wm)
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -1213,12 +1223,25 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 
 	if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
 		h.setPanelState(chatID, "")
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "↩️ Tindakan dibatalkan.",
-			ParseMode:   "HTML",
-			ReplyMarkup: mainMenuMarkup,
-		})
+		hasActive := false
+		if h.db != nil {
+			hasActive = h.db.HasActiveSession(ctx, userID)
+		}
+		if hasActive {
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      chatID,
+				Text:        "↩️ Tindakan dibatalkan.",
+				ParseMode:   "HTML",
+				ReplyMarkup: mainMenuMarkup,
+			})
+		} else {
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      chatID,
+				Text:        "↩️ Tindakan dibatalkan.",
+				ParseMode:   "HTML",
+				ReplyMarkup: cachedRemoveKeyboard,
+			})
+		}
 		return true
 	}
 
@@ -1590,6 +1613,16 @@ func (h *Handler) FetchAllGroupsFromAccount(ctx context.Context, b *botgotd.Bot,
 	}
 }
 
+func isRestartBrowseButton(text string) bool {
+	if text == "Kembali" || text == "🗑️ Hapus Semua List 🗑️" || text == "🗑️ Hapus Semua Grup 🗑️" {
+		return true
+	}
+	if n, err := strconv.Atoi(text); err == nil && n > 0 && n <= 100 {
+		return true
+	}
+	return false
+}
+
 // RoutePanelButton handles any ReplyKeyboard button click
 func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) bool {
 	if update.Message == nil || update.Message.From == nil {
@@ -1605,6 +1638,45 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 
 	// Cek apakah user sedang berada dalam input state
 	if h.HandlePanelInput(ctx, b, chatID, userID, text, update.Message) {
+		return true
+	}
+
+	// Periksa apakah user memiliki sesi userbot yang aktif (di SQLite lokal atau MongoDB)
+	hasActive := false
+	if h.db != nil {
+		hasActive = h.db.HasActiveSession(ctx, userID)
+	}
+
+	// Jika belum memasang userbot, tolak akses tombol kontrol panel dan bersihkan ReplyKeyboard
+	if !hasActive {
+		h.setPanelState(chatID, "")
+		if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      chatID,
+				Text:        "↩️ Tindakan dibatalkan.",
+				ReplyMarkup: cachedRemoveKeyboard,
+			})
+			return true
+		}
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("<h1>👋 Halo, %s</h1>\n", html.EscapeString(userName)))
+		sb.WriteString("<blockquote expandable>⚠️ <b>Sesi Userbot Belum Terpasang</b>\n")
+		sb.WriteString("<i>Menu kontrol panel (Status, Grup &amp; List, Atur Jeda, dll.) hanya untuk akun yang sudah memasang userbot aktif.</i></blockquote>\n\n")
+		sb.WriteString("<p>Silakan ketik <code>/start</code> untuk memasang dan mengaktifkan sesi userbot Anda.</p>")
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        sb.String(),
+			ParseMode:   "HTML",
+			ReplyMarkup: cachedRemoveKeyboard,
+		})
+		return true
+	}
+
+	// Jika server baru restart (state kosong di RAM) dan user mengklik tombol dari Cek List / Cek Grup
+	// (Angka, Kembali, Hapus Semua List, Hapus Semua Grup), otomatis kembalikan ke Home
+	if isRestartBrowseButton(text) {
+		h.ShowMainMenu(ctx, b, chatID, userID, userName)
 		return true
 	}
 

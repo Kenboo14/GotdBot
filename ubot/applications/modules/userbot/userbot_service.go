@@ -848,7 +848,9 @@ func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
 		} else if installed {
 			s.reply(ctx, job.ChatID, "Userbot sudah terpasang untuk akun ini. Satu pengguna hanya dapat memiliki satu sesi aktif.", "failed")
 		} else {
-			s.reply(ctx, job.ChatID, "Masukkan nomor Telegram dalam format internasional, contoh: +6281234567890\n\nKetik /cancel untuk membatalkan.", "waiting_phone")
+			// Kirim state waiting_phone tanpa text → gateway hanya update state,
+			// pesan permintaan nomor sudah dikirim oleh gateway sebelumnya (single response)
+			s.reply(ctx, job.ChatID, "", "waiting_phone")
 		}
 	case "auth_phone":
 		if current != nil {
@@ -864,13 +866,13 @@ func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
 		}
 	case "auth_otp":
 		if current == nil {
-			s.reply(ctx, job.ChatID, "Sesi pemasangan sudah kedaluwarsa. Kirim /create lagi.", "failed")
+			s.reply(ctx, job.ChatID, "Sesi pemasangan sudah kedaluwarsa. Ketik /start untuk memulai kembali.", "failed")
 			return
 		}
 		sendSecret(current.otp, job.Text)
 	case "auth_password":
 		if current == nil {
-			s.reply(ctx, job.ChatID, "Sesi pemasangan sudah kedaluwarsa. Kirim /create lagi.", "failed")
+			s.reply(ctx, job.ChatID, "Sesi pemasangan sudah kedaluwarsa. Ketik /start untuk memulai kembali.", "failed")
 			return
 		}
 		sendSecret(current.password, job.Text)
@@ -902,30 +904,75 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 	return client.Run(ctx, func(ctx context.Context) error {
 		sent, err := client.Auth().SendCode(ctx, phone, auth.SendCodeOptions{})
 		if err != nil {
+			log.Printf("[auth] SendCode failed for %s (chatID=%d): %v", phone, chatID, err)
 			return err
 		}
 		code, ok := sent.(*tg.AuthSentCode)
 		if !ok {
 			return fmt.Errorf("Telegram mengembalikan jenis OTP yang tidak didukung")
 		}
-		s.reply(ctx, chatID, "OTP telah dikirim. Balas dengan kode 4-10 digit; spasi boleh digunakan.", "waiting_otp")
-		otp, err := receiveSecret(ctx, l.otp)
-		if err != nil {
-			return err
+
+		otpTarget := "aplikasi Telegram Anda (buka chat resmi dari Telegram)"
+		switch code.Type.(type) {
+		case *tg.AuthSentCodeTypeApp:
+			otpTarget = "aplikasi Telegram Anda (cek notifikasi / chat resmi dari Telegram, bukan SMS)"
+		case *tg.AuthSentCodeTypeSMS:
+			otpTarget = "SMS ke nomor ponsel Anda"
+		case *tg.AuthSentCodeTypeCall, *tg.AuthSentCodeTypeFlashCall, *tg.AuthSentCodeTypeMissedCall:
+			otpTarget = "panggilan suara dari Telegram"
+		case *tg.AuthSentCodeTypeEmailCode:
+			otpTarget = "alamat email yang terhubung ke Telegram"
 		}
-		_, err = client.Auth().SignIn(ctx, phone, strings.ReplaceAll(otp, " ", ""), code.PhoneCodeHash)
-		if errors.Is(err, auth.ErrPasswordAuthNeeded) {
-			s.reply(ctx, chatID, "Akun memakai Verifikasi 2 Langkah. Kirim password 2FA Anda.", "waiting_password")
-			password, err := receiveSecret(ctx, l.password)
+
+		s.reply(ctx, chatID, fmt.Sprintf("📩 <b>Kode OTP telah dikirimkan ke %s.</b>\n\nKirimkan kode OTP (4-10 digit). Spasi boleh digunakan (contoh: <code>1 2 3 4 5</code>).\nKetik /cancel jika ingin membatalkan.", otpTarget), "waiting_otp")
+
+		// Loop percobaan OTP dengan retry otomatis bila salah input
+		var signInErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			otp, err := receiveSecret(ctx, l.otp)
 			if err != nil {
 				return err
 			}
-			if _, err = client.Auth().Password(ctx, password); err != nil {
-				return err
+			cleanOTP := strings.ReplaceAll(otp, " ", "")
+			_, signInErr = client.Auth().SignIn(ctx, phone, cleanOTP, code.PhoneCodeHash)
+			if signInErr == nil || errors.Is(signInErr, auth.ErrPasswordAuthNeeded) {
+				break
 			}
-		} else if err != nil {
-			return err
+			errStr := strings.ToLower(signInErr.Error())
+			if strings.Contains(errStr, "phone_code_invalid") {
+				if attempt < 3 {
+					s.reply(ctx, chatID, fmt.Sprintf("⚠️ <b>Kode OTP salah (Percobaan %d/3).</b>\nSilakan periksa kembali dan kirimkan kode OTP yang benar:\n(Ketik /cancel untuk membatalkan)", attempt), "waiting_otp")
+					continue
+				}
+			}
+			return signInErr
 		}
+
+		// Jika akun memakai 2FA (Verifikasi 2 Langkah)
+		if errors.Is(signInErr, auth.ErrPasswordAuthNeeded) {
+			s.reply(ctx, chatID, "🔐 <b>Akun memakai Verifikasi 2 Langkah (2FA).</b>\nSilakan kirimkan password 2FA akun Anda.\n(Ketik /cancel untuk membatalkan)", "waiting_password")
+			for passAttempt := 1; passAttempt <= 3; passAttempt++ {
+				password, err := receiveSecret(ctx, l.password)
+				if err != nil {
+					return err
+				}
+				if _, passErr := client.Auth().Password(ctx, password); passErr == nil {
+					break
+				} else {
+					errStr := strings.ToLower(passErr.Error())
+					if strings.Contains(errStr, "password") {
+						if passAttempt < 3 {
+							s.reply(ctx, chatID, fmt.Sprintf("⚠️ <b>Password 2FA salah (Percobaan %d/3).</b>\nSilakan masukkan password 2FA Anda kembali:\n(Ketik /cancel untuk membatalkan)", passAttempt), "waiting_password")
+							continue
+						}
+					}
+					return passErr
+				}
+			}
+		} else if signInErr != nil {
+			return signInErr
+		}
+
 		self, err := client.Self(ctx)
 		if err != nil {
 			return err
@@ -940,7 +987,7 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 		if err := store.setPrefix(ctx, "!", true); err != nil {
 			return err
 		}
-		s.reply(ctx, chatID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")
+		s.replyWithOwner(ctx, chatID, self.ID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")
 		s.activate(chatID, self.ID)
 		return nil
 	})
@@ -948,6 +995,10 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 
 func (s *Service) reply(ctx context.Context, chatID int64, text, state string) {
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Text: text, State: state})
+}
+
+func (s *Service) replyWithOwner(ctx context.Context, chatID, ownerID int64, text, state string) {
+	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, OwnerID: ownerID, Text: text, State: state})
 }
 
 func (s *Service) hasInstalledSession(ctx context.Context, chatID, ownerID int64) (bool, error) {
@@ -1285,7 +1336,7 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 	s.mu.Unlock()
 
 	// Kirim pesan notifikasi instan ke bot gateway
-	s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas silahkan pasang kembali /create</i></blockquote>", "session_revoked")
+	s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas, silakan pasang kembali dengan /start</i></blockquote>", "session_revoked")
 }
 
 func (s *Service) recordIncomingUpdate(chatID int64) {
@@ -1808,17 +1859,19 @@ func safeError(err error) string {
 	text := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(text, "phone_code_invalid"):
-		return "OTP tidak valid"
+		return "OTP tidak valid. Silakan ulangi dari /start."
 	case strings.Contains(text, "phone_code_expired"):
-		return "OTP sudah kedaluwarsa"
+		return "Kode OTP sudah kedaluwarsa. Silakan ulangi dari /start."
+	case strings.Contains(text, "password_hash_invalid"), strings.Contains(text, "password"):
+		return "Password 2FA salah. Silakan ulangi dari /start."
 	case strings.Contains(text, "phone_number_invalid"):
-		return "nomor telepon tidak valid"
+		return "Nomor telepon tidak valid. Pastikan format nomor benar (+62...)."
 	case strings.Contains(text, "phone_number_banned"):
-		return "nomor telepon diblokir Telegram"
+		return "Nomor telepon diblokir oleh Telegram."
 	case strings.Contains(text, "flood"):
-		return "terlalu banyak percobaan; tunggu sebelum mencoba lagi"
+		return "Terlalu banyak percobaan (FloodWait). Tunggu beberapa menit sebelum mencoba lagi via /start."
 	default:
-		return "Telegram menolak permintaan. Periksa data dan coba lagi."
+		return "Telegram menolak permintaan (" + err.Error() + "). Silakan ulangi dari /start."
 	}
 }
 

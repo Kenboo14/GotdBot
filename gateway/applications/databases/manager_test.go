@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestDataManagerSQLiteOnly(t *testing.T) {
@@ -111,5 +112,45 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 	_ = dm.ClearTopics(ctx, ownerID)
 	if len(dm.GetTopics(ctx, ownerID)) != 0 {
 		t.Fatalf("expected 0 topics after clear")
+	}
+
+	// 6. Test DataManager Token & License Operations
+	tm := &TokenMaster{
+		Token:           "GOTD:abcdefghijklmnopqrstuvwxyzABCDEF",
+		Tier:            "Pro++",
+		DurationSeconds: 86400 * 30,
+		IsShared:        false,
+		ClaimCount:      0,
+		CreatedBy:       ownerID,
+		Status:          "active",
+	}
+	if err := dm.SaveTokenMaster(ctx, tm); err != nil {
+		t.Fatalf("SaveTokenMaster failed: %v", err)
+	}
+	fetchedTM, err := dm.GetTokenMaster(ctx, tm.Token)
+	if err != nil || fetchedTM == nil || fetchedTM.Tier != "Pro++" {
+		t.Fatalf("GetTokenMaster mismatch: %+v, err: %v", fetchedTM, err)
+	}
+
+	ul := &UserLicense{
+		TokenSHA:           "GOTD_SHA:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+		MasterToken:        tm.Token,
+		OwnerChatID:        ownerID,
+		UserbotID:          ownerID,
+		Tier:               "Pro++",
+		CanCustomWatermark: true,
+		ExpiresAt:          time.Now().Add(30 * 24 * time.Hour),
+		Status:             "active",
+	}
+	if err := dm.SaveUserLicense(ctx, ul); err != nil {
+		t.Fatalf("SaveUserLicense failed: %v", err)
+	}
+	fetchedUL, err := dm.GetUserLicenseBySHA(ctx, ul.TokenSHA)
+	if err != nil || fetchedUL == nil || fetchedUL.Tier != "Pro++" {
+		t.Fatalf("GetUserLicenseBySHA mismatch: %+v, err: %v", fetchedUL, err)
+	}
+	activeUL, err := dm.GetActiveUserLicense(ctx, ownerID)
+	if err != nil || activeUL == nil || activeUL.TokenSHA != ul.TokenSHA {
+		t.Fatalf("GetActiveUserLicense mismatch: %+v, err: %v", activeUL, err)
 	}
 }

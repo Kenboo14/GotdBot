@@ -350,3 +350,157 @@ func (m *DataManager) CountGroupsAndLists(ctx context.Context, ownerID int64) (i
 	}
 	return len(cfg.Groups), len(cfg.Lists)
 }
+
+func (m *DataManager) SaveTokenMaster(ctx context.Context, tm *TokenMaster) error {
+	// 1. Simpan permanen di MongoDB
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.SaveTokenMaster(ctx, tm); err != nil {
+			log.Printf("⚠️ SaveTokenMaster MongoDB err: %v", err)
+		}
+	}
+	// 2. Cache di SQLite jika ada
+	if m.sqlite != nil {
+		return m.sqlite.SaveTokenMaster(ctx, tm)
+	}
+	return nil
+}
+
+func (m *DataManager) GetTokenMaster(ctx context.Context, token string) (*TokenMaster, error) {
+	// 1. Cek cache SQLite
+	if m.sqlite != nil {
+		tm, err := m.sqlite.GetTokenMaster(ctx, token)
+		if err == nil && tm != nil {
+			return tm, nil
+		}
+	}
+	// 2. Jika belum ada di SQLite, tarik dari MongoDB permanen
+	if mg := m.getMongo(); mg != nil {
+		tm, err := mg.GetTokenMaster(ctx, token)
+		if err == nil && tm != nil {
+			// SQL hanya mengambil yang dibutuhkan user: simpan ke SQLite
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveTokenMaster(ctx, tm)
+			}
+			return tm, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *DataManager) GetActiveSharedFreeToken(ctx context.Context) (*TokenMaster, error) {
+	// 1. Prioritaskan cek MongoDB agar sinkron lintas node
+	if mg := m.getMongo(); mg != nil {
+		tm, err := mg.GetActiveSharedFreeToken(ctx)
+		if err == nil && tm != nil {
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveTokenMaster(ctx, tm)
+			}
+			return tm, nil
+		}
+	}
+	// 2. Fallback SQLite jika MongoDB offline
+	if m.sqlite != nil {
+		return m.sqlite.GetActiveSharedFreeToken(ctx)
+	}
+	return nil, nil
+}
+
+func (m *DataManager) UpdateTokenMasterDuration(ctx context.Context, token string, durationSeconds int64) error {
+	// 1. Update permanen di MongoDB
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.UpdateTokenMasterDuration(ctx, token, durationSeconds); err != nil {
+			log.Printf("⚠️ UpdateTokenMasterDuration MongoDB err: %v", err)
+		}
+	}
+	// 2. Update di SQLite lokal
+	if m.sqlite != nil {
+		return m.sqlite.UpdateTokenMasterDuration(ctx, token, durationSeconds)
+	}
+	return nil
+}
+
+func (m *DataManager) IncrementTokenMasterClaim(ctx context.Context, token string) error {
+	// 1. Increment permanen di MongoDB
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.IncrementTokenMasterClaim(ctx, token); err != nil {
+			log.Printf("⚠️ IncrementTokenMasterClaim MongoDB err: %v", err)
+		}
+	}
+	// 2. Increment di SQLite lokal
+	if m.sqlite != nil {
+		return m.sqlite.IncrementTokenMasterClaim(ctx, token)
+	}
+	return nil
+}
+
+func (m *DataManager) SaveUserLicense(ctx context.Context, ul *UserLicense) error {
+	// 1. Simpan permanen di MongoDB
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.SaveUserLicense(ctx, ul); err != nil {
+			log.Printf("⚠️ SaveUserLicense MongoDB err: %v", err)
+		}
+	}
+	// 2. Simpan lisensi user ke SQLite lokal
+	if m.sqlite != nil {
+		return m.sqlite.SaveUserLicense(ctx, ul)
+	}
+	return nil
+}
+
+func (m *DataManager) GetUserLicenseBySHA(ctx context.Context, tokenSHA string) (*UserLicense, error) {
+	// 1. Cek SQLite lokal terlebih dahulu
+	if m.sqlite != nil {
+		ul, err := m.sqlite.GetUserLicenseBySHA(ctx, tokenSHA)
+		if err == nil && ul != nil {
+			return ul, nil
+		}
+	}
+	// 2. Jika tidak ada di SQLite lokal (misal session baru / ganti node), tarik dari MongoDB
+	if mg := m.getMongo(); mg != nil {
+		ul, err := mg.GetUserLicenseBySHA(ctx, tokenSHA)
+		if err == nil && ul != nil {
+			// SQL hanya mengambil yang dibutuhkan user: cache lisensi ini ke SQLite lokal
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveUserLicense(ctx, ul)
+			}
+			return ul, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *DataManager) GetActiveUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
+	// 1. Cek SQLite lokal terlebih dahulu
+	if m.sqlite != nil {
+		ul, err := m.sqlite.GetActiveUserLicense(ctx, ownerChatID)
+		if err == nil && ul != nil {
+			return ul, nil
+		}
+	}
+	// 2. Jika tidak ada di SQLite lokal, tarik dari MongoDB permanen
+	if mg := m.getMongo(); mg != nil {
+		ul, err := mg.GetActiveUserLicense(ctx, ownerChatID)
+		if err == nil && ul != nil {
+			// SQL hanya mengambil yang dibutuhkan user: cache lisensi ini ke SQLite lokal
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveUserLicense(ctx, ul)
+			}
+			return ul, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *DataManager) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID int64) error {
+	// 1. Relink permanen di MongoDB
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.RelinkUserData(ctx, oldOwnerID, newOwnerID); err != nil {
+			log.Printf("⚠️ RelinkUserData MongoDB err: %v", err)
+		}
+	}
+	// 2. Relink di SQLite lokal
+	if m.sqlite != nil {
+		return m.sqlite.RelinkUserData(ctx, oldOwnerID, newOwnerID)
+	}
+	return nil
+}

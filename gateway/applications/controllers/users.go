@@ -35,17 +35,39 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 		return
 	}
 
-	// Tampilan pesan bila sesi belum terpasang
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<h1>👋 Selamat Datang, %s</h1>\n", html.EscapeString(userName)))
-	sb.WriteString("<blockquote expandable>⚠️ <b>Sesi Userbot Belum Terpasang</b>\n")
-	sb.WriteString("<i>Akun Telegram Anda belum terhubung ke sistem GotdBot.</i></blockquote>\n\n")
-	sb.WriteString("<p>Silakan ketik <code>/create</code> untuk memasang dan mengaktifkan sesi userbot Anda.</p>\n")
-	sb.WriteString("<hr/><p>GotdBot • Userbot Manager</p>")
+	// Cek jika user sudah dalam proses pemasangan (session aktif)
+	h.Sessions.mu.RLock()
+	existingSession := h.Sessions.sessions[chatID]
+	h.Sessions.mu.RUnlock()
+
+	if existingSession != nil {
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        "⏳ <b>Pemasangan sedang berlangsung.</b>\nLanjutkan proses atau ketik /cancel untuk membatalkan.",
+			ParseMode:   "HTML",
+			ReplyMarkup: cachedCancelMarkup,
+		})
+		return
+	}
+
+	// Buat sesi baru dan tampilkan pilihan pemasangan
+	h.Sessions.mu.Lock()
+	h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_create_choice"}
+	h.Sessions.mu.Unlock()
+
+	greeting := fmt.Sprintf(
+		"👋 <b>Selamat datang, %s!</b>\n"+
+			"━━━━━━━━━━━━━━━━━━━━\n"+
+			"<b>GotdBot • Userbot Manager</b>\n\n"+
+			"• <b>🔑 Input Token</b> — Masukkan Voucher Master dari Owner atau Token SHA Backup Anda.\n"+
+			"• <b>🚀 Buat Userbot</b> — Sambungkan ulang otomatis menggunakan lisensi aktif Anda.",
+		html.EscapeString(userName),
+	)
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:    chatID,
-		Text:      sb.String(),
-		ParseMode: "HTML",
+		ChatID:      chatID,
+		Text:        greeting,
+		ParseMode:   "HTML",
+		ReplyMarkup: cachedCreateChoiceMarkup,
 	})
 }

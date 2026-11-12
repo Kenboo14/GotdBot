@@ -390,7 +390,7 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 	batch := s.fetchCacheMessagesBatch(ctx, client, cachePeer, cfg.Lists)
 
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "<h1>📋 Daftar List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b><br/><br/>\n", len(cfg.Lists))
+	fmt.Fprintf(&builder, "<h1>📋 Daftar List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b>\n", len(cfg.Lists))
 	for index, msgID := range cfg.Lists {
 		tag := ""
 		message := batch[msgID]
@@ -434,9 +434,9 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 		} else {
 			content = html.EscapeString(content)
 		}
-		fmt.Fprintf(&builder, "%d. <code>#%d</code> | %s%s<br/>\n", index+1, index+1, tag, content)
+		fmt.Fprintf(&builder, "%d. <code>#%d</code> | %s%s\n", index+1, index+1, tag, content)
 	}
-	builder.WriteString("</blockquote>\n<hr/>\n<p>Pilih nomor di bawah untuk membuka detail atau mengelola materi.</p>")
+	builder.WriteString("</blockquote>\n<p>Pilih nomor di bawah untuk membuka detail atau mengelola materi.</p>")
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_previews", TaskID: strconv.Itoa(len(cfg.Lists)), Text: builder.String()})
 }
 

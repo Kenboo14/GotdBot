@@ -831,10 +831,11 @@ func (b *Bot) postHTTPBool(ctx context.Context, url string, body map[string]any)
 }
 
 var (
-	reImg        = regexp.MustCompile(`<img[^>]+src=["']([^"']+)["'][^>]*>`)
-	reVid        = regexp.MustCompile(`<video[^>]+src=["']([^"']+)["'][^>]*>.*?</video>`)
-	reBlockquote = regexp.MustCompile(`(?s)(<blockquote[^>]*>)(.*?)(</blockquote>)`)
-	reLineBreak  = regexp.MustCompile(`(?i)(<br\s*/?>)\s*\n`)
+	reImg          = regexp.MustCompile(`<img[^>]+src=["']([^"']+)["'][^>]*>`)
+	reVid          = regexp.MustCompile(`<video[^>]+src=["']([^"']+)["'][^>]*>.*?</video>`)
+	reBlockquote   = regexp.MustCompile(`(?s)(<blockquote[^>]*>)(.*?)(</blockquote>)`)
+	reLineBreak    = regexp.MustCompile(`(?i)(<br\s*/?>)\s*\n`)
+	reMultiNewline = regexp.MustCompile(`\n{3,}`)
 )
 
 // FormatRichHTML ensures newlines inside blockquotes are converted to <br/>
@@ -858,11 +859,9 @@ func FormatRichHTML(htmlText string) string {
 }
 
 func isRichContent(text string) bool {
-	// Jika pesan berisi blockquote, prioritaskan Telegram native blockquote entities
-	// agar baris baru (\n) dan nomor urut di dalam blockquote tidak di-collapse oleh client Telegram.
-	if strings.Contains(text, "<blockquote") {
-		return false
-	}
+	// Konten Rich sejati membutuhkan tabel, tombol rich khusus (tg-button-row), atau media tersemat.
+	// Pesan menu/petunjuk blockquote biasa (tanpa tabel/button row) dikirim via pesan native Telegram
+	// agar baris baru \n di dalam blockquote tidak di-collapse oleh client.
 	return strings.Contains(text, "<tg-button-row>") ||
 		strings.Contains(text, "<table") ||
 		strings.Contains(text, "<img") ||
@@ -880,9 +879,9 @@ func cleanHTML(text string) string {
 	s = strings.ReplaceAll(s, "<p>", "")
 	s = strings.ReplaceAll(s, "</p>", "\n")
 	s = strings.ReplaceAll(s, "<h1>", "<b>")
-	s = strings.ReplaceAll(s, "</h1>", "</b>\n\n")
+	s = strings.ReplaceAll(s, "</h1>", "</b>\n")
 	s = strings.ReplaceAll(s, "<h2>", "<b>")
-	s = strings.ReplaceAll(s, "</h2>", "</b>\n\n")
+	s = strings.ReplaceAll(s, "</h2>", "</b>\n")
 	if idx := strings.Index(s, "<tg-button-row>"); idx != -1 {
 		if endIdx := strings.Index(s, "</tg-button-row>"); endIdx != -1 {
 			s = s[:idx] + s[endIdx+len("</tg-button-row>"):]
@@ -904,6 +903,11 @@ func cleanHTML(text string) string {
 	}
 	s = reImg.ReplaceAllString(s, `<a href="$1">&#8204;</a>`)
 	s = reVid.ReplaceAllString(s, `<a href="$1">&#8204;</a>`)
-	s = strings.ReplaceAll(s, "<hr/>", "\n──────────\n")
+	// Hilangkan divider panjang horizontal line yang tidak perlu
+	s = strings.ReplaceAll(s, "<hr/>", "")
+	s = strings.ReplaceAll(s, "<hr />", "")
+	s = strings.ReplaceAll(s, "<hr>", "")
+	// Batasi baris kosong berlebih agar teks tidak renggang berlebihan
+	s = reMultiNewline.ReplaceAllString(s, "\n\n")
 	return strings.TrimSpace(s)
 }

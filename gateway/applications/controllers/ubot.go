@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"assterisk/gateway/applications/botgotd"
+	"assterisk/gateway/applications/databases"
 	"assterisk/gateway/applications/models"
 	"bytes"
 	"context"
@@ -62,10 +63,34 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	if data.State == "panel_notice" {
 		h.clearProgress(ctx, b, data.ChatID)
 	}
-	if data.ChatID == 0 || strings.TrimSpace(data.Text) == "" {
-		log.Printf("incomplete Redis message %s", msg.ID)
+	if data.ChatID == 0 {
+		log.Printf("incomplete Redis message %s (no ChatID)", msg.ID)
 		return
 	}
+	// Jika text kosong tapi state waiting_phone → hanya update state, tidak kirim pesan
+	if strings.TrimSpace(data.Text) == "" {
+		if data.State != "" {
+			h.setInstallState(data.ChatID, data.State)
+		}
+		return
+	}
+	var pendingSess *UserSession
+	if data.State == "installed" {
+		h.Sessions.mu.RLock()
+		if s, ok := h.Sessions.sessions[data.ChatID]; ok && s != nil {
+			pendingSess = &UserSession{
+				ChatID:             s.ChatID,
+				PendingMasterToken: s.PendingMasterToken,
+				PendingTokenSHA:    s.PendingTokenSHA,
+				PendingTier:        s.PendingTier,
+				PendingDuration:    s.PendingDuration,
+				OldOwnerID:         s.OldOwnerID,
+				ClaimedLicense:     s.ClaimedLicense,
+			}
+		}
+		h.Sessions.mu.RUnlock()
+	}
+
 	if data.State != "" {
 		h.setInstallState(data.ChatID, data.State)
 	}
@@ -79,6 +104,91 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	case "waiting_otp", "waiting_password", "waiting_worker":
 		params.ReplyMarkup = cancelKeyboard()
 	case "installed":
+		var tokenSHA string
+		var tier string
+		var expiresAt time.Time
+		var masterToken string
+
+		if pendingSess != nil && pendingSess.PendingTokenSHA != "" {
+			tokenSHA = pendingSess.PendingTokenSHA
+			tier = pendingSess.PendingTier
+			masterToken = pendingSess.PendingMasterToken
+			if pendingSess.ClaimedLicense != nil {
+				expiresAt = pendingSess.ClaimedLicense.ExpiresAt
+			} else if pendingSess.PendingDuration > 0 {
+				expiresAt = time.Now().Add(time.Duration(pendingSess.PendingDuration) * time.Second)
+			} else {
+				expiresAt = time.Now().Add(7 * 24 * time.Hour)
+			}
+			if pendingSess.OldOwnerID > 0 && pendingSess.OldOwnerID != data.ChatID {
+				_ = h.db.RelinkUserData(ctx, pendingSess.OldOwnerID, data.ChatID)
+			}
+		} else if pendingSess != nil && pendingSess.PendingMasterToken != "" {
+			masterToken = pendingSess.PendingMasterToken
+			tier = pendingSess.PendingTier
+			if tier == "" {
+				tier = "Free"
+			}
+			durSec := pendingSess.PendingDuration
+			if durSec <= 0 {
+				durSec = 7 * 86400
+			}
+			expiresAt = time.Now().Add(time.Duration(durSec) * time.Second)
+			tokenSHA = ComputeTokenSHA(masterToken, data.ChatID)
+			_ = h.db.IncrementTokenMasterClaim(ctx, masterToken)
+		} else {
+			existingLic, _ := h.db.GetActiveUserLicense(ctx, data.ChatID)
+			if existingLic != nil {
+				tokenSHA = existingLic.TokenSHA
+				tier = existingLic.Tier
+				masterToken = existingLic.MasterToken
+				expiresAt = existingLic.ExpiresAt
+			} else {
+				tier = "Free"
+				durSec := int64(7 * 86400)
+				masterToken = GenerateMasterToken()
+				tokenSHA = ComputeTokenSHA(masterToken, data.ChatID)
+				expiresAt = time.Now().Add(time.Duration(durSec) * time.Second)
+			}
+		}
+
+		userbotID := data.OwnerID
+		if userbotID == 0 {
+			userbotID = data.ChatID
+		}
+		canCustomWM := (tier == "Pro++" || tier == "Vip")
+
+		lic := &databases.UserLicense{
+			TokenSHA:           tokenSHA,
+			MasterToken:        masterToken,
+			OwnerChatID:        data.ChatID,
+			UserbotID:          userbotID,
+			Tier:               tier,
+			CanCustomWatermark: canCustomWM,
+			ExpiresAt:          expiresAt,
+			CreatedAt:          time.Now(),
+			Status:             "active",
+		}
+		if saveErr := h.db.SaveUserLicense(ctx, lic); saveErr != nil {
+			log.Printf("[license] failed saving user license for chat %d: %v", data.ChatID, saveErr)
+		}
+
+		sisaDur := FormatDurationID(time.Until(expiresAt))
+		expFormatted := expiresAt.Format("02-01-2006 15:04:05")
+
+		params.Text = fmt.Sprintf(`🎉 <b>Userbot Berhasil Terpasang!</b>
+━━━━━━━━━━━━━━━━━━━━
+🎖️ <b>Tier Lisensi:</b> <code>%s</code>
+⏳ <b>Masa Aktif:</b> <code>%s</code> (Sisa %s)
+
+🔑 <b>Token SHA Backup (Kunci Brankas):</b>
+<code>%s</code>
+
+⚠️ <b>PENTING - Simpan token ini baik-baik!</b>
+<i>Jika sesi userbot Anda terlepas di kemudian hari atau ingin memindahkan database ke akun lain, gunakan token SHA di atas saat <code>/start</code> agar seluruh data promosi, catatan notes, prefix, dan grup target tidak hilang.</i>`,
+			tier, expFormatted, sisaDur, tokenSHA,
+		)
+		params.ParseMode = "HTML"
 		params.ReplyMarkup = mainMenuMarkup
 	case "failed":
 		params.ReplyMarkup = cachedRemoveKeyboard
@@ -345,9 +455,9 @@ func sendRichMessage(ctx context.Context, token string, chatID int64, htmlConten
 
 func stripRichTags(s string) string {
 	s = strings.ReplaceAll(s, "<h1>", "<b>")
-	s = strings.ReplaceAll(s, "</h1>", "</b>\n\n")
+	s = strings.ReplaceAll(s, "</h1>", "</b>\n")
 	s = strings.ReplaceAll(s, "<h2>", "<b>")
-	s = strings.ReplaceAll(s, "</h2>", "</b>\n\n")
+	s = strings.ReplaceAll(s, "</h2>", "</b>\n")
 	if idx := strings.Index(s, "<tg-button-row>"); idx != -1 {
 		if endIdx := strings.Index(s, "</tg-button-row>"); endIdx != -1 {
 			s = s[:idx] + s[endIdx+len("</tg-button-row>"):]
@@ -367,6 +477,8 @@ func stripRichTags(s string) string {
 	for _, tag := range tableTags {
 		s = strings.ReplaceAll(s, tag, "")
 	}
-	s = strings.ReplaceAll(s, "<hr/>", "\n──────────\n")
+	s = strings.ReplaceAll(s, "<hr/>", "")
+	s = strings.ReplaceAll(s, "<hr />", "")
+	s = strings.ReplaceAll(s, "<hr>", "")
 	return strings.TrimSpace(s)
 }

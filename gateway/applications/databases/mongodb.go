@@ -76,8 +76,28 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 
 		db := client.Database(dbName)
 		log.Printf("🍃 Gateway MongoDB connected (attempt %d): %s (db: %s)", attempt, uri[:min(len(uri), 25)]+"...", dbName)
-		return &MongoClient{Client: client, Database: db}, nil
+		mc := &MongoClient{Client: client, Database: db}
+		mc.ensureIndexes(context.Background())
+		return mc, nil
 	}
+}
+
+func (m *MongoClient) ensureIndexes(ctx context.Context) {
+	if m == nil || m.Database == nil {
+		return
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	colLic := m.Database.Collection("user_licenses")
+	_, _ = colLic.Indexes().CreateMany(ctxTimeout, []mongo.IndexModel{
+		{
+			Keys: bson.D{{Key: "owner_chat_id", Value: 1}, {Key: "status", Value: 1}, {Key: "expires_at", Value: -1}},
+		},
+		{
+			Keys: bson.D{{Key: "userbot_id", Value: 1}, {Key: "status", Value: 1}, {Key: "expires_at", Value: -1}},
+		},
+	})
 }
 
 func (m *MongoClient) HasSession(ctx context.Context, ownerID int64) (bool, error) {
@@ -246,4 +266,154 @@ func (m *MongoClient) ClearTopics(ctx context.Context, ownerID int64) error {
 	}
 	_, err := col.UpdateOne(ctx, filter, update)
 	return err
+}
+
+func (m *MongoClient) SaveTokenMaster(ctx context.Context, tm *TokenMaster) error {
+	if m == nil || m.Database == nil || tm == nil {
+		return nil
+	}
+	col := m.Database.Collection("tokens_master")
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"_id": tm.Token}
+	update := bson.M{"$set": tm}
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+func (m *MongoClient) GetTokenMaster(ctx context.Context, token string) (*TokenMaster, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("tokens_master")
+	var tm TokenMaster
+	err := col.FindOne(ctx, bson.M{"_id": token}).Decode(&tm)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &tm, nil
+}
+
+func (m *MongoClient) GetActiveSharedFreeToken(ctx context.Context) (*TokenMaster, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("tokens_master")
+	filter := bson.M{
+		"tier":      "Free",
+		"is_shared": true,
+		"status":    "active",
+	}
+	opts := options.FindOne().SetSort(bson.M{"created_at": -1})
+	var tm TokenMaster
+	err := col.FindOne(ctx, filter, opts).Decode(&tm)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &tm, nil
+}
+
+func (m *MongoClient) UpdateTokenMasterDuration(ctx context.Context, token string, durationSeconds int64) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	col := m.Database.Collection("tokens_master")
+	filter := bson.M{"_id": token}
+	update := bson.M{"$set": bson.M{"duration_seconds": durationSeconds}}
+	_, err := col.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (m *MongoClient) IncrementTokenMasterClaim(ctx context.Context, token string) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	col := m.Database.Collection("tokens_master")
+	filter := bson.M{"_id": token}
+	update := bson.M{"$inc": bson.M{"claim_count": 1}}
+	_, err := col.UpdateOne(ctx, filter, update)
+	return err
+}
+
+func (m *MongoClient) SaveUserLicense(ctx context.Context, ul *UserLicense) error {
+	if m == nil || m.Database == nil || ul == nil {
+		return nil
+	}
+	col := m.Database.Collection("user_licenses")
+	opts := options.Update().SetUpsert(true)
+	filter := bson.M{"_id": ul.TokenSHA}
+	update := bson.M{"$set": ul}
+	_, err := col.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+func (m *MongoClient) GetUserLicenseBySHA(ctx context.Context, tokenSHA string) (*UserLicense, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("user_licenses")
+	var ul UserLicense
+	err := col.FindOne(ctx, bson.M{"_id": tokenSHA}).Decode(&ul)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ul, nil
+}
+
+func (m *MongoClient) GetActiveUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("user_licenses")
+	filter := bson.M{
+		"$or": []bson.M{
+			{"owner_chat_id": ownerChatID},
+			{"userbot_id": ownerChatID},
+		},
+		"status":     "active",
+		"expires_at": bson.M{"$gt": time.Now()},
+	}
+	opts := options.FindOne().SetSort(bson.M{"expires_at": -1})
+	var ul UserLicense
+	err := col.FindOne(ctx, filter, opts).Decode(&ul)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ul, nil
+}
+
+func (m *MongoClient) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID int64) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	colLic := m.Database.Collection("user_licenses")
+	_, err := colLic.UpdateMany(ctx,
+		bson.M{"owner_chat_id": oldOwnerID},
+		bson.M{"$set": bson.M{"owner_chat_id": newOwnerID}},
+	)
+	if err != nil {
+		log.Printf("⚠️ Mongo RelinkUserData user_licenses err: %v", err)
+	}
+
+	colCfg := m.Database.Collection("jaseb_configurasi")
+	var existing JasebConfig
+	if errCfg := colCfg.FindOne(ctx, bson.M{"_id": oldOwnerID}).Decode(&existing); errCfg == nil {
+		existing.OwnerID = newOwnerID
+		existing.UpdatedAt = time.Now()
+		opts := options.Update().SetUpsert(true)
+		_, _ = colCfg.UpdateOne(ctx, bson.M{"_id": newOwnerID}, bson.M{"$set": existing}, opts)
+		_, _ = colCfg.DeleteOne(ctx, bson.M{"_id": oldOwnerID})
+	}
+	return nil
 }
