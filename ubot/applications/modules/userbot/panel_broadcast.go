@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -27,6 +28,33 @@ import (
 
 type panelBroadcastJob struct {
 	cancel context.CancelFunc
+}
+
+type panelCachedMsg struct {
+	msg       *tg.Message
+	fetchedAt time.Time
+}
+
+var panelMsgCache sync.Map // key: int (msgID) -> panelCachedMsg
+
+func getCachedPanelMsg(msgID int) *tg.Message {
+	if val, ok := panelMsgCache.Load(msgID); ok {
+		if entry, ok := val.(panelCachedMsg); ok {
+			if time.Since(entry.fetchedAt) < 5*time.Minute {
+				return entry.msg
+			}
+		}
+	}
+	return nil
+}
+
+func storeCachedPanelMsg(msg *tg.Message) {
+	if msg != nil && msg.ID > 0 {
+		panelMsgCache.Store(msg.ID, panelCachedMsg{
+			msg:       msg,
+			fetchedAt: time.Now(),
+		})
+	}
 }
 
 // publishConfigUpdated memberitahu gateway via Redis Pub/Sub bahwa config ownerID berubah di MongoDB.
@@ -124,61 +152,44 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 		s.reply(ctx, chatID, "❌ Userbot tidak dapat mengakses cache List.", "panel_notice")
 		return
 	}
-	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
 	if index >= len(cfg.Lists) {
 		s.reply(ctx, chatID, "❌ List sudah tidak tersedia. Silakan buka ulang Cek List.", "panel_notice")
 		return
 	}
 	msgID := cfg.Lists[index]
-	history, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: cachePeer, OffsetID: msgID + 1, Limit: 8})
-	if err != nil {
-		log.Printf("[list-detail] history cache=%d failed: %v", msgID, err)
-		s.reply(ctx, chatID, "❌ Detail List tidak dapat diambil dari AiotdCaches.", "panel_notice")
+
+	// Mengambil pesan cache — memprioritaskan RAM memory cache (0 RPC) dan ChannelsGetMessages (1 key-lookup RPC)
+	message, err := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
+	if err != nil || message == nil {
+		log.Printf("[list-detail] fetchCacheMessage cache=%d failed: %v", msgID, err)
+		s.reply(ctx, chatID, "❌ Detail List tidak dapat diambil dari AiotdCaches. Silakan coba sesaat lagi.", "panel_notice")
 		return
 	}
-	messages := cacheMessages(history)
-	message := findCacheMessage(messages, msgID)
-	if message == nil {
-		// History pada forum/channel kadang tidak mengembalikan item tepat di
-		// boundary offset. Ambil langsung dari peer yang sudah di-resolve.
-		var direct tg.MessagesMessagesClass
-		if channel, ok := cachePeer.(*tg.InputPeerChannel); ok {
-			direct, err = client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{Channel: &tg.InputChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash}, ID: []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}})
-		} else {
-			direct, err = client.API().MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}})
-		}
-		if err == nil {
-			message = findCacheMessage(cacheMessages(direct), msgID)
-		}
-	}
-	content := "[Media / Non-teks]"
-	if message != nil {
-		content = message.Message
-		if strings.TrimSpace(content) == "" {
-			content = "[Media / Non-teks]"
-		}
-	} else {
-		log.Printf("[list-detail] cache message %d not found in AiotdCaches", msgID)
-		s.reply(ctx, chatID, "❌ Detail List tidak ditemukan di AiotdCaches. Silakan buka ulang Cek List.", "panel_notice")
-		return
-	}
+
 	displayContent := "<i>(Tidak ada teks / caption)</i>"
-	if message != nil && strings.TrimSpace(message.Message) != "" {
+	if strings.TrimSpace(message.Message) != "" {
 		displayContent = convertEntitiesToHTML(message.Message, message.Entities)
 	}
 	mediaCacheID := 0
 	var mediaCacheIDs []int
 	mediaType := "Teks"
-	if message != nil && message.Media != nil {
-		// The Bot API can copy the original cached message, preserving the
-		// media, caption, and caption entities without converting them.
-		mediaCacheIDs = s.cacheForwardIDs(ctx, client, cachePeer, msgID)
-		if len(mediaCacheIDs) == 1 {
-			mediaCacheID = mediaCacheIDs[0]
-		}
-		if len(mediaCacheIDs) > 1 {
-			mediaType = fmt.Sprintf("Album (%d Media)", len(mediaCacheIDs))
+	if message.Media != nil {
+		if groupedID, ok := message.GetGroupedID(); ok && groupedID != 0 {
+			// Hanya jika berstatus album (grouped_id > 0) kita cari pesan saudara (siblings)
+			mediaCacheIDs = s.cacheForwardIDs(ctx, client, cachePeer, msgID)
+			if len(mediaCacheIDs) > 1 {
+				mediaType = fmt.Sprintf("Album (%d Media)", len(mediaCacheIDs))
+			} else {
+				mediaCacheIDs = []int{msgID}
+				mediaCacheID = msgID
+			}
 		} else {
+			// Single media: TIDAK perlu RPC MessagesGetHistory lagi!
+			mediaCacheIDs = []int{msgID}
+			mediaCacheID = msgID
+		}
+
+		if len(mediaCacheIDs) <= 1 {
 			switch media := message.Media.(type) {
 			case *tg.MessageMediaPhoto:
 				mediaType = "Foto"
@@ -321,12 +332,15 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 		return
 	}
 	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
+
+	// Fetch semua pesan list dalam 1 batch RPC (atau ambil dari memory cache)
+	batch := s.fetchCacheMessagesBatch(ctx, client, cachePeer, cfg.Lists)
+
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "<h1>📋 Daftar List Promosi</h1>\n<blockquote expandable>Total tersimpan: <b>%d materi</b>\n\n", len(cfg.Lists))
 	for index, msgID := range cfg.Lists {
 		content := "[Media / Non-teks]"
-		message, fetchErr := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
-		if fetchErr == nil && message != nil && strings.TrimSpace(message.Message) != "" {
+		if message := batch[msgID]; message != nil && strings.TrimSpace(message.Message) != "" {
 			content = message.Message
 		}
 		words := strings.Fields(content)
@@ -339,41 +353,113 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Type: "list_previews", TaskID: strconv.Itoa(len(cfg.Lists)), Text: builder.String()})
 }
 
-func (s *Service) fetchCacheMessage(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
-	history, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{Peer: cachePeer, OffsetID: msgID + 1, Limit: 8})
-	if err == nil {
-		if message := findCacheMessage(cacheMessages(history), msgID); message != nil {
-			return message, nil
+// fetchCacheMessagesBatch mengambil sekumpulan pesan sekaligus dalam 1 panggilan RPC (ChannelsGetMessages),
+// dan menyimpan hasilnya ke memory cache agar tidak memicu FLOOD_WAIT Telegram.
+func (s *Service) fetchCacheMessagesBatch(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgIDs []int) map[int]*tg.Message {
+	result := make(map[int]*tg.Message, len(msgIDs))
+	if len(msgIDs) == 0 {
+		return result
+	}
+
+	var missingIDs []int
+	for _, id := range msgIDs {
+		if cached := getCachedPanelMsg(id); cached != nil {
+			result[id] = cached
+		} else {
+			missingIDs = append(missingIDs, id)
 		}
 	}
+
+	if len(missingIDs) == 0 {
+		return result
+	}
+
+	inputIDs := make([]tg.InputMessageClass, len(missingIDs))
+	for i, id := range missingIDs {
+		inputIDs[i] = &tg.InputMessageID{ID: id}
+	}
+
 	var direct tg.MessagesMessagesClass
+	var err error
 	if channel, ok := cachePeer.(*tg.InputPeerChannel); ok {
-		direct, err = client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{Channel: &tg.InputChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash}, ID: []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}}})
+		direct, err = client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash},
+			ID:      inputIDs,
+		})
+	} else {
+		direct, err = client.API().MessagesGetMessages(ctx, inputIDs)
+	}
+
+	if err == nil {
+		for _, item := range cacheMessages(direct) {
+			if m, ok := item.(*tg.Message); ok {
+				storeCachedPanelMsg(m)
+				result[m.ID] = m
+			}
+		}
+	} else {
+		log.Printf("[fetchCacheBatch] Direct ChannelsGetMessages failed: %v", err)
+	}
+
+	return result
+}
+
+func (s *Service) fetchCacheMessage(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
+	// 1. Cek RAM memory cache dulu — instan, 0 RPC ke Telegram
+	if cached := getCachedPanelMsg(msgID); cached != nil {
+		return cached, nil
+	}
+
+	// 2. Direct lookup via ChannelsGetMessages (primary: direct key-lookup, jauh lebih ringan dari GetHistory)
+	var direct tg.MessagesMessagesClass
+	var err error
+	if channel, ok := cachePeer.(*tg.InputPeerChannel); ok {
+		direct, err = client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash},
+			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}},
+		})
 	} else {
 		direct, err = client.API().MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}})
 	}
-	if err != nil {
-		return nil, err
+
+	if err == nil {
+		if message := findCacheMessage(cacheMessages(direct), msgID); message != nil {
+			storeCachedPanelMsg(message)
+			return message, nil
+		}
 	}
-	if message := findCacheMessage(cacheMessages(direct), msgID); message != nil {
-		return message, nil
+
+	// 3. Fallback hanya jika direct key-lookup tidak menemukan pesan
+	history, hErr := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:     cachePeer,
+		OffsetID: msgID + 1,
+		Limit:    8,
+	})
+	if hErr == nil {
+		if message := findCacheMessage(cacheMessages(history), msgID); message != nil {
+			storeCachedPanelMsg(message)
+			return message, nil
+		}
 	}
-	return nil, fmt.Errorf("message %d tidak ditemukan", msgID)
+
+	return nil, fmt.Errorf("message %d tidak ditemukan di cache", msgID)
 }
 
 // normalizePanelListIDs menyatukan pesan-pesan yang berasal dari satu album
-// Telegram menjadi satu List. Saat broadcast, cacheForwardIDs tetap mengambil
-// seluruh anggota album dari ID pertama tersebut.
+// Telegram menjadi satu List menggunakan 1 panggilan batch RPC.
 func (s *Service) normalizePanelListIDs(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, ownerID int64, source []int) []int {
 	if len(source) < 2 {
 		return source
 	}
+	// Fetch semua pesan source dalam 1 panggilan batch RPC
+	batch := s.fetchCacheMessagesBatch(ctx, client, cachePeer, source)
+
 	result := make([]int, 0, len(source))
 	seenAlbums := make(map[int64]struct{})
 	changed := false
 	for _, msgID := range source {
-		message, err := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
-		if err != nil || message == nil {
+		message := batch[msgID]
+		if message == nil {
 			result = append(result, msgID)
 			continue
 		}
@@ -1085,6 +1171,12 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 // cacheForwardIDs returns all messages belonging to the same Telegram album.
 // A normal text/media message simply returns its own ID.
 func (s *Service) cacheForwardIDs(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) []int {
+	if cached := getCachedPanelMsg(msgID); cached != nil {
+		if gid, ok := cached.GetGroupedID(); !ok || gid == 0 {
+			return []int{msgID}
+		}
+	}
+
 	result, err := client.API().MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
 		Peer: cachePeer, OffsetID: msgID + 20, Limit: 40,
 	})
@@ -1102,9 +1194,11 @@ func (s *Service) cacheForwardIDs(ctx context.Context, client *telegram.Client, 
 	}
 	var groupID int64
 	for _, item := range messages {
-		if m, ok := item.(*tg.Message); ok && m.ID == msgID {
-			groupID, _ = m.GetGroupedID()
-			break
+		if m, ok := item.(*tg.Message); ok {
+			storeCachedPanelMsg(m)
+			if m.ID == msgID {
+				groupID, _ = m.GetGroupedID()
+			}
 		}
 	}
 	if groupID == 0 {
