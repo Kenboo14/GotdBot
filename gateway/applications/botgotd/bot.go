@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -829,11 +830,18 @@ func (b *Bot) postHTTPBool(ctx context.Context, url string, body map[string]any)
 	return true, nil
 }
 
+var (
+	reImg = regexp.MustCompile(`<img[^>]+src=["']([^"']+)["'][^>]*>`)
+	reVid = regexp.MustCompile(`<video[^>]+src=["']([^"']+)["'][^>]*>.*?</video>`)
+)
+
 func isRichContent(text string) bool {
 	return strings.Contains(text, "<tg-button-row>") ||
 		strings.Contains(text, "<h1>") ||
 		strings.Contains(text, "<h2>") ||
 		strings.Contains(text, "<table") ||
+		strings.Contains(text, "<img") ||
+		strings.Contains(text, "<video") ||
 		strings.Contains(text, "<hr/>")
 }
 
@@ -864,6 +872,8 @@ func cleanHTML(text string) string {
 	for _, tag := range tableTags {
 		s = strings.ReplaceAll(s, tag, "")
 	}
+	s = reImg.ReplaceAllString(s, `<a href="$1">&#8204;</a>`)
+	s = reVid.ReplaceAllString(s, `<a href="$1">&#8204;</a>`)
 	s = strings.ReplaceAll(s, "<hr/>", "\n──────────\n")
 	return strings.TrimSpace(s)
 }

@@ -190,13 +190,22 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 	if previewMediaID == 0 && len(mediaCacheIDs) > 0 {
 		previewMediaID = mediaCacheIDs[0]
 	}
-	mediaLink := ""
-	if previewMediaID > 0 {
-		cacheGroup := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
-		if cacheGroup == "" {
-			cacheGroup = "AiotdCaches"
+	cacheGroup := strings.TrimPrefix(strings.TrimSpace(os.Getenv("GROUP_CACHE")), "@")
+	if cacheGroup == "" {
+		cacheGroup = "AiotdCaches"
+	}
+
+	var mediaTags strings.Builder
+	if len(mediaCacheIDs) > 1 {
+		for _, mid := range mediaCacheIDs {
+			fmt.Fprintf(&mediaTags, `<img src="https://t.me/%s/%d"/>`+"\n", cacheGroup, mid)
 		}
-		mediaLink = fmt.Sprintf(`<a href="https://t.me/%s/%d">&#8204;</a>`, cacheGroup, previewMediaID)
+	} else if previewMediaID > 0 {
+		if mediaType == "Video" {
+			fmt.Fprintf(&mediaTags, `<video src="https://t.me/%s/%d"></video>`+"\n", cacheGroup, previewMediaID)
+		} else {
+			fmt.Fprintf(&mediaTags, `<img src="https://t.me/%s/%d"/>`+"\n", cacheGroup, previewMediaID)
+		}
 	}
 
 	text := fmt.Sprintf(`%s<h1>📁 Detail List #%d</h1>
@@ -211,7 +220,7 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
   <tg-button type="callback_data" data="panel:list:delete:%s" style="danger">🗑️ Hapus List</tg-button>
 </tg-button-row>
 <hr/>
-<p>GotdBot • Promotional Content Manager</p>`, mediaLink, index+1, displayContent, index+1, mediaType, msgID, taskID)
+<p>GotdBot • Promotional Content Manager</p>`, mediaTags.String(), index+1, displayContent, index+1, mediaType, msgID, taskID)
 	// Kirim data ke Redis agar BOT (Gateway) yang mengirimkan pesan detail langsung ke pengguna di chat bot.
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
 		ChatID:        chatID,
