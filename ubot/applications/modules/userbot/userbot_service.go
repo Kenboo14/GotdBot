@@ -123,6 +123,7 @@ type Service struct {
 	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
 	lastLogBotMsgID     sync.Map // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
 	floodCooldowns      sync.Map // key: int64 (chatID) -> time.Time (cooldownUntil)
+	albumCache          sync.Map // key: int (firstMsgID) -> []int (semua album msgIDs)
 	cmdSem              chan struct{} // semaphore pembatas concurrent Redis command jobs (max 32)
 	inlineMu            sync.RWMutex
 	botUsernameCache    string

@@ -4,6 +4,7 @@ import (
 	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/databases"
+	"assterisk/gateway/applications/models"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,6 +44,8 @@ type panelMediaBatch struct {
 	UserID    int64
 	State     string
 	SourceIDs []int
+	Caption   string
+	Entities  []models.MessageEntity
 }
 
 type broadcastMonitor struct {

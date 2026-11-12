@@ -1119,6 +1119,16 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 			h.mediaBatches[key] = batch
 		}
 		batch.SourceIDs = append(batch.SourceIDs, message.ID)
+		// Ambil caption dari foto/video pertama yang membawa teks
+		if batch.Caption == "" {
+			if message.Caption != "" {
+				batch.Caption = message.Caption
+				batch.Entities = panelEntities(message)
+			} else if message.Text != "" {
+				batch.Caption = message.Text
+				batch.Entities = panelEntities(message)
+			}
+		}
 		h.mediaMu.Unlock()
 		time.AfterFunc(2*time.Second, func() { h.flushPanelMediaGroup(context.Background(), b, key) })
 		return
@@ -1134,16 +1144,28 @@ func (h *Handler) flushPanelMediaGroup(ctx context.Context, b *botgotd.Bot, key 
 	if batch == nil {
 		return
 	}
-	h.stagePanelMedia(ctx, b, batch.ChatID, batch.UserID, batch.State, batch.SourceIDs)
+	h.stagePanelMediaWithCaption(ctx, b, batch.ChatID, batch.UserID, batch.State, batch.SourceIDs, batch.Caption, batch.Entities)
 }
 
 func (h *Handler) stagePanelMedia(ctx context.Context, b *botgotd.Bot, chatID, userID int64, state string, sourceIDs []int) {
+	h.stagePanelMediaWithCaption(ctx, b, chatID, userID, state, sourceIDs, "", nil)
+}
+
+func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot, chatID, userID int64, state string, sourceIDs []int, caption string, entities []models.MessageEntity) {
 	jobType := "cache_list"
 	if state == "waiting_add_watermark" {
 		jobType = "cache_watermark"
 	}
 	h.setPanelState(chatID, "")
-	if err := h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: jobType, MediaSourceCount: len(sourceIDs)}); err != nil {
+	payload := models.PToService{
+		ChatID:           chatID,
+		UserID:           userID,
+		Type:             jobType,
+		MediaSourceCount: len(sourceIDs),
+		Text:             caption,
+		Entities:         entities,
+	}
+	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 		log.Printf("media cache broker error: %v", err)
 		return
 	}

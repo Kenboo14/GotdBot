@@ -30,6 +30,42 @@ type panelBroadcastJob struct {
 	cancel context.CancelFunc
 }
 
+// saveAlbumMapping menyimpan mapping firstMsgID → semua album msgIDs
+// ke in-memory albumCache dan ke Redis (TTL 30 hari).
+// Dipanggil saat handleCacheList berhasil menyimpan album ke AiotdCaches.
+func (s *Service) saveAlbumMapping(ctx context.Context, firstID int, allIDs []int) {
+	s.albumCache.Store(firstID, allIDs)
+	if s.redis != nil {
+		data, err := json.Marshal(allIDs)
+		if err == nil {
+			key := fmt.Sprintf("album:%d", firstID)
+			_ = s.redis.Client.Set(ctx, key, data, 30*24*time.Hour).Err()
+		}
+	}
+}
+
+// getAlbumMapping mengambil mapping album dari in-memory cache atau Redis.
+// Mengembalikan nil jika tidak ditemukan (bukan album atau belum disimpan).
+func (s *Service) getAlbumMapping(ctx context.Context, firstID int) []int {
+	if v, ok := s.albumCache.Load(firstID); ok {
+		if ids, ok := v.([]int); ok && len(ids) > 1 {
+			return ids
+		}
+	}
+	if s.redis != nil {
+		key := fmt.Sprintf("album:%d", firstID)
+		data, err := s.redis.Client.Get(ctx, key).Bytes()
+		if err == nil {
+			var ids []int
+			if json.Unmarshal(data, &ids) == nil && len(ids) > 1 {
+				s.albumCache.Store(firstID, ids) // warm in-memory
+				return ids
+			}
+		}
+	}
+	return nil
+}
+
 type panelCachedMsg struct {
 	msg       *tg.Message
 	fetchedAt time.Time
@@ -542,7 +578,7 @@ func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.C
 	}
 	updates, err := client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
 		FromPeer: botPeer, ToPeer: cachePeer, ID: sourceIDs, RandomID: randomIDs,
-		DropAuthor: true, ReplyTo: &tg.InputReplyToMessage{ReplyToMsgID: topicID},
+		DropAuthor: true, ReplyTo: &tg.InputReplyToMessage{ReplyToMsgID: topicID, TopMsgID: topicID},
 	})
 	if err != nil {
 		return nil, err
@@ -936,8 +972,13 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	}
 	if len(mediaIDs) > 0 {
 		cachedMsgID = mediaIDs[0]
-		// Satu album adalah satu List logis. Saat broadcast, ID pertama
-		// akan memperluas kembali seluruh album lewat cacheForwardIDs.
+		// Jika album (lebih dari 1 media), simpan mapping firstID → semua IDs
+		// agar cacheForwardIDs dapat mengembalikan seluruh anggota album tanpa RPC.
+		if len(mediaIDs) > 1 {
+			s.saveAlbumMapping(ctx, cachedMsgID, mediaIDs)
+		}
+		// Satu album adalah satu List logis. Hanya ID pertama yang disimpan ke
+		// daftar Lists; anggota lainnya dipulihkan lewat saveAlbumMapping saat broadcast.
 		mediaIDs = []int{cachedMsgID}
 	} else {
 		cachedMsgID, err = s.sendTextToAiotdCachesTopic(ctx, client, topicID, text, toMTProtoEntities(entities))
@@ -1194,6 +1235,12 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 // cacheForwardIDs returns all messages belonging to the same Telegram album.
 // A normal text/media message simply returns its own ID.
 func (s *Service) cacheForwardIDs(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) []int {
+	// Fast path: album mapping tersimpan saat save (saveAlbumMapping).
+	// Ini menghindari RPC MessagesGetHistory ke forum supergroup tanpa context topic.
+	if album := s.getAlbumMapping(ctx, msgID); len(album) > 1 {
+		return album
+	}
+
 	if cached := getCachedPanelMsg(msgID); cached != nil {
 		if gid, ok := cached.GetGroupedID(); !ok || gid == 0 {
 			return []int{msgID}
