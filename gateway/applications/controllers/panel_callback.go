@@ -107,14 +107,14 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		}
 		h.DisplayList(ctx, b, chatID, userID)
 	case "group":
-		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "Grup berhasil dihapus"})
 		groups := h.db.GetGroups(ctx, userID)
 		if index < 0 || index >= len(groups) {
 			return
 		}
 		removedGroup := groups[index]
 		if err := h.db.DeleteGroupByIndex(ctx, userID, index); err != nil {
-			_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("❌ Gagal menghapus grup: %v", err)})
+			_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("❌ Gagal menghapus grup: %v", err), ParseMode: "HTML"})
 			return
 		}
 		groupKey := removedGroup.Target
@@ -122,7 +122,22 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 			groupKey = strconv.FormatInt(removedGroup.ChatID, 10)
 		}
 		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "delete_panel_group", Text: groupKey})
-		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: cb.Message.Message.ID})
+		msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
+		found := false
+		if cb.Message != nil && cb.Message.Message != nil {
+			for _, mid := range msgIDs {
+				if mid == cb.Message.Message.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				msgIDs = append(msgIDs, cb.Message.Message.ID)
+			}
+		}
+		if len(msgIDs) > 0 {
+			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
+		}
 		h.DisplayGroup(ctx, b, chatID, userID)
 	}
 }

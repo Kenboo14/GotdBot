@@ -582,7 +582,14 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
 	s.publishConfigUpdated(ctx, ownerID)
 
-	report := fmt.Sprintf("✅ <b>Sinkronisasi Grup Berhasil!</b>\n\n<blockquote><i>Sebanyak <code>%d</code> grup dari akun Anda telah berhasil diimpor ke list sebar broadcast.</i></blockquote>", len(allGroups))
+	report := fmt.Sprintf(`<h1>✅ Sinkronisasi Grup Berhasil</h1>
+<blockquote expandable>Sebanyak <code>%d</code> grup dari akun Telegram Anda telah berhasil diimpor ke daftar target broadcast.</blockquote>
+<table border="1">
+  <tr><th>📌 Sumber</th><th>Total Grup Terimpor</th></tr>
+  <tr><td>Akun Userbot</td><td><code>%d grup</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Group Target Manager</p>`, len(allGroups), len(allGroups))
 	s.reply(ctx, chatID, report, "panel_notice")
 }
 

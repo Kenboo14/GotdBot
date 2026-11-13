@@ -223,6 +223,14 @@ func (b *Bot) convertMessageToUpdate(msg *tg.Message, e tg.Entities) *Update {
 			m.Caption = msg.Message
 		}
 		switch media := msg.Media.(type) {
+		case *tg.MessageMediaContact:
+			m.Contact = &Contact{
+				PhoneNumber: media.PhoneNumber,
+				FirstName:   media.FirstName,
+				LastName:    media.LastName,
+				UserID:      media.UserID,
+				VCard:       media.Vcard,
+			}
 		case *tg.MessageMediaPhoto:
 			if photo, ok := media.Photo.(*tg.Photo); ok {
 				m.Photo = []PhotoSize{{FileID: fmt.Sprintf("%d", photo.ID), Width: 100, Height: 100}}

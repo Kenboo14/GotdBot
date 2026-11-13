@@ -1114,7 +1114,14 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	s.publishConfigUpdated(ctx, ownerID)
 
 	totalList := s.countLists(ctx, ownerID)
-	report := fmt.Sprintf("✅ <b>List Berhasil Disimpan!</b>\n\n<blockquote><i>Materi promosi (<b>%s</b>) telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></i></blockquote>\n\nTotal list tersimpan: <code>%d</code>", mediaTypeLabel, getGroupCache(), topicID, cachedMsgID, totalList)
+	report := fmt.Sprintf(`<h1>✅ List Berhasil Disimpan</h1>
+<blockquote expandable>Materi promosi (<b>%s</b>) telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></blockquote>
+<table border="1">
+  <tr><th>📦 Tipe Materi</th><th>Total List Tersimpan</th></tr>
+  <tr><td>%s</td><td><code>%d list</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Promotional Content Manager</p>`, mediaTypeLabel, getGroupCache(), topicID, cachedMsgID, mediaTypeLabel, totalList)
 	s.reply(ctx, chatID, report, "panel_notice")
 }
 

@@ -160,8 +160,8 @@ func (b *Bot) DispatchUpdate(ctx context.Context, u *Update) {
 		}
 	}
 
-	// 3. Try message text
-	if u.Message != nil && u.Message.Text != "" {
+	// 3. Try message (text or contact / other media)
+	if u.Message != nil {
 		text := u.Message.Text
 		for _, rh := range b.handlers {
 			if rh.hType != HandlerTypeMessageText {
@@ -170,10 +170,12 @@ func (b *Bot) DispatchUpdate(ctx context.Context, u *Update) {
 			matched := false
 			if rh.pattern == "" {
 				matched = true
-			} else if rh.mType == MatchTypeExact && text == rh.pattern {
-				matched = true
-			} else if rh.mType == MatchTypePrefix && strings.HasPrefix(text, rh.pattern) {
-				matched = true
+			} else if text != "" {
+				if rh.mType == MatchTypeExact && text == rh.pattern {
+					matched = true
+				} else if rh.mType == MatchTypePrefix && strings.HasPrefix(text, rh.pattern) {
+					matched = true
+				}
 			}
 			if matched {
 				go rh.handler(ctx, b, u)
@@ -859,13 +861,8 @@ func FormatRichHTML(htmlText string) string {
 }
 
 func isRichContent(text string) bool {
-	// Konten Rich sejati membutuhkan tabel, tombol rich khusus (tg-button-row), atau media tersemat.
-	// Pesan menu/petunjuk blockquote biasa (tanpa tabel/button row) dikirim via pesan native Telegram
-	// agar baris baru \n di dalam blockquote tidak di-collapse oleh client.
-	return strings.Contains(text, "<tg-button-row>") ||
-		strings.Contains(text, "<table") ||
-		strings.Contains(text, "<img") ||
-		strings.Contains(text, "<video")
+	// Semua respon berformat HTML / Rich tags dikirim sebagai Rich Message
+	return strings.Contains(text, "<") && strings.Contains(text, ">")
 }
 
 func cleanHTML(text string) string {

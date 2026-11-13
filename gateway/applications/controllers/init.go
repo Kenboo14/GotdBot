@@ -32,6 +32,8 @@ type Handler struct {
 	cacheMedia       map[int]cachedMediaFile
 	detailMu         sync.Mutex
 	detailMessages   map[int64][]int
+	promptMu         sync.Mutex
+	promptMessages   map[int64]int
 }
 
 type cachedMediaFile struct {
@@ -65,6 +67,7 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 		mediaBatches:     make(map[string]*panelMediaBatch),
 		cacheMedia:       make(map[int]cachedMediaFile),
 		detailMessages:   make(map[int64][]int),
+		promptMessages:   make(map[int64]int),
 	}
 }
 
@@ -89,6 +92,22 @@ func (h *Handler) clearProgress(ctx context.Context, b *botgotd.Bot, chatID int6
 	id := h.progressMessages[chatID]
 	delete(h.progressMessages, chatID)
 	h.progressMu.Unlock()
+	if id > 0 {
+		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: id})
+	}
+}
+
+func (h *Handler) setPanelPrompt(chatID int64, messageID int) {
+	h.promptMu.Lock()
+	defer h.promptMu.Unlock()
+	h.promptMessages[chatID] = messageID
+}
+
+func (h *Handler) clearPanelPrompt(ctx context.Context, b *botgotd.Bot, chatID int64) {
+	h.promptMu.Lock()
+	id := h.promptMessages[chatID]
+	delete(h.promptMessages, chatID)
+	h.promptMu.Unlock()
 	if id > 0 {
 		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: id})
 	}

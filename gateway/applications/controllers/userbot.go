@@ -122,8 +122,8 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Sisa: %s)\n"+
 					"━━━━━━━━━━━━━━━━━━━━\n"+
 					"Seluruh data (List, Grup, Notes, Prefix) otomatis terhubung kembali.\n\n"+
-					"📱 <b>Masukkan nomor Telegram</b> dalam format internasional.\n"+
-					"<i>Contoh: +6281234567890</i>", lic.Tier, sisaDur),
+					"📱 <b>Hubungkan Nomor Telegram</b>\n"+
+					"Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk mengirim nomor akun Anda.", lic.Tier, sisaDur),
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -177,8 +177,8 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Sisa: %s)\n"+
 					"━━━━━━━━━━━━━━━━━━━━\n"+
 					"Hak kepemilikan database &amp; seluruh data berhasil diklaim!\n\n"+
-					"📱 <b>Masukkan nomor Telegram</b> dalam format internasional.\n"+
-					"<i>Contoh: +6281234567890</i>", lic.Tier, sisaDur),
+					"📱 <b>Hubungkan Nomor Telegram</b>\n"+
+					"Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk mengirim nomor akun Anda.", lic.Tier, sisaDur),
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -243,8 +243,8 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Masa aktif: %s)\n"+
 					"━━━━━━━━━━━━━━━━━━━━\n"+
 					"Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim!\n\n"+
-					"📱 <b>Masukkan nomor Telegram</b> dalam format internasional.\n"+
-					"<i>Contoh: +6281234567890</i>", tm.Tier, durStr),
+					"📱 <b>Hubungkan Nomor Telegram</b>\n"+
+					"Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk mengirim nomor akun Anda.", tm.Tier, durStr),
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -271,12 +271,24 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 		if update.Message.Contact != nil {
 			contact := update.Message.Contact
 			if contact.UserID != 0 && contact.UserID != update.Message.From.ID {
-				b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Kirim kontak milik akun Telegram Anda sendiri."})
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "⚠️ <b>Kontak Tidak Sesuai.</b>\nKirim kontak milik akun Telegram Anda sendiri via tombol <b>📱 Bagikan Kontak</b>.",
+					ParseMode:   "HTML",
+					ReplyMarkup: installPhoneKeyboard(),
+				})
 				return
 			}
 			text = normalizePhone(contact.PhoneNumber)
-		} else if !validPhone(text) {
-			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Nomor tidak valid. Gunakan contoh: +6281234567890"})
+		} else if validPhone(text) {
+			text = normalizePhone(text)
+		} else {
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      chatID,
+				Text:        "⚠️ Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk membagikan nomor akun Telegram Anda.",
+				ParseMode:   "HTML",
+				ReplyMarkup: installPhoneKeyboard(),
+			})
 			return
 		}
 		event = "auth_phone"
@@ -376,10 +388,14 @@ func normalizePhone(value string) string {
 
 var (
 	cachedInstallPhoneMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{{
-			{Text: "Kirim Kontak", RequestContact: true},
-			{Text: "⬅️ Batal ⬅️"},
-		}},
+		Keyboard: [][]botgotd.KeyboardButton{
+			{
+				{Text: "📱 Bagikan Kontak", RequestContact: true},
+			},
+			{
+				{Text: "⬅️ Batal ⬅️"},
+			},
+		},
 		ResizeKeyboard:  true,
 		OneTimeKeyboard: true,
 	}

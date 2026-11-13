@@ -222,6 +222,7 @@ func (h *Handler) ShowGrupList(ctx context.Context, b *botgotd.Bot, chatID, user
 
 // PromptTambahList prompts user to enter broadcast list text
 func (h *Handler) PromptTambahList(ctx context.Context, b *botgotd.Bot, chatID int64) {
+	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_add_list")
 
 	text := `<h1>📝 Tambah List Promosi</h1>
@@ -229,14 +230,18 @@ func (h *Handler) PromptTambahList(ctx context.Context, b *botgotd.Bot, chatID i
 1. <b>Teks :</b> Pesan teks biasa atau berformat HTML / Markdown.
 2. <b>Media Single :</b> Foto, video, dokumen, audio, atau animasi / GIF (+ caption).
 3. <b>Media Grup :</b> Album kumpulan foto atau video (+ caption).</blockquote>
+<hr/>
 <p>Kirimkan materi promosi sekarang atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
+	msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: cancelOnlyMarkup,
 	})
+	if msg != nil && msg.ID > 0 {
+		h.setPanelPrompt(chatID, msg.ID)
+	}
 }
 
 // PromptTambahGrup prompts user for group adding method
@@ -259,6 +264,7 @@ func (h *Handler) PromptTambahGrup(ctx context.Context, b *botgotd.Bot, chatID i
 
 // PromptTambahGrupManual prompts user to input group usernames/IDs
 func (h *Handler) PromptTambahGrupManual(ctx context.Context, b *botgotd.Bot, chatID int64) {
+	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_add_group_manual")
 
 	text := `<h1>📝 Tambah Grup Manual</h1>
@@ -268,14 +274,18 @@ func (h *Handler) PromptTambahGrupManual(ctx context.Context, b *botgotd.Bot, ch
 3. <b>Tautan grup</b> (contoh: <code>t.me/namagrup</code>)
 
 <i>Jika lebih dari satu grup, pisahkan masing-masing target dengan baris baru.</i></blockquote>
+<hr/>
 <p>Kirimkan target grup sekarang atau klik tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
+	msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: cancelOnlyMarkup,
 	})
+	if msg != nil && msg.ID > 0 {
+		h.setPanelPrompt(chatID, msg.ID)
+	}
 }
 
 // CekList displays all saved promotional lists (summary view)
@@ -496,30 +506,23 @@ func (h *Handler) showGroupDetail(ctx context.Context, b *botgotd.Bot, chatID, u
 </table>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:group:delete:%d" style="danger">🗑️ Hapus Grup</tg-button>
-  <tg-button type="callback_data" data="panel:group:back" style="primary">🔙 Kembali ke Grup</tg-button>
 </tg-button-row>
 <hr/>
 <p>GotdBot • Group Target Manager</p>`, index+1, html.EscapeString(title), html.EscapeString(grp.Target), grp.ChatID, index)
 
-	detailMarkup := &botgotd.InlineKeyboardMarkup{
-		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-			{
-				{Text: "🗑️ Hapus Grup", CallbackData: fmt.Sprintf("panel:group:delete:%d", index)},
-				{Text: "🔙 Kembali ke Grup", CallbackData: "panel:group:back"},
-			},
-		},
-	}
-
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        richGroupText,
-		ParseMode:   "HTML",
-		ReplyMarkup: detailMarkup,
+	sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
+		ChatID:    chatID,
+		Text:      richGroupText,
+		ParseMode: "HTML",
 	})
+	if err == nil && sentMsg != nil {
+		h.trackDetailMessageIDs(ctx, chatID, []int{sentMsg.ID})
+	}
 }
 
 // PromptHapusList prompts for list deletion
 func (h *Handler) PromptHapusList(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_del_list")
 
 	lists := h.db.GetLists(ctx, userID)
@@ -532,16 +535,20 @@ func (h *Handler) PromptHapusList(ctx context.Context, b *botgotd.Bot, chatID, u
 	}
 	sb.WriteString("\n<hr/>\n<p>Pilih dari keyboard atau klik <b>⬅️ Batal ⬅️</b> di bawah.</p>")
 
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
+	msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        sb.String(),
 		ParseMode:   "HTML",
 		ReplyMarkup: hapusListMarkup,
 	})
+	if msg != nil && msg.ID > 0 {
+		h.setPanelPrompt(chatID, msg.ID)
+	}
 }
 
 // PromptHapusGrup prompts for group deletion
 func (h *Handler) PromptHapusGrup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_del_group")
 
 	groups := h.db.GetGroups(ctx, userID)
@@ -554,12 +561,15 @@ func (h *Handler) PromptHapusGrup(ctx context.Context, b *botgotd.Bot, chatID, u
 	}
 	sb.WriteString("\n<hr/>\n<p>Pilih dari keyboard atau klik <b>⬅️ Batal ⬅️</b> di bawah.</p>")
 
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
+	msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        sb.String(),
 		ParseMode:   "HTML",
 		ReplyMarkup: hapusGrupMarkup,
 	})
+	if msg != nil && msg.ID > 0 {
+		h.setPanelPrompt(chatID, msg.ID)
+	}
 }
 
 // CekTopic displays forum topics
@@ -1170,6 +1180,7 @@ func (h *Handler) stagePanelMedia(ctx context.Context, b *botgotd.Bot, chatID, u
 }
 
 func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot, chatID, userID int64, state string, sourceIDs []int, caption string, entities []models.MessageEntity) {
+	h.clearPanelPrompt(ctx, b, chatID)
 	jobType := "cache_list"
 	if state == "waiting_add_watermark" {
 		jobType = "cache_watermark"
@@ -1222,6 +1233,8 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	}
 
 	if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
+		h.clearPanelPrompt(ctx, b, chatID)
+		h.clearProgress(ctx, b, chatID)
 		h.setPanelState(chatID, "")
 		hasActive := false
 		if h.db != nil {
@@ -1230,14 +1243,14 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		if hasActive {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        "↩️ Tindakan dibatalkan.",
+				Text:        "<p>↩️ <b>Tindakan dibatalkan.</b></p>",
 				ParseMode:   "HTML",
 				ReplyMarkup: mainMenuMarkup,
 			})
 		} else {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        "↩️ Tindakan dibatalkan.",
+				Text:        "<p>↩️ <b>Tindakan dibatalkan.</b></p>",
 				ParseMode:   "HTML",
 				ReplyMarkup: cachedRemoveKeyboard,
 			})
@@ -1247,6 +1260,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 
 	switch state {
 	case "waiting_add_list":
+		h.clearPanelPrompt(ctx, b, chatID)
 		if message == nil || message.MediaGroupID == "" {
 			h.setPanelState(chatID, "")
 		}
@@ -1276,6 +1290,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 
 	case "waiting_add_group_manual":
+		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "")
 		lines := strings.Split(text, "\n")
 		addedCount := 0
@@ -1304,8 +1319,15 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 
 		gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        fmt.Sprintf("✅ <b>Berhasil.</b> Ditambahkan <code>%d</code> grup. Total: <code>%d</code> grup.", addedCount, gCount),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>✅ Grup Berhasil Ditambahkan</h1>
+<blockquote expandable>Ditambahkan: <code>%d</code> grup baru.<br/>Total grup tersimpan: <code>%d</code> grup.</blockquote>
+<table border="1">
+  <tr><th>📌 Status</th><th>Total Grup</th></tr>
+  <tr><td>Aktif</td><td><code>%d grup</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Group Target Manager</p>`, addedCount, gCount, gCount),
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
@@ -1346,23 +1368,35 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			return true
 		}
 		if text == "Kembali" {
+			msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
+			if len(msgIDs) > 0 {
+				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
+			}
 			h.ShowGrupList(ctx, b, chatID, userID)
 			return true
 		}
 		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
+			msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
+			if len(msgIDs) > 0 {
+				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
+			}
 			h.showGroupDetail(ctx, b, chatID, userID, idx-1)
 			return true
 		}
 		return true
 
 	case "waiting_del_list":
+		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "")
 		if text == "🗑️ Hapus Semua List 🗑️" {
 			_ = h.db.ClearLists(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "✅ <b>Semua list dihapus.</b>",
+				ChatID: chatID,
+				Text: `<h1>✅ Semua List Dihapus</h1>
+<blockquote expandable>Seluruh list promosi berhasil dibersihkan dari database dan cache.</blockquote>
+<hr/>
+<p>GotdBot • Promotional Content Manager</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: grupListMenuMarkup,
 			})
@@ -1375,8 +1409,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 				_ = h.db.DeleteListByIndex(ctx, userID, idx-1)
 				_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "delete_panel_list", Text: strconv.Itoa(cacheID)})
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        fmt.Sprintf("✅ <b>List #%d dihapus.</b>", idx),
+					ChatID: chatID,
+					Text: fmt.Sprintf(`<h1>✅ List Dihapus</h1>
+<blockquote expandable>List #%d berhasil dihapus dari database dan cache.</blockquote>
+<hr/>
+<p>GotdBot • Promotional Content Manager</p>`, idx),
 					ParseMode:   "HTML",
 					ReplyMarkup: grupListMenuMarkup,
 				})
@@ -1384,21 +1421,28 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			}
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "⚠️ Nomor list tidak valid.",
+			ChatID: chatID,
+			Text: `<h1>⚠️ Gagal Menghapus List</h1>
+<blockquote expandable>Nomor urut list tidak valid. Silakan periksa kembali index list.</blockquote>
+<hr/>
+<p>GotdBot • Promotional Content Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
 		return true
 
 	case "waiting_del_group":
+		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "")
 		if text == "🗑️ Hapus Semua Grup 🗑️" {
 			_ = h.db.ClearGroups(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_groups"})
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "✅ <b>Semua grup dihapus.</b>",
+				ChatID: chatID,
+				Text: `<h1>✅ Semua Grup Dihapus</h1>
+<blockquote expandable>Seluruh grup target siaran berhasil dibersihkan dari database.</blockquote>
+<hr/>
+<p>GotdBot • Group Target Manager</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: grupListMenuMarkup,
 			})
@@ -1415,8 +1459,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 				}
 				_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "delete_panel_group", Text: groupKey})
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        fmt.Sprintf("✅ <b>Grup #%d (%s) dihapus.</b>", idx, html.EscapeString(groups[idx-1].Target)),
+					ChatID: chatID,
+					Text: fmt.Sprintf(`<h1>✅ Grup Dihapus</h1>
+<blockquote expandable>Grup #%d (<code>%s</code>) berhasil dihapus.</blockquote>
+<hr/>
+<p>GotdBot • Group Target Manager</p>`, idx, html.EscapeString(removed.Target)),
 					ParseMode:   "HTML",
 					ReplyMarkup: grupListMenuMarkup,
 				})
@@ -1424,8 +1471,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			}
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "⚠️ Nomor grup tidak valid.",
+			ChatID: chatID,
+			Text: `<h1>⚠️ Gagal Menghapus Grup</h1>
+<blockquote expandable>Nomor urut grup tidak valid. Silakan periksa kembali index grup.</blockquote>
+<hr/>
+<p>GotdBot • Group Target Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
