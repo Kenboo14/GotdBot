@@ -550,6 +550,9 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 			if err == nil {
 				return &Message{}, nil
 			}
+			if strings.Contains(strings.ToLower(err.Error()), "not_modified") || strings.Contains(strings.ToLower(err.Error()), "not modified") {
+				return &Message{}, nil
+			}
 			log.Printf("[botgotd] MessagesEditInlineBotMessage error: %v", err)
 			return nil, err
 		}
@@ -571,6 +574,9 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 				}
 				_, err := b.API.MessagesEditMessage(ctx, req)
 				if err == nil {
+					return &Message{ID: params.MessageID, Chat: Chat{ID: chatID}}, nil
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "not_modified") || strings.Contains(strings.ToLower(err.Error()), "not modified") {
 					return &Message{ID: params.MessageID, Chat: Chat{ID: chatID}}, nil
 				}
 				log.Printf("[botgotd] MessagesEditMessage error: %v", err)
@@ -597,7 +603,11 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 	if params.ReplyMarkup != nil {
 		body["reply_markup"] = params.ReplyMarkup
 	}
-	return b.postHTTPMessage(ctx, url, body)
+	msg, err := b.postHTTPMessage(ctx, url, body)
+	if err != nil && (strings.Contains(strings.ToLower(err.Error()), "not_modified") || strings.Contains(strings.ToLower(err.Error()), "not modified")) {
+		return &Message{ID: params.MessageID, Chat: Chat{ID: parseChatID(params.ChatID)}}, nil
+	}
+	return msg, err
 }
 
 func (b *Bot) EditMessageReplyMarkup(ctx context.Context, params *EditMessageReplyMarkupParams) (*Message, error) {

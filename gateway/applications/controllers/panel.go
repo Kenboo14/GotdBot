@@ -1084,21 +1084,20 @@ func (h *Handler) RenderControlAccountList(ctx context.Context, b *botgotd.Bot, 
 	}
 
 	if len(accounts) == 0 {
-		text := fmt.Sprintf(`<b>🎯 Panel Kontrol Akun</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👤 <b>Anda memiliki 0 akses</b>
-Anda belum memiliki akses untuk mengontrol akun userbot manapun.
-
-<blockquote>User ID Anda: <code>%d</code></blockquote>
-
-Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemilik userbot lain menambahkan User ID Anda sebagai <b>ADMIN</b> di menu Pengaturan Admin.`, userID)
+		var sb strings.Builder
+		sb.Grow(512)
+		sb.WriteString("<b>🎯 Panel Kontrol Akun</b>\n")
+		sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+		sb.WriteString("👤 <b>Anda memiliki 0 akses</b>\n")
+		sb.WriteString("Anda belum memiliki akses untuk mengontrol akun userbot manapun.\n\n")
+		fmt.Fprintf(&sb, "<blockquote>User ID Anda: <code>%d</code></blockquote>\n\n", userID)
+		sb.WriteString("Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemilik userbot lain menambahkan User ID Anda sebagai <b>ADMIN</b> di menu Pengaturan Admin.")
 
 		if messageID > 0 {
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:    chatID,
 				MessageID: messageID,
-				Text:      text,
+				Text:      sb.String(),
 				ParseMode: "HTML",
 			})
 		} else {
@@ -1113,7 +1112,7 @@ Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemil
 			}
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        text,
+				Text:        sb.String(),
 				ParseMode:   "HTML",
 				ReplyMarkup: markup,
 			})
@@ -1121,7 +1120,7 @@ Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemil
 		return
 	}
 
-	var rows [][]botgotd.InlineKeyboardButton
+	rows := make([][]botgotd.InlineKeyboardButton, 0, len(accounts)+1)
 	for _, acc := range accounts {
 		btnText := acc.Name
 		cbData := fmt.Sprintf("ctrl:select:%d", acc.OwnerID)
@@ -1129,28 +1128,32 @@ Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemil
 			{Text: btnText, CallbackData: cbData},
 		})
 	}
+	rows = append(rows, []botgotd.InlineKeyboardButton{
+		{Text: "❌ Tutup Panel ❌", CallbackData: "ctrl:close"},
+	})
 
 	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
-	text := fmt.Sprintf(`<b>🎯 Panel Kontrol Akun</b>
-━━━━━━━━━━━━━━━━━━━━
 
-👤 <b>Anda memiliki %d akses akun</b>
-📝 <i>Silakan pilih akun userbot yang ingin Anda kontrol di bawah:</i>
-
-<blockquote>💡 <b>Tips:</b> Untuk mengubah teks / grup secara optimal, pastikan userbot dalam posisi Status Nonaktif.</blockquote>`, len(accounts))
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>🎯 Panel Kontrol Akun</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "👤 <b>Anda memiliki %d akses akun</b>\n", len(accounts))
+	sb.WriteString("📝 <i>Silakan pilih akun userbot yang ingin Anda kontrol di bawah:</i>\n\n")
+	sb.WriteString("<blockquote>💡 <b>Tips:</b> Untuk mengubah teks / grup secara optimal, pastikan userbot dalam posisi Status Nonaktif.</blockquote>")
 
 	if messageID > 0 {
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
 	} else {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1160,7 +1163,6 @@ Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemil
 // RenderControlAdminMenu renders the main admin remote dashboard
 func (h *Handler) RenderControlAdminMenu(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, adminID int64, adminName string, targetID int64) {
 	h.setPanelState(chatID, "")
-	h.SetActiveRemoteTarget(chatID, targetID)
 
 	targetName := h.GetAccountName(targetID)
 	if targetName == "" {
@@ -1171,19 +1173,18 @@ func (h *Handler) RenderControlAdminMenu(ctx context.Context, b *botgotd.Bot, ch
 		adminName = "Admin"
 	}
 
-	text := fmt.Sprintf(`👋 <b>Hai!, %s,</b>
-
-Selamat datang di menu admins. Anda dapat mengkontrol beberapa akun ubot sekaligus.
-
-👑 <b>Mengkontrol:</b> %s (<code>%d</code>)
-
-<b>Ads:</b> <a href="https://t.me/GotdBot">Channel Resmi GotdBot</a>`, html.EscapeString(adminName), html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	fmt.Fprintf(&sb, "👋 <b>Hai!, %s,</b>\n\n", html.EscapeString(adminName))
+	sb.WriteString("Selamat datang di menu admins. Anda dapat mengkontrol beberapa akun ubot sekaligus.\n\n")
+	fmt.Fprintf(&sb, "👑 <b>Mengkontrol:</b> %s (<code>%d</code>)\n\n", html.EscapeString(targetName), targetID)
+	sb.WriteString("<b>Ads:</b> <a href=\"https://t.me/GotdBot\">Channel Resmi GotdBot</a>")
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{{Text: "📚 Status 📚", CallbackData: fmt.Sprintf("ctrl:status:%d", targetID)}},
 		{{Text: "🔮 Grup & List 🔮", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
 		{{Text: "🕦 Atur Jeda 🕦", CallbackData: fmt.Sprintf("ctrl:jeda:%d", targetID)}},
-		{{Text: "💎 List Akun 💎", CallbackData: "ctrl:list_akun"}},
+		{{Text: "💎 List Akun 💎", CallbackData: "ctrl:list"}},
 	}
 
 	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -1192,14 +1193,14 @@ Selamat datang di menu admins. Anda dapat mengkontrol beberapa akun ubot sekalig
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
 	} else {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1229,21 +1230,22 @@ func (h *Handler) RenderControlStatus(ctx context.Context, b *botgotd.Bot, chatI
 	}
 
 	var sb strings.Builder
+	sb.Grow(512)
 	sb.WriteString("<b>📚 Status Userbot (Remote)</b>\n")
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
-	sb.WriteString(fmt.Sprintf("👑 <b>Akun Target:</b> %s (<code>%d</code>)\n", html.EscapeString(targetName), targetID))
-	sb.WriteString(fmt.Sprintf("🚀 <b>Status:</b> <code>%s</code>\n", html.EscapeString(cfg.Status)))
-	sb.WriteString(fmt.Sprintf("👑 <b>Mode:</b> <code>%s</code>\n", html.EscapeString(cfg.Mode)))
-	sb.WriteString(fmt.Sprintf("🕒 <b>Jeda:</b> <code>%d detik</code>\n", cfg.Delay))
-	sb.WriteString(fmt.Sprintf("🌐 <b>Target Grup:</b> <code>%d grup</code>\n", gCount))
-	sb.WriteString(fmt.Sprintf("📚 <b>Materi List:</b> <code>%d list</code>\n", lCount))
-	sb.WriteString(fmt.Sprintf("⚠️ <b>Safemode:</b> <code>%s</code>\n", safeMode))
-	sb.WriteString(fmt.Sprintf("⏭️ <b>Skip Flood:</b> <code>%s</code>\n", skipFw))
-	sb.WriteString(fmt.Sprintf("⏱️ <b>Timer:</b> <code>%s</code>\n", html.EscapeString(cfg.Timer)))
-	sb.WriteString(fmt.Sprintf("🔥 <b>Masa Aktif:</b> <code>%s</code>\n\n", html.EscapeString(cfg.MasaAktif)))
+	fmt.Fprintf(&sb, "👑 <b>Akun Target:</b> %s (<code>%d</code>)\n", html.EscapeString(targetName), targetID)
+	fmt.Fprintf(&sb, "🚀 <b>Status:</b> <code>%s</code>\n", html.EscapeString(cfg.Status))
+	fmt.Fprintf(&sb, "👑 <b>Mode:</b> <code>%s</code>\n", html.EscapeString(cfg.Mode))
+	fmt.Fprintf(&sb, "🕒 <b>Jeda:</b> <code>%d detik</code>\n", cfg.Delay)
+	fmt.Fprintf(&sb, "🌐 <b>Target Grup:</b> <code>%d grup</code>\n", gCount)
+	fmt.Fprintf(&sb, "📚 <b>Materi List:</b> <code>%d list</code>\n", lCount)
+	fmt.Fprintf(&sb, "⚠️ <b>Safemode:</b> <code>%s</code>\n", safeMode)
+	fmt.Fprintf(&sb, "⏭️ <b>Skip Flood:</b> <code>%s</code>\n", skipFw)
+	fmt.Fprintf(&sb, "⏱️ <b>Timer:</b> <code>%s</code>\n", html.EscapeString(cfg.Timer))
+	fmt.Fprintf(&sb, "🔥 <b>Masa Aktif:</b> <code>%s</code>\n\n", html.EscapeString(cfg.MasaAktif))
 	sb.WriteString("<blockquote>\n")
-	sb.WriteString(fmt.Sprintf("📋 <b>Tindakan Terkini:</b> <i>%s</i><br/>\n", html.EscapeString(cfg.TindakanTerkini)))
-	sb.WriteString(fmt.Sprintf("📄 <b>Tindakan Terakhir:</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerakhir)))
+	fmt.Fprintf(&sb, "📋 <b>Tindakan Terkini:</b> <i>%s</i><br/>\n", html.EscapeString(cfg.TindakanTerkini))
+	fmt.Fprintf(&sb, "📄 <b>Tindakan Terakhir:</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerakhir))
 	sb.WriteString("</blockquote>")
 
 	rows := [][]botgotd.InlineKeyboardButton{
@@ -1281,19 +1283,19 @@ func (h *Handler) RenderControlGrupList(ctx context.Context, b *botgotd.Bot, cha
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>🔮 Grup &amp; List (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-📚 <b>Total List Promosi:</b> <code>%d materi</code>
-🌐 <b>Total Target Grup:</b> <code>%d grup</code>
-
-<blockquote>💡 <i>Gunakan tombol di bawah untuk melihat, menambah, atau mereset list &amp; grup akun ini secara remote.</i></blockquote>`, html.EscapeString(targetName), targetID, lCount, gCount)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>🔮 Grup &amp; List (Remote)</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "👑 <b>Akun Target:</b> %s (<code>%d</code>)\n", html.EscapeString(targetName), targetID)
+	fmt.Fprintf(&sb, "📚 <b>Total List Promosi:</b> <code>%d materi</code>\n", lCount)
+	fmt.Fprintf(&sb, "🌐 <b>Total Target Grup:</b> <code>%d grup</code>\n\n", gCount)
+	sb.WriteString("<blockquote>💡 <i>Gunakan tombol di bawah untuk melihat, menambah, atau mereset list &amp; grup akun ini secara remote.</i></blockquote>")
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{
-			{Text: "📁 Cek List 📁", CallbackData: fmt.Sprintf("ctrl:cek_list:%d", targetID)},
-			{Text: "📚 Cek Grup 📚", CallbackData: fmt.Sprintf("ctrl:cek_grup:%d", targetID)},
+			{Text: "📁 Cek List 📁", CallbackData: fmt.Sprintf("ctrl:cek_list:%d:0", targetID)},
+			{Text: "📚 Cek Grup 📚", CallbackData: fmt.Sprintf("ctrl:cek_grup:%d:0", targetID)},
 		},
 		{
 			{Text: "📝 Tambah List 📝", CallbackData: fmt.Sprintf("ctrl:tambah_list:%d", targetID)},
@@ -1314,22 +1316,22 @@ func (h *Handler) RenderControlGrupList(ctx context.Context, b *botgotd.Bot, cha
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
 	} else {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
 	}
 }
 
-// RenderControlCekList renders the promotional lists view of target account
-func (h *Handler) RenderControlCekList(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64) {
+// RenderControlCekList renders the promotional lists view of target account with pagination
+func (h *Handler) RenderControlCekList(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64, page int) {
 	lists := h.db.GetLists(ctx, targetID)
 	if len(lists) == 0 {
 		if refreshed := h.db.SyncOneFromMongoDB(ctx, targetID); refreshed != nil && len(refreshed.Lists) > 0 {
@@ -1337,28 +1339,63 @@ func (h *Handler) RenderControlCekList(ctx context.Context, b *botgotd.Bot, chat
 		}
 	}
 
+	const pageSize = 10
+	total := len(lists)
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page < 0 {
+		page = 0
+	}
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+
 	var sb strings.Builder
+	sb.Grow(512)
 	sb.WriteString("<b>📋 Ringkasan List Promosi (Remote)</b>\n")
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
 
-	if len(lists) == 0 {
+	if total == 0 {
 		sb.WriteString("<blockquote>Belum ada list materi promosi tersimpan pada akun ini.</blockquote>\n\n")
 		sb.WriteString("Tekan <b>📝 Tambah List 📝</b> untuk menambahkan materi baru.")
 	} else {
-		fmt.Fprintf(&sb, "<blockquote>Total tersimpan: <b>%d materi</b>\n\n", len(lists))
-		for i, msgID := range lists {
-			fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code>\n", i+1, i+1, msgID)
-			if i >= 19 {
-				fmt.Fprintf(&sb, "<i>... dan <code>%d</code> list lainnya.</i>\n", len(lists)-20)
-				break
-			}
+		start := page * pageSize
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		fmt.Fprintf(&sb, "<blockquote>Total tersimpan: <b>%d materi</b> (Hal %d/%d)\n\n", total, page+1, totalPages)
+		for i := start; i < end; i++ {
+			fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code>\n", i+1, i+1, lists[i])
 		}
 		sb.WriteString("</blockquote>")
 	}
 
-	rows := [][]botgotd.InlineKeyboardButton{
-		{{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+	rows := make([][]botgotd.InlineKeyboardButton, 0, 2)
+	if totalPages > 1 {
+		var navRow []botgotd.InlineKeyboardButton
+		if page > 0 {
+			navRow = append(navRow, botgotd.InlineKeyboardButton{
+				Text:         "⬅️ Prev",
+				CallbackData: fmt.Sprintf("ctrl:cek_list:%d:%d", targetID, page-1),
+			})
+		}
+		if page < totalPages-1 {
+			navRow = append(navRow, botgotd.InlineKeyboardButton{
+				Text:         "Next ➡️",
+				CallbackData: fmt.Sprintf("ctrl:cek_list:%d:%d", targetID, page+1),
+			})
+		}
+		if len(navRow) > 0 {
+			rows = append(rows, navRow)
+		}
 	}
+
+	rows = append(rows, []botgotd.InlineKeyboardButton{
+		{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)},
+	})
 
 	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 	if messageID > 0 {
@@ -1372,8 +1409,8 @@ func (h *Handler) RenderControlCekList(ctx context.Context, b *botgotd.Bot, chat
 	}
 }
 
-// RenderControlCekGrup renders the target groups view of target account
-func (h *Handler) RenderControlCekGrup(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64) {
+// RenderControlCekGrup renders the target groups view of target account with pagination
+func (h *Handler) RenderControlCekGrup(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64, page int) {
 	groups := h.db.GetGroups(ctx, targetID)
 	if len(groups) == 0 {
 		if refreshed := h.db.SyncOneFromMongoDB(ctx, targetID); refreshed != nil && len(refreshed.Groups) > 0 {
@@ -1381,32 +1418,68 @@ func (h *Handler) RenderControlCekGrup(ctx context.Context, b *botgotd.Bot, chat
 		}
 	}
 
+	const pageSize = 15
+	total := len(groups)
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page < 0 {
+		page = 0
+	}
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+
 	var sb strings.Builder
+	sb.Grow(512)
 	sb.WriteString("<b>📚 Ringkasan Grup Target (Remote)</b>\n")
 	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
 
-	if len(groups) == 0 {
+	if total == 0 {
 		sb.WriteString("<blockquote>Belum ada grup target siaran tersimpan pada akun ini.</blockquote>\n\n")
 		sb.WriteString("Tekan <b>➕ Tambah Grup ➕</b> untuk menambahkan grup target.")
 	} else {
-		fmt.Fprintf(&sb, "<blockquote>Total tersimpan: <b>%d grup</b>\n\n", len(groups))
-		for i, g := range groups {
+		start := page * pageSize
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		fmt.Fprintf(&sb, "<blockquote>Total tersimpan: <b>%d grup</b> (Hal %d/%d)\n\n", total, page+1, totalPages)
+		for i := start; i < end; i++ {
+			g := groups[i]
 			title := g.Title
 			if title == "" {
 				title = g.Target
 			}
 			fmt.Fprintf(&sb, "%d. %s — <code>%s</code>\n", i+1, html.EscapeString(title), html.EscapeString(g.Target))
-			if i >= 24 {
-				fmt.Fprintf(&sb, "<i>... dan <code>%d</code> grup lainnya.</i>\n", len(groups)-25)
-				break
-			}
 		}
 		sb.WriteString("</blockquote>")
 	}
 
-	rows := [][]botgotd.InlineKeyboardButton{
-		{{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+	rows := make([][]botgotd.InlineKeyboardButton, 0, 2)
+	if totalPages > 1 {
+		var navRow []botgotd.InlineKeyboardButton
+		if page > 0 {
+			navRow = append(navRow, botgotd.InlineKeyboardButton{
+				Text:         "⬅️ Prev",
+				CallbackData: fmt.Sprintf("ctrl:cek_grup:%d:%d", targetID, page-1),
+			})
+		}
+		if page < totalPages-1 {
+			navRow = append(navRow, botgotd.InlineKeyboardButton{
+				Text:         "Next ➡️",
+				CallbackData: fmt.Sprintf("ctrl:cek_grup:%d:%d", targetID, page+1),
+			})
+		}
+		if len(navRow) > 0 {
+			rows = append(rows, navRow)
+		}
 	}
+
+	rows = append(rows, []botgotd.InlineKeyboardButton{
+		{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)},
+	})
 
 	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 	if messageID > 0 {
@@ -1423,28 +1496,26 @@ func (h *Handler) RenderControlCekGrup(ctx context.Context, b *botgotd.Bot, chat
 // RenderControlTambahList prompts user to send promotion list for target account
 func (h *Handler) RenderControlTambahList(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64) {
 	h.clearPanelPrompt(ctx, b, chatID)
-	h.SetActiveRemoteTarget(chatID, targetID)
-	h.setPanelState(chatID, "waiting_add_list")
+	h.setPanelState(chatID, fmt.Sprintf("ctrl_add_list:%d:%d", targetID, messageID))
 
 	targetName := h.GetAccountName(targetID)
 	if targetName == "" {
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>📝 Tambah List Promosi (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-
-<blockquote>📌 <b>Format materi promosi yang didukung:</b>
-1. <b>Teks:</b> Pesan teks biasa / berformat HTML.
-2. <b>Media Single:</b> Foto, video, dokumen, audio, animasi (+ caption).
-3. <b>Media Grup:</b> Album kumpulan foto atau video (+ caption).</blockquote>
-
-Kirimkan materi promosi sekarang via pesan chat. Materi akan disimpan langsung ke sesi akun target.`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>📝 Tambah List Promosi (Remote)</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "👑 <b>Akun Target:</b> %s (<code>%d</code>)\n\n", html.EscapeString(targetName), targetID)
+	sb.WriteString("<blockquote>📌 <b>Format materi promosi yang didukung:</b>\n")
+	sb.WriteString("1. <b>Teks:</b> Pesan teks biasa / berformat HTML.\n")
+	sb.WriteString("2. <b>Media Single:</b> Foto, video, dokumen, audio, animasi (+ caption).\n")
+	sb.WriteString("3. <b>Media Grup:</b> Album kumpulan foto atau video (+ caption).</blockquote>\n\n")
+	sb.WriteString("Kirimkan materi promosi sekarang via pesan chat. Materi akan disimpan langsung ke sesi akun target.")
 
 	rows := [][]botgotd.InlineKeyboardButton{
-		{{Text: "⬅️ Batal ⬅️", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+		{{Text: "🔙 Batal 🔙", CallbackData: fmt.Sprintf("ctrl:cancel:%d:%d", targetID, messageID)}},
 	}
 
 	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -1452,7 +1523,7 @@ Kirimkan materi promosi sekarang via pesan chat. Materi akan disimpan langsung k
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1463,17 +1534,17 @@ Kirimkan materi promosi sekarang via pesan chat. Materi akan disimpan langsung k
 func (h *Handler) RenderControlTambahGrupOptions(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64) {
 	h.setPanelState(chatID, "")
 
-	text := fmt.Sprintf(`<b>➕ Tambah Grup Target (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> <code>%d</code>
-
-Pilih metode penambahan grup untuk akun ini:
-1. <b>Ambil Semua Grup :</b> Mengimpor otomatis semua grup/channel yang sedang diikuti akun userbot target.
-2. <b>Input Manual :</b> Menambahkan username/link grup secara spesifik.`, targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>➕ Tambah Grup Target (Remote)</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "👑 <b>Akun Target:</b> <code>%d</code>\n\n", targetID)
+	sb.WriteString("Pilih metode penambahan grup untuk akun ini:\n")
+	sb.WriteString("1. <b>Ambil Semua Grup :</b> Mengimpor otomatis semua grup/channel yang sedang diikuti akun userbot target.\n")
+	sb.WriteString("2. <b>Input Manual :</b> Menambahkan username/link grup secara spesifik.")
 
 	rows := [][]botgotd.InlineKeyboardButton{
-		{{Text: "🔥 Ambil Semua Grup Akun 🔥", CallbackData: fmt.Sprintf("ctrl:fetch_all_groups:%d", targetID)}},
+		{{Text: "🔥 Ambil Semua Grup Akun 🔥", CallbackData: fmt.Sprintf("ctrl:fetch_all:%d", targetID)}},
 		{{Text: "📝 Input Grup Manual 📝", CallbackData: fmt.Sprintf("ctrl:tambah_grup_manual:%d", targetID)}},
 		{{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
 	}
@@ -1483,7 +1554,7 @@ Pilih metode penambahan grup untuk akun ini:
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1493,30 +1564,27 @@ Pilih metode penambahan grup untuk akun ini:
 // RenderControlTambahGrupManual prompts user to input group targets manually
 func (h *Handler) RenderControlTambahGrupManual(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, targetID int64) {
 	h.clearPanelPrompt(ctx, b, chatID)
-	h.SetActiveRemoteTarget(chatID, targetID)
-	h.setPanelState(chatID, "waiting_add_group_manual")
+	h.setPanelState(chatID, fmt.Sprintf("ctrl_add_grup:%d:%d", targetID, messageID))
 
 	targetName := h.GetAccountName(targetID)
 	if targetName == "" {
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>📝 Tambah Grup Manual (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-
-<blockquote>📌 <b>Format target yang didukung:</b>
-1. <b>Username grup:</b> (contoh: <code>@grupchat</code>)
-2. <b>Chat ID grup:</b> (contoh: <code>-1001234567890</code>)
-3. <b>Tautan grup:</b> (contoh: <code>t.me/namagrup</code>)
-
-<i>Jika lebih dari satu grup, pisahkan tiap grup dengan baris baru.</i></blockquote>
-
-Kirimkan target grup sekarang via pesan chat, atau tekan tombol batal di bawah:`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>📝 Tambah Grup Manual (Remote)</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "👑 <b>Akun Target:</b> %s (<code>%d</code>)\n\n", html.EscapeString(targetName), targetID)
+	sb.WriteString("<blockquote>📌 <b>Format target yang didukung:</b>\n")
+	sb.WriteString("1. <b>Username grup:</b> (contoh: <code>@grupchat</code>)\n")
+	sb.WriteString("2. <b>Chat ID grup:</b> (contoh: <code>-1001234567890</code>)\n")
+	sb.WriteString("3. <b>Tautan grup:</b> (contoh: <code>t.me/namagrup</code>)\n\n")
+	sb.WriteString("<i>Jika lebih dari satu grup, pisahkan tiap grup dengan baris baru.</i></blockquote>\n\n")
+	sb.WriteString("Kirimkan target grup sekarang via pesan chat, atau tekan tombol batal di bawah:")
 
 	rows := [][]botgotd.InlineKeyboardButton{
-		{{Text: "⬅️ Batal ⬅️", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+		{{Text: "🔙 Batal 🔙", CallbackData: fmt.Sprintf("ctrl:cancel:%d:%d", targetID, messageID)}},
 	}
 
 	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -1524,7 +1592,7 @@ Kirimkan target grup sekarang via pesan chat, atau tekan tombol batal di bawah:`
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1538,10 +1606,11 @@ func (h *Handler) RenderControlImportGroupsStarted(ctx context.Context, b *botgo
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>⏳ Mengimpor Semua Grup Akun...</b>
-━━━━━━━━━━━━━━━━━━━━
-
-Sesi userbot target <b>%s</b> (<code>%d</code>) sedang memindai dan mengimpor seluruh grup &amp; channel di latar belakang. Laporan akan dikirim otomatis setelah proses selesai.`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>⏳ Mengimpor Semua Grup Akun...</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "Sesi userbot target <b>%s</b> (<code>%d</code>) sedang memindai dan mengimpor seluruh grup &amp; channel di latar belakang. Laporan akan dikirim otomatis setelah proses selesai.", html.EscapeString(targetName), targetID)
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
@@ -1552,7 +1621,7 @@ Sesi userbot target <b>%s</b> (<code>%d</code>) sedang memindai dan mengimpor se
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1566,10 +1635,11 @@ func (h *Handler) RenderControlHapusListConfirm(ctx context.Context, b *botgotd.
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>⚠️ Konfirmasi Hapus Seluruh List</b>
-━━━━━━━━━━━━━━━━━━━━
-
-Apakah Anda yakin ingin menghapus <b>SEMUA</b> materi promosi pada akun target <b>%s</b> (<code>%d</code>)? Tindakan ini tidak dapat dibatalkan.`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>⚠️ Konfirmasi Hapus Seluruh List</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "Apakah Anda yakin ingin menghapus <b>SEMUA</b> materi promosi pada akun target <b>%s</b> (<code>%d</code>)? Tindakan ini tidak dapat dibatalkan.", html.EscapeString(targetName), targetID)
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{{Text: "🗑️ Ya, Hapus Semua List 🗑️", CallbackData: fmt.Sprintf("ctrl:hapus_list_do:%d", targetID)}},
@@ -1581,7 +1651,7 @@ Apakah Anda yakin ingin menghapus <b>SEMUA</b> materi promosi pada akun target <
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1595,10 +1665,11 @@ func (h *Handler) RenderControlHapusListDone(ctx context.Context, b *botgotd.Bot
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>🗑️ Seluruh List Berhasil Dihapus</b>
-━━━━━━━━━━━━━━━━━━━━
-
-Semua materi list promosi milik akun target <b>%s</b> (<code>%d</code>) telah dihapus secara permanen dari database.`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>🗑️ Seluruh List Berhasil Dihapus</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "Semua materi list promosi milik akun target <b>%s</b> (<code>%d</code>) telah dihapus secara permanen dari database.", html.EscapeString(targetName), targetID)
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
@@ -1609,7 +1680,7 @@ Semua materi list promosi milik akun target <b>%s</b> (<code>%d</code>) telah di
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1623,10 +1694,11 @@ func (h *Handler) RenderControlHapusGrupConfirm(ctx context.Context, b *botgotd.
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>⚠️ Konfirmasi Hapus Seluruh Grup</b>
-━━━━━━━━━━━━━━━━━━━━
-
-Apakah Anda yakin ingin menghapus <b>SEMUA</b> grup target pada akun <b>%s</b> (<code>%d</code>)? Tindakan ini tidak dapat dibatalkan.`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>⚠️ Konfirmasi Hapus Seluruh Grup</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "Apakah Anda yakin ingin menghapus <b>SEMUA</b> grup target pada akun <b>%s</b> (<code>%d</code>)? Tindakan ini tidak dapat dibatalkan.", html.EscapeString(targetName), targetID)
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{{Text: "🗑️ Ya, Hapus Semua Grup 🗑️", CallbackData: fmt.Sprintf("ctrl:hapus_grup_do:%d", targetID)}},
@@ -1638,7 +1710,7 @@ Apakah Anda yakin ingin menghapus <b>SEMUA</b> grup target pada akun <b>%s</b> (
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1652,10 +1724,11 @@ func (h *Handler) RenderControlHapusGrupDone(ctx context.Context, b *botgotd.Bot
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>🗑️ Seluruh Grup Berhasil Dihapus</b>
-━━━━━━━━━━━━━━━━━━━━
-
-Semua grup target broadcast milik akun <b>%s</b> (<code>%d</code>) telah dihapus secara permanen dari database.`, html.EscapeString(targetName), targetID)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>🗑️ Seluruh Grup Berhasil Dihapus</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "Semua grup target broadcast milik akun <b>%s</b> (<code>%d</code>) telah dihapus secara permanen dari database.", html.EscapeString(targetName), targetID)
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{{Text: "🔙 Kembali 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
@@ -1666,7 +1739,7 @@ Semua grup target broadcast milik akun <b>%s</b> (<code>%d</code>) telah dihapus
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1683,13 +1756,13 @@ func (h *Handler) RenderControlJeda(ctx context.Context, b *botgotd.Bot, chatID 
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := fmt.Sprintf(`<b>🕦 Atur Jeda Broadcast (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-⏳ <b>Jeda Saat Ini:</b> <code>%d detik</code>
-
-<blockquote>Pilih interval jeda broadcast dari tombol di bawah:</blockquote>`, html.EscapeString(targetName), targetID, cfg.Delay)
+	var sb strings.Builder
+	sb.Grow(512)
+	sb.WriteString("<b>🕦 Atur Jeda Broadcast (Remote)</b>\n")
+	sb.WriteString("━━━━━━━━━━━━━━━━━━━━\n\n")
+	fmt.Fprintf(&sb, "👑 <b>Akun Target:</b> %s (<code>%d</code>)\n", html.EscapeString(targetName), targetID)
+	fmt.Fprintf(&sb, "⏳ <b>Jeda Saat Ini:</b> <code>%d detik</code>\n\n", cfg.Delay)
+	sb.WriteString("<blockquote>Pilih interval jeda broadcast dari tombol di bawah:</blockquote>")
 
 	rows := [][]botgotd.InlineKeyboardButton{
 		{
@@ -1712,14 +1785,14 @@ func (h *Handler) RenderControlJeda(ctx context.Context, b *botgotd.Bot, chatID 
 		_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 			ChatID:      chatID,
 			MessageID:   messageID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
 	} else {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        text,
+			Text:        sb.String(),
 			ParseMode:   "HTML",
 			ReplyMarkup: inlineMarkup,
 		})
@@ -1822,15 +1895,24 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 	}
 	message := update.Message
 	state := h.getPanelState(message.Chat.ID)
-	if state != "waiting_add_list" && state != "waiting_add_watermark" {
+	if state != "waiting_add_list" && state != "waiting_add_watermark" && !strings.HasPrefix(state, "ctrl_add_list:") {
 		return
 	}
 	if message.MediaGroupID != "" {
+		effectiveUID := message.From.ID
+		if strings.HasPrefix(state, "ctrl_add_list:") {
+			parts := strings.Split(state, ":")
+			if len(parts) >= 2 {
+				if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+					effectiveUID = id
+				}
+			}
+		}
 		key := fmt.Sprintf("%d:%s:%s", message.Chat.ID, state, message.MediaGroupID)
 		h.mediaMu.Lock()
 		batch := h.mediaBatches[key]
 		if batch == nil {
-			batch = &panelMediaBatch{ChatID: message.Chat.ID, UserID: message.From.ID, State: state}
+			batch = &panelMediaBatch{ChatID: message.Chat.ID, UserID: effectiveUID, State: state}
 			h.mediaBatches[key] = batch
 		}
 		batch.SourceIDs = append(batch.SourceIDs, message.ID)
@@ -1855,7 +1937,16 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 	if caption == "" {
 		caption = message.Text
 	}
-	h.stagePanelMediaWithCaption(ctx, b, message.Chat.ID, message.From.ID, state, []int{message.ID}, caption, panelEntities(message))
+	effectiveUID := message.From.ID
+	if strings.HasPrefix(state, "ctrl_add_list:") {
+		parts := strings.Split(state, ":")
+		if len(parts) >= 2 {
+			if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				effectiveUID = id
+			}
+		}
+	}
+	h.stagePanelMediaWithCaption(ctx, b, message.Chat.ID, effectiveUID, state, []int{message.ID}, caption, panelEntities(message))
 }
 
 func (h *Handler) flushPanelMediaGroup(ctx context.Context, b *botgotd.Bot, key string) {
@@ -1875,6 +1966,56 @@ func (h *Handler) stagePanelMedia(ctx context.Context, b *botgotd.Bot, chatID, u
 
 func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot, chatID, userID int64, state string, sourceIDs []int, caption string, entities []models.MessageEntity) {
 	h.clearPanelPrompt(ctx, b, chatID)
+	if strings.HasPrefix(state, "ctrl_add_list:") {
+		parts := strings.Split(state, ":")
+		parentMsgID := 0
+		targetID := userID
+		if len(parts) >= 2 {
+			if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				targetID = id
+			}
+		}
+		if len(parts) >= 3 {
+			parentMsgID, _ = strconv.Atoi(parts[2])
+		}
+		h.setPanelState(chatID, "")
+		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		payload := models.PToService{
+			ChatID:           chatID,
+			UserID:           targetID,
+			Type:             "cache_list",
+			MediaSourceCount: len(sourceIDs),
+			Text:             caption,
+			Entities:         entities,
+		}
+		_ = h.broker.To(brokerCtx, "to:ubot:command", payload)
+
+		if parentMsgID > 0 {
+			targetName := h.GetAccountName(targetID)
+			if targetName == "" {
+				targetName = fmt.Sprintf("Akun [%d]", targetID)
+			}
+			text := fmt.Sprintf(`<b>⏳ Media Sedang Disimpan ke Cache (Remote)</b>
+━━━━━━━━━━━━━━━━━━━━
+
+👑 <b>Akun Target:</b> %s (<code>%d</code>)
+
+<blockquote>Media materi promosi sedang diproses oleh sesi userbot target.</blockquote>`, html.EscapeString(targetName), targetID)
+			rows := [][]botgotd.InlineKeyboardButton{
+				{{Text: "🔙 Kembali ke Grup & List 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+			}
+			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+				ChatID:      chatID,
+				MessageID:   parentMsgID,
+				Text:        text,
+				ParseMode:   "HTML",
+				ReplyMarkup: &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows},
+			})
+		}
+		return
+	}
+
 	jobType := "cache_list"
 	if state == "waiting_add_watermark" {
 		jobType = "cache_watermark"
@@ -1924,6 +2065,153 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	state := h.getPanelState(chatID)
 	if state == "" {
 		return false
+	}
+
+	// 1. Isolated Remote Control Add List
+	if strings.HasPrefix(state, "ctrl_add_list:") {
+		h.setPanelState(chatID, "")
+		parts := strings.Split(state, ":")
+		targetID := userID
+		parentMsgID := 0
+		if len(parts) >= 2 {
+			if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				targetID = id
+			}
+		}
+		if len(parts) >= 3 {
+			parentMsgID, _ = strconv.Atoi(parts[2])
+		}
+
+		if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
+			if parentMsgID > 0 {
+				h.RenderControlGrupList(ctx, b, chatID, parentMsgID, targetID)
+			}
+			if message != nil {
+				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
+			}
+			return true
+		}
+
+		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+
+		payload := models.PToService{
+			ChatID:   chatID,
+			UserID:   targetID,
+			Type:     "cache_list",
+			Text:     text,
+			Entities: panelEntities(message),
+		}
+		_ = h.broker.To(brokerCtx, "to:ubot:command", payload)
+
+		if message != nil {
+			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
+		}
+
+		targetName := h.GetAccountName(targetID)
+		if targetName == "" {
+			targetName = fmt.Sprintf("Akun [%d]", targetID)
+		}
+
+		successText := fmt.Sprintf(`<b>✅ List Promosi Berhasil Dikirim (Remote)</b>
+━━━━━━━━━━━━━━━━━━━━
+
+👑 <b>Akun Target:</b> %s (<code>%d</code>)
+
+<blockquote>Materi promosi telah dikirimkan ke worker userbot untuk disimpan ke database target.</blockquote>`, html.EscapeString(targetName), targetID)
+
+		rows := [][]botgotd.InlineKeyboardButton{
+			{{Text: "🔙 Kembali ke Grup & List 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+		}
+		if parentMsgID > 0 {
+			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+				ChatID:      chatID,
+				MessageID:   parentMsgID,
+				Text:        successText,
+				ParseMode:   "HTML",
+				ReplyMarkup: &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows},
+			})
+		}
+		return true
+	}
+
+	// 2. Isolated Remote Control Add Group Manual
+	if strings.HasPrefix(state, "ctrl_add_grup:") {
+		h.setPanelState(chatID, "")
+		parts := strings.Split(state, ":")
+		targetID := userID
+		parentMsgID := 0
+		if len(parts) >= 2 {
+			if id, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+				targetID = id
+			}
+		}
+		if len(parts) >= 3 {
+			parentMsgID, _ = strconv.Atoi(parts[2])
+		}
+
+		if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
+			if parentMsgID > 0 {
+				h.RenderControlGrupList(ctx, b, chatID, parentMsgID, targetID)
+			}
+			if message != nil {
+				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
+			}
+			return true
+		}
+
+		lines := strings.Split(text, "\n")
+		addedCount := 0
+		for _, l := range lines {
+			l = strings.TrimSpace(l)
+			if l == "" {
+				continue
+			}
+			fields := strings.Fields(l)
+			for _, p := range fields {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				var chatIDVal int64
+				if id, parseErr := strconv.ParseInt(p, 10, 64); parseErr == nil {
+					chatIDVal = id
+				}
+				if err := h.db.AddGroup(ctx, targetID, p, p, chatIDVal); err == nil {
+					addedCount++
+				}
+			}
+		}
+
+		if message != nil {
+			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
+		}
+
+		targetName := h.GetAccountName(targetID)
+		if targetName == "" {
+			targetName = fmt.Sprintf("Akun [%d]", targetID)
+		}
+
+		successText := fmt.Sprintf(`<b>✅ %d Grup Target Ditambahkan (Remote)</b>
+━━━━━━━━━━━━━━━━━━━━
+
+👑 <b>Akun Target:</b> %s (<code>%d</code>)
+
+<blockquote>Target grup telah berhasil disimpan ke database akun target.</blockquote>`, addedCount, html.EscapeString(targetName), targetID)
+
+		rows := [][]botgotd.InlineKeyboardButton{
+			{{Text: "🔙 Kembali ke Grup & List 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
+		}
+		if parentMsgID > 0 {
+			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+				ChatID:      chatID,
+				MessageID:   parentMsgID,
+				Text:        successText,
+				ParseMode:   "HTML",
+				ReplyMarkup: &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows},
+			})
+		}
+		return true
 	}
 
 	if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {

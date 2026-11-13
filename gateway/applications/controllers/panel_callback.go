@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // PanelCallback handles the inline delete button attached to a detail view.
@@ -198,9 +199,18 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 
 func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, cb *botgotd.CallbackQuery) {
 	data := cb.Data
-	if data == "ctrl:list_akun" {
+	if data == "ctrl:list" || data == "ctrl:list_akun" {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 		h.RenderControlAccountList(ctx, b, chatID, messageID, cb.From.ID, cb.From.Username)
+		return
+	}
+
+	if data == "ctrl:close" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.setPanelState(chatID, "")
+		if messageID > 0 {
+			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{messageID}})
+		}
 		return
 	}
 
@@ -239,7 +249,7 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 	case "status_refresh":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
-			Text:            "🔄 Status diperbarui",
+			Text:            "✅ Status diperbarui",
 		})
 		h.RenderControlStatus(ctx, b, chatID, messageID, targetID)
 
@@ -248,12 +258,20 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 		h.RenderControlGrupList(ctx, b, chatID, messageID, targetID)
 
 	case "cek_list":
+		page := 0
+		if len(parts) >= 4 {
+			page, _ = strconv.Atoi(parts[3])
+		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		h.RenderControlCekList(ctx, b, chatID, messageID, targetID)
+		h.RenderControlCekList(ctx, b, chatID, messageID, targetID, page)
 
 	case "cek_grup":
+		page := 0
+		if len(parts) >= 4 {
+			page, _ = strconv.Atoi(parts[3])
+		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		h.RenderControlCekGrup(ctx, b, chatID, messageID, targetID)
+		h.RenderControlCekGrup(ctx, b, chatID, messageID, targetID, page)
 
 	case "tambah_list":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
@@ -263,17 +281,32 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 		h.RenderControlTambahGrupOptions(ctx, b, chatID, messageID, targetID)
 
-	case "fetch_all_groups":
+	case "fetch_all", "fetch_all_groups":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
 			Text:            "⏳ Memulai import semua grup...",
 		})
-		h.FetchAllGroupsFromAccount(ctx, b, chatID, targetID)
+		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		payload := models.PToService{
+			ChatID: chatID,
+			UserID: targetID,
+			Type:   "fetch_groups",
+		}
+		_ = h.broker.To(brokerCtx, "to:ubot:command", payload)
 		h.RenderControlImportGroupsStarted(ctx, b, chatID, messageID, targetID)
 
 	case "tambah_grup_manual":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 		h.RenderControlTambahGrupManual(ctx, b, chatID, messageID, targetID)
+
+	case "cancel":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "↩️ Tindakan dibatalkan",
+		})
+		h.setPanelState(chatID, "")
+		h.RenderControlGrupList(ctx, b, chatID, messageID, targetID)
 
 	case "hapus_list_confirm":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
@@ -281,7 +314,9 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 
 	case "hapus_list_do":
 		_ = h.db.ClearLists(ctx, targetID)
-		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_lists"})
+		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_lists"})
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
 			Text:            "🗑️ Semua list promosi berhasil dihapus.",
@@ -294,7 +329,9 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 
 	case "hapus_grup_do":
 		_ = h.db.ClearGroups(ctx, targetID)
-		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_groups"})
+		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_groups"})
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
 			Text:            "🗑️ Semua target grup berhasil dihapus.",
