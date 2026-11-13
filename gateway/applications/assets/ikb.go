@@ -56,12 +56,15 @@ func btnURL(text, url string) botgotd.InlineKeyboardButton {
 
 // ─── Control Remote Inline Keyboard Builders ─────────────────────────────────
 
-// CtrlAccountListIKB returns the inline keyboard for ctrl:list (single-use; built on demand).
-// Each row = one account button. Close button at the bottom.
-func CtrlAccountListIKB(accounts []struct {
+// AccountItem represents a userbot account for the control selector keyboard.
+type AccountItem struct {
 	ID   int64
 	Name string
-}) *botgotd.InlineKeyboardMarkup {
+}
+
+// CtrlAccountListIKB returns the inline keyboard for ctrl:list (single-use; built on demand).
+// Each row = one account button. Close button at the bottom.
+func CtrlAccountListIKB(accounts []AccountItem) *botgotd.InlineKeyboardMarkup {
 	rows := make([][]botgotd.InlineKeyboardButton, 0, len(accounts)+1)
 	for _, a := range accounts {
 		rows = append(rows, []botgotd.InlineKeyboardButton{

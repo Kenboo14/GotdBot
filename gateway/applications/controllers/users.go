@@ -1,10 +1,9 @@
 package controllers
 
 import (
+	"assterisk/gateway/applications/assets"
 	"assterisk/gateway/applications/botgotd"
 	"context"
-	"fmt"
-	"html"
 	"strings"
 )
 
@@ -26,29 +25,23 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 		hasActive = h.db.HasActiveSession(ctx, userID)
 	}
 
-	if hasActive {
-		if strings.HasPrefix(cmd, "/status") {
-			h.ShowStatus(ctx, b, chatID, userID)
-			return
-		}
+	// Jika user sudah memiliki userbot aktif dan mengetik /start, tampilkan main control panel
+	if hasActive && (cmd == "/start" || strings.HasPrefix(cmd, "/start")) {
 		h.ShowMainMenu(ctx, b, chatID, userID, userName)
 		return
 	}
 
-	// Cek jika user sudah dalam proses pemasangan (session aktif di luar waiting_create_choice)
+	// Jika sedang dalam wizard pemasangan aktif
 	h.Sessions.mu.RLock()
 	existingSession := h.Sessions.sessions[chatID]
 	h.Sessions.mu.RUnlock()
 
 	if existingSession != nil && existingSession.State != "waiting_create_choice" {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: `<h1>⏳ Pemasangan Sedang Berjalan</h1>
-<blockquote expandable>Proses pemasangan sesi userbot Anda saat ini sedang berlangsung.</blockquote>
-<hr/>
-<p>Silakan lanjutkan proses atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
+			ChatID:      chatID,
+			Text:        assets.TxtPemasanganSedangBerjalan,
 			ParseMode:   "HTML",
-			ReplyMarkup: cachedCancelMarkup,
+			ReplyMarkup: assets.CancelOnlyMarkup,
 		})
 		return
 	}
@@ -58,23 +51,10 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 	h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_create_choice"}
 	h.Sessions.mu.Unlock()
 
-	greeting := fmt.Sprintf(`<h1>👋 Selamat Datang, %s!</h1>
-<blockquote expandable><b>GotdBot • Userbot Manager</b>
-Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto berkecepatan tinggi.</blockquote>
-<table border="1">
-  <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
-  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
-  <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
-  <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
-  <tr><td>🎯 Control</td><td>Menu utama kontrol panel userbot</td></tr>
-</table>
-<hr/>
-<p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
-
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
-		Text:        greeting,
+		Text:        assets.TxtStartGreeting(userName),
 		ParseMode:   "HTML",
-		ReplyMarkup: cachedCreateChoiceMarkup,
+		ReplyMarkup: assets.CreateChoiceMarkup,
 	})
 }

@@ -83,11 +83,13 @@ const (
 
 // Install / Wizard
 const (
-	BtnInputToken  = "🔑 Input Token 🔑"
-	BtnBuatUserbot = "🚀 Buat Userbot 🚀"
-	BtnControl     = "🎯 Control 🎯"
-	BtnBatal       = "⬅️ Batal ⬅️"
-	BtnBagikanKontak = "📱 Bagikan Kontak"
+	BtnInputToken     = "🔑 Input Token 🔑"
+	BtnBuatUserbot    = "🚀 Buat Userbot 🚀"
+	BtnControl        = "🎯 Control 🎯"
+	BtnControlAlt     = "🎮 Control 🎮"
+	BtnBatal          = "⬅️ Batal ⬅️"
+	BtnBagikanKontak  = "📱 Bagikan Kontak"
+	BtnHapusWatermark = "🗑️ Hapus Watermark 🗑️"
 )
 
 // ─── Pre-built Reply Keyboard Markups ────────────────────────────────────────

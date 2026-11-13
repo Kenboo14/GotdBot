@@ -1,6 +1,7 @@
-package controllers
+﻿package controllers
 
 import (
+	"assterisk/gateway/applications/assets"
 	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/databases"
 	"assterisk/gateway/applications/models"
@@ -100,9 +101,9 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	}
 	switch data.State {
 	case "waiting_phone":
-		params.ReplyMarkup = installPhoneKeyboard()
+		params.ReplyMarkup = assets.InstallPhoneMarkup
 	case "waiting_otp", "waiting_password", "waiting_worker":
-		params.ReplyMarkup = cancelKeyboard()
+		params.ReplyMarkup = assets.CancelOnlyMarkup
 	case "installed":
 		var tokenSHA string
 		var tier string
@@ -176,30 +177,17 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		sisaDur := FormatDurationID(time.Until(expiresAt))
 		expFormatted := expiresAt.Format("02-01-2006 15:04:05")
 
-		params.Text = fmt.Sprintf(`<h1>🎉 Userbot Berhasil Terpasang!</h1>
-<blockquote expandable>Sesi akun Telegram Anda telah terhubung dan aktif sebagai userbot GotdBot MTProto. Seluruh modul siaran siap digunakan.</blockquote>
-<table border="1">
-  <tr><th>Properti</th><th>Keterangan</th></tr>
-  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
-  <tr><td>⏳ Masa Aktif</td><td><code>%s</code> (Sisa %s)</td></tr>
-  <tr><td>🔑 Token SHA Backup</td><td><code>%s</code></td></tr>
-</table>
-<blockquote expandable>⚠️ <b>PENTING - Simpan token SHA di atas baik-baik!</b>
-Jika sesi akun Anda terlepas di kemudian hari, gunakan token ini saat <code>/start</code> agar seluruh list promosi, catatan notes, prefix, dan grup target tidak hilang.</blockquote>
-<hr/>
-<p>Selamat datang di GotdBot Control Panel:</p>`,
-			tier, expFormatted, sisaDur, tokenSHA,
-		)
+		params.Text = assets.RichInstallSuccess(tier, expFormatted, sisaDur, tokenSHA)
 		params.ParseMode = "HTML"
-		params.ReplyMarkup = mainMenuMarkup
+		params.ReplyMarkup = assets.MainMenuMarkup
 	case "failed":
-		params.ReplyMarkup = cachedRemoveKeyboard
+		params.ReplyMarkup = assets.RemoveKeyboard
 	case "session_revoked":
 		params.ParseMode = "HTML"
-		params.ReplyMarkup = cachedRemoveKeyboard
+		params.ReplyMarkup = assets.RemoveKeyboard
 	case "panel_notice":
 		params.ParseMode = "HTML"
-		params.ReplyMarkup = grupListMenuMarkup
+		params.ReplyMarkup = assets.GrupListMenuMarkup
 	}
 	if data.Type == "list_detail" {
 		sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{

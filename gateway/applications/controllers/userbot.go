@@ -1,4 +1,4 @@
-﻿package controllers
+package controllers
 
 import (
 	"assterisk/gateway/applications/assets"
@@ -73,7 +73,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	// 2. Akses tombol Control / Remote (bebas diakses kapan saja tanpa terhambat wizard install)
-	if text == "🎯 Control 🎯" || text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/control" {
+	if text == assets.BtnControl || text == assets.BtnControlAlt || strings.EqualFold(text, "control") || text == "/control" {
 		h.Sessions.mu.Lock()
 		delete(h.Sessions.sessions, chatID)
 		h.Sessions.mu.Unlock()
@@ -84,14 +84,14 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	// 3. Akses tombol Bantuan
-	if text == "⚠️ Bantuan ⚠️" || strings.EqualFold(text, "bantuan") || text == "/help" {
+	if text == assets.BtnBantuan || strings.EqualFold(text, "bantuan") || text == "/help" {
 		effectiveUserID := h.GetEffectiveUserID(chatID, userID)
 		h.ShowBantuan(ctx, b, chatID, effectiveUserID)
 		return
 	}
 
 	// 4. Pembatalan global
-	if text == "/cancel" || strings.EqualFold(text, "cancel") || text == "⬅️ Batal ⬅️" {
+	if text == "/cancel" || strings.EqualFold(text, "cancel") || text == assets.BtnBatal {
 		h.cancelInstall(ctx, b, update)
 		return
 	}
@@ -111,39 +111,27 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 
 	// 6. Jika user dalam menu start wizard ('waiting_create_choice')
 	if session.State == "waiting_create_choice" {
-		if text == "🔑 Input Token 🔑" {
+		if text == assets.BtnInputToken {
 			h.Sessions.mu.Lock()
 			session.State = "waiting_token"
 			h.Sessions.mu.Unlock()
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID: chatID,
-				Text: `<h1>🔑 Input Token Lisensi</h1>
-<blockquote expandable><b>Hak Kepemilikan &amp; Lisensi Database</b>
-Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (brankas) agar seluruh data (list promosi, target grup, notes, prefix) otomatis terhubung kembali.</blockquote>
-<table border="1">
-  <tr><th>Jenis Token</th><th>Format</th></tr>
-  <tr><td>Voucher Master</td><td><code>GOTD:&lt;32_huruf&gt;</code></td></tr>
-  <tr><td>Token SHA Backup</td><td><code>GOTD_SHA:&lt;sha256&gt;</code></td></tr>
-</table>
-<hr/>
-<p>Kirimkan token Anda sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
+				ChatID:      chatID,
+				Text:        assets.TxtInputToken,
 				ParseMode:   "HTML",
-				ReplyMarkup: cachedCancelMarkup,
+				ReplyMarkup: assets.CancelOnlyMarkup,
 			})
 			return
 		}
 
-		if text == "🚀 Buat Userbot 🚀" {
+		if text == assets.BtnBuatUserbot {
 			lic, err := h.db.GetActiveUserLicense(ctx, chatID)
 			if err != nil || lic == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID: chatID,
-					Text: `<h1>⚠️ Akses Pemasangan Ditolak</h1>
-<blockquote expandable>Akun Telegram Anda belum memiliki lisensi yang aktif, atau masa aktif token Anda sebelumnya telah kedaluwarsa.</blockquote>
-<hr/>
-<p>Silakan gunakan tombol <b>🔑 Input Token 🔑</b> untuk memasukkan voucher dari Owner.</p>`,
+					ChatID:      chatID,
+					Text:        assets.TxtAksesInstalDitolak,
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCreateChoiceMarkup,
+					ReplyMarkup: assets.CreateChoiceMarkup,
 				})
 				return
 			}
@@ -160,18 +148,10 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			h.Sessions.mu.Unlock()
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID: chatID,
-				Text: fmt.Sprintf(`<h1>✅ Token Terdeteksi: %s</h1>
-<blockquote expandable>Hak kepemilikan database &amp; seluruh data Anda (List, Grup, Notes, Prefix) otomatis terhubung kembali.</blockquote>
-<table border="1">
-  <tr><th>Properti</th><th>Keterangan</th></tr>
-  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
-  <tr><td>⏳ Masa Aktif</td><td><code>Sisa %s</code></td></tr>
-</table>
-<hr/>
-<p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`, lic.Tier, lic.Tier, sisaDur),
+				ChatID:      chatID,
+				Text:        assets.TxtTokenDetected(lic.Tier, sisaDur),
 				ParseMode:   "HTML",
-				ReplyMarkup: installPhoneKeyboard(),
+				ReplyMarkup: assets.InstallPhoneMarkup,
 			})
 			return
 		}
@@ -194,13 +174,10 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			lic, err := h.db.GetUserLicenseBySHA(ctx, text)
 			if err != nil || lic == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID: chatID,
-					Text: `<h1>❌ Token SHA Tidak Ditemukan</h1>
-<blockquote expandable>Token SHA Backup yang Anda masukkan tidak terdaftar dalam database sistem.</blockquote>
-<hr/>
-<p>Pastikan token yang Anda masukkan benar atau hubungi Owner untuk verifikasi.</p>`,
+					ChatID:      chatID,
+					Text:        assets.TxtTokenSHANotFound,
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCancelMarkup,
+					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
@@ -212,7 +189,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 <hr/>
 <p>Silakan hubungi Owner untuk memperpanjang lisensi Anda.</p>`, lic.ExpiresAt.Format("02-01-2006 15:04")),
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCancelMarkup,
+					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
@@ -229,18 +206,10 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			h.Sessions.mu.Unlock()
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID: chatID,
-				Text: fmt.Sprintf(`<h1>✅ Token Terdeteksi: %s</h1>
-<blockquote expandable>Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim secara penuh.</blockquote>
-<table border="1">
-  <tr><th>Properti</th><th>Keterangan</th></tr>
-  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
-  <tr><td>⏳ Masa Aktif</td><td><code>Sisa %s</code></td></tr>
-</table>
-<hr/>
-<p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`, lic.Tier, lic.Tier, sisaDur),
+				ChatID:      chatID,
+				Text:        assets.TxtTokenDetected(lic.Tier, sisaDur),
 				ParseMode:   "HTML",
-				ReplyMarkup: installPhoneKeyboard(),
+				ReplyMarkup: assets.InstallPhoneMarkup,
 			})
 			return
 		}
@@ -248,13 +217,10 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 		if strings.HasPrefix(text, "GOTD:") {
 			if !reValidMasterToken.MatchString(text) {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID: chatID,
-					Text: `<h1>❌ Format Token Salah</h1>
-<blockquote expandable>Token Master harus berupa format <code>GOTD:&lt;32_huruf_alfabet&gt;</code>.</blockquote>
-<hr/>
-<p>Periksa kembali karakter token voucher yang Anda terima dari Owner.</p>`,
+					ChatID:      chatID,
+					Text:        `<h1>❌ Format Token Salah</h1><blockquote expandable>Token Master harus berupa format <code>GOTD:&lt;32_huruf_alfabet&gt;</code>.</blockquote><hr/><p>Periksa kembali karakter token voucher yang Anda terima dari Owner.</p>`,
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCancelMarkup,
+					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
@@ -262,39 +228,30 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			tm, err := h.db.GetTokenMaster(ctx, text)
 			if err != nil || tm == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID: chatID,
-					Text: `<h1>❌ Token Tidak Ditemukan</h1>
-<blockquote expandable>Token voucher tidak terdaftar dalam database sistem.</blockquote>
-<hr/>
-<p>Pastikan kode token belum pernah dibatalkan oleh Owner.</p>`,
+					ChatID:      chatID,
+					Text:        `<h1>❌ Token Tidak Ditemukan</h1><blockquote expandable>Token voucher tidak terdaftar dalam database sistem.</blockquote><hr/><p>Pastikan kode token belum pernah dibatalkan oleh Owner.</p>`,
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCancelMarkup,
+					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
 
 			if tm.Status != "active" {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID: chatID,
-					Text: `<h1>❌ Token Tidak Aktif</h1>
-<blockquote expandable>Token voucher ini telah dinonaktifkan oleh Owner.</blockquote>
-<hr/>
-<p>Silakan hubungi Owner untuk konfirmasi status token lisensi.</p>`,
+					ChatID:      chatID,
+					Text:        `<h1>❌ Token Tidak Aktif</h1><blockquote expandable>Token voucher ini telah dinonaktifkan oleh Owner.</blockquote><hr/><p>Silakan hubungi Owner untuk konfirmasi status token lisensi.</p>`,
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCancelMarkup,
+					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
 
 			if !tm.IsShared && tm.ClaimCount >= 1 {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID: chatID,
-					Text: `<h1>❌ Token Sudah Digunakan</h1>
-<blockquote expandable>Token voucher personal ini sudah pernah diklaim sebelumnya.</blockquote>
-<hr/>
-<p>Voucher personal hanya dapat diklaim satu kali per akun.</p>`,
+					ChatID:      chatID,
+					Text:        `<h1>❌ Token Sudah Digunakan</h1><blockquote expandable>Token voucher personal ini sudah pernah diklaim sebelumnya.</blockquote><hr/><p>Voucher personal hanya dapat diklaim satu kali per akun.</p>`,
 					ParseMode:   "HTML",
-					ReplyMarkup: cachedCancelMarkup,
+					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
@@ -311,30 +268,19 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			h.Sessions.mu.Unlock()
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID: chatID,
-				Text: fmt.Sprintf(`<h1>✅ Token Terdeteksi: %s</h1>
-<blockquote expandable>Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim secara penuh.</blockquote>
-<table border="1">
-  <tr><th>Properti</th><th>Keterangan</th></tr>
-  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
-  <tr><td>⏳ Durasi Aktif</td><td><code>%s</code></td></tr>
-</table>
-<hr/>
-<p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`, tm.Tier, tm.Tier, durStr),
+				ChatID:      chatID,
+				Text:        assets.TxtTokenDetected(tm.Tier, durStr),
 				ParseMode:   "HTML",
-				ReplyMarkup: installPhoneKeyboard(),
+				ReplyMarkup: assets.InstallPhoneMarkup,
 			})
 			return
 		}
 
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: `<h1>❌ Token Tidak Dikenali</h1>
-<blockquote expandable>Format token harus diawali dengan <code>GOTD:</code> (Voucher Master) atau <code>GOTD_SHA:</code> (Token SHA Backup).</blockquote>
-<hr/>
-<p>Silakan masukkan token yang valid atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
+			ChatID:      chatID,
+			Text:        `<h1>❌ Token Tidak Dikenali</h1><blockquote expandable>Format token harus diawali dengan <code>GOTD:</code> (Voucher Master) atau <code>GOTD_SHA:</code> (Token SHA Backup).</blockquote><hr/><p>Silakan masukkan token yang valid atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 			ParseMode:   "HTML",
-			ReplyMarkup: cachedCancelMarkup,
+			ReplyMarkup: assets.CancelOnlyMarkup,
 		})
 		return
 	}
@@ -357,7 +303,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 <hr/>
 <p>Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk membagikan nomor akun Anda.</p>`,
 					ParseMode:   "HTML",
-					ReplyMarkup: installPhoneKeyboard(),
+					ReplyMarkup: assets.InstallPhoneMarkup,
 				})
 				return
 			}
@@ -372,7 +318,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 <hr/>
 <p>Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah, atau ketik nomor dalam format internasional (+62...).</p>`,
 				ParseMode:   "HTML",
-				ReplyMarkup: installPhoneKeyboard(),
+				ReplyMarkup: assets.InstallPhoneMarkup,
 			})
 			return
 		}
@@ -387,7 +333,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 <hr/>
 <p>Silakan kirimkan kode OTP yang benar, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 				ParseMode:   "HTML",
-				ReplyMarkup: cancelKeyboard(),
+				ReplyMarkup: assets.CancelOnlyMarkup,
 			})
 			return
 		}
@@ -405,7 +351,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 <hr/>
 <p>Silakan tunggu sesaat, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 			ParseMode:   "HTML",
-			ReplyMarkup: cancelKeyboard(),
+			ReplyMarkup: assets.CancelOnlyMarkup,
 		})
 		return
 	}
@@ -430,7 +376,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 <hr/>
 <p>Tekan tombol <b>⬅️ Batal ⬅️</b> untuk membatalkan pemasangan.</p>`,
 			ParseMode:   "HTML",
-			ReplyMarkup: cancelKeyboard(),
+			ReplyMarkup: assets.CancelOnlyMarkup,
 		})
 	}
 }
@@ -460,32 +406,18 @@ func (h *Handler) cancelInstall(ctx context.Context, b *botgotd.Bot, update *bot
 <hr/>
 <p>Kembali ke menu kontrol panel GotdBot:</p>`,
 			ParseMode:   "HTML",
-			ReplyMarkup: mainMenuMarkup,
+			ReplyMarkup: assets.MainMenuMarkup,
 		})
 	} else {
-		// Ketika user membatalkan, otomatis reset state ke waiting_create_choice dan tampilkan Selamat Datang + 4 tombol
 		h.Sessions.mu.Lock()
 		h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_create_choice"}
 		h.Sessions.mu.Unlock()
 
-		greeting := fmt.Sprintf(`<h1>👋 Selamat Datang, %s!</h1>
-<blockquote expandable><b>GotdBot • Userbot Manager</b>
-Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto berkecepatan tinggi.</blockquote>
-<table border="1">
-  <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
-  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
-  <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
-  <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
-  <tr><td>🎯 Control</td><td>Menu pemilihan akun userbot yang dapat Anda kontrol</td></tr>
-</table>
-<hr/>
-<p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
-
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        greeting,
+			Text:        assets.TxtStartGreeting(userName),
 			ParseMode:   "HTML",
-			ReplyMarkup: cachedCreateChoiceMarkup,
+			ReplyMarkup: assets.CreateChoiceMarkup,
 		})
 	}
 }
