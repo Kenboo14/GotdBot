@@ -28,11 +28,11 @@ services:
       REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
       MONGO_URI: ${MONGO_URI:-${MONGO_BACKUP_URI:-}}
       MONGO_DB: ${MONGO_DB:-${MONGO_BACKUP_DB:-gotdbot}}
-      SQLITE_PATH: ${SQLITE_PATH:-/app/data/userbot.db}
+      SQLITE_PATH: /app/data/userbot.db
       GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-65MiB}
       GOGC: ${GATEWAY_GOGC:-50}
     volumes:
-      - ubot_data:/app/data
+      - ./data:/app/data
 
     depends_on:
       redis:
@@ -58,7 +58,7 @@ services:
       API_HASH: ${API_HASH:?Set API_HASH in .env before installing a userbot}
       SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?Set SESSION_ENCRYPTION_KEY in .env}
 
-      SQLITE_PATH: ${SQLITE_PATH:-/app/data/userbot.db}
+      SQLITE_PATH: /app/data/userbot.db
       MONGO_BACKUP_URI: ${MONGO_BACKUP_URI:-}
       MONGO_BACKUP_DB: ${MONGO_BACKUP_DB:-gotdbot_backup}
 
@@ -70,11 +70,10 @@ services:
       GOMEMLIMIT: ${GOMEMLIMIT:-1100MiB}
       GOGC: ${GOGC:-50}
     volumes:
-      - ubot_data:/app/data
+      - ./data:/app/data
     depends_on:
       redis:
         condition: service_healthy
 
 volumes:
   redis_data:
-  ubot_data:
