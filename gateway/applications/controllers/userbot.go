@@ -55,6 +55,11 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	chatID, text := update.Message.Chat.ID, strings.TrimSpace(update.Message.Text)
+	userName := update.Message.From.FirstName
+	if update.Message.From.LastName != "" {
+		userName += " " + update.Message.From.LastName
+	}
+	h.SetAccountName(update.Message.From.ID, userName)
 	h.Sessions.mu.RLock()
 	session := h.Sessions.sessions[chatID]
 	h.Sessions.mu.RUnlock()
@@ -141,36 +146,12 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 		}
 
 		if text == "⚠️ Bantuan ⚠️" || strings.EqualFold(text, "bantuan") || text == "/help" {
-			h.ShowBantuan(ctx, b, chatID)
+			h.ShowBantuan(ctx, b, chatID, update.Message.From.ID)
 			return
 		}
 
-		if text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/menu" || text == "🌐 Home 🌐" {
-			userID := update.Message.From.ID
-			userName := update.Message.From.FirstName
-			if update.Message.From.LastName != "" {
-				userName += " " + update.Message.From.LastName
-			}
-			hasActive := false
-			if h.db != nil {
-				hasActive = h.db.HasActiveSession(ctx, userID)
-			}
-			if hasActive {
-				h.Sessions.mu.Lock()
-				delete(h.Sessions.sessions, chatID)
-				h.Sessions.mu.Unlock()
-				h.ShowMainMenu(ctx, b, chatID, userID, userName)
-				return
-			}
-			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID: chatID,
-				Text: `<h1>⚠️ Akses Kontrol Ditolak</h1>
-<blockquote expandable>Menu kontrol panel hanya dapat diakses setelah akun userbot Anda aktif dan terhubung.</blockquote>
-<hr/>
-<p>Silakan gunakan tombol <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b> untuk memulai.</p>`,
-				ParseMode:   "HTML",
-				ReplyMarkup: cachedCreateChoiceMarkup,
-			})
+		if text == "🎯 Control 🎯" || text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/control" {
+			h.ShowControlMenu(ctx, b, chatID, update.Message.From.ID, update.Message.From.Username)
 			return
 		}
 
@@ -179,7 +160,7 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			Text: `<h1>⚠️ Pilihan Tidak Dikenali</h1>
 <blockquote expandable>Silakan gunakan salah satu tombol keyboard di bawah untuk memilih opsi yang tersedia.</blockquote>
 <hr/>
-<p>Pilih <b>🔑 Input Token 🔑</b>, <b>🚀 Buat Userbot 🚀</b>, <b>⚠️ Bantuan ⚠️</b>, atau <b>🎮 Control 🎮</b>.</p>`,
+<p>Pilih <b>🔑 Input Token 🔑</b>, <b>🚀 Buat Userbot 🚀</b>, <b>⚠️ Bantuan ⚠️</b>, atau <b>🎯 Control 🎯</b>.</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: cachedCreateChoiceMarkup,
 		})
@@ -473,7 +454,7 @@ Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto be
   <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
   <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
   <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
-  <tr><td>🎮 Control</td><td>Menu utama kontrol panel userbot</td></tr>
+  <tr><td>🎯 Control</td><td>Menu pemilihan akun userbot yang dapat Anda kontrol</td></tr>
 </table>
 <hr/>
 <p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
@@ -544,7 +525,7 @@ var (
 			},
 			{
 				{Text: "⚠️ Bantuan ⚠️"},
-				{Text: "🎮 Control 🎮"},
+				{Text: "🎯 Control 🎯"},
 			},
 		},
 		ResizeKeyboard: true,

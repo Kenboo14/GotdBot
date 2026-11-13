@@ -352,16 +352,28 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		}
 		return
 	}
+	targetOwner := job.OwnerID
+	if targetOwner == 0 {
+		targetOwner = job.UserID
+	}
+	if targetOwner == 0 {
+		targetOwner = job.ChatID
+	}
+
 	s.mu.Lock()
-	client := s.active[job.UserID]
-	sessionChatID := job.UserID
+	client := s.active[targetOwner]
+	sessionChatID := targetOwner
+	if client == nil {
+		client = s.active[job.UserID]
+		sessionChatID = job.UserID
+	}
 	if client == nil {
 		client = s.active[job.ChatID]
 		sessionChatID = job.ChatID
 	}
 	if client == nil {
 		for cid, oid := range s.owners {
-			if oid == job.UserID || oid == job.ChatID {
+			if oid == targetOwner || oid == job.UserID || oid == job.ChatID {
 				if c := s.active[cid]; c != nil {
 					client = c
 					sessionChatID = cid
@@ -373,18 +385,21 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	if client == nil {
 		// On-demand wake up: jika sesi ada di database tapi belum aktif
 		s.mu.Unlock()
-		s.activate(job.ChatID, job.UserID)
+		s.activate(targetOwner, targetOwner)
 		// Tunggu sejenak hingga client siap
 		for i := 0; i < 15; i++ {
 			time.Sleep(200 * time.Millisecond)
 			s.mu.Lock()
-			client = s.active[job.ChatID]
+			client = s.active[targetOwner]
 			if client == nil {
 				client = s.active[job.UserID]
 			}
 			if client == nil {
+				client = s.active[job.ChatID]
+			}
+			if client == nil {
 				for cid, oid := range s.owners {
-					if oid == job.UserID || oid == job.ChatID {
+					if oid == targetOwner || oid == job.UserID || oid == job.ChatID {
 						if c := s.active[cid]; c != nil {
 							client = c
 							sessionChatID = cid
@@ -394,7 +409,7 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 				}
 			}
 			if client != nil {
-				sessionChatID = job.ChatID
+				sessionChatID = targetOwner
 				break
 			}
 			s.mu.Unlock()

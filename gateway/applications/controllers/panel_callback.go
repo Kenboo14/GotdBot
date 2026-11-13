@@ -15,6 +15,89 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		return
 	}
 	cb := update.CallbackQuery
+	if cb.Data == "panel:control" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		var chatID int64
+		if cb.Message != nil && cb.Message.Message != nil {
+			chatID = cb.Message.Message.Chat.ID
+		}
+		if chatID == 0 {
+			chatID = cb.From.ID
+		}
+		h.ShowControlMenu(ctx, b, chatID, cb.From.ID, cb.From.Username)
+		return
+	}
+	if strings.HasPrefix(cb.Data, "panel:control_select:") {
+		parts := strings.Split(cb.Data, ":")
+		if len(parts) >= 3 {
+			var chatID int64
+			if cb.Message != nil && cb.Message.Message != nil {
+				chatID = cb.Message.Message.Chat.ID
+			}
+			if chatID == 0 {
+				chatID = cb.From.ID
+			}
+			targetID, _ := strconv.ParseInt(parts[2], 10, 64)
+			if targetID == 0 {
+				h.SetActiveRemoteTarget(chatID, 0)
+				_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+					CallbackQueryID: cb.ID,
+					Text:            "✅ Remote akun dinonaktifkan.",
+				})
+				hasActive := false
+				if h.db != nil {
+					hasActive = h.db.HasActiveSession(ctx, cb.From.ID)
+				}
+				if hasActive {
+					h.ShowMainMenu(ctx, b, chatID, cb.From.ID, cb.From.FirstName)
+				} else {
+					b.SendMessage(ctx, &botgotd.SendMessageParams{
+						ChatID:      chatID,
+						Text:        "✅ Remote akun dilepas. Anda kembali ke menu awal.",
+						ReplyMarkup: cachedCreateChoiceMarkup,
+					})
+				}
+				return
+			}
+
+			// Validasi otorisasi kontrol akun
+			authorized := false
+			if targetID == cb.From.ID {
+				authorized = true
+			} else if h.db != nil {
+				accounts := h.db.GetAccessibleAccounts(ctx, cb.From.ID, cb.From.Username)
+				for _, acc := range accounts {
+					if acc.OwnerID == targetID {
+						authorized = true
+						break
+					}
+				}
+			}
+
+			if !authorized {
+				_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+					CallbackQueryID: cb.ID,
+					Text:            "⛔ Anda tidak memiliki wewenang untuk mengontrol akun ini.",
+					ShowAlert:       true,
+				})
+				return
+			}
+
+			h.SetActiveRemoteTarget(chatID, targetID)
+			targetName := h.GetAccountName(targetID)
+			if targetName == "" {
+				targetName = fmt.Sprintf("Akun [%d]", targetID)
+			}
+
+			_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+				CallbackQueryID: cb.ID,
+				Text:            fmt.Sprintf("✅ Mengontrol: %s", targetName),
+			})
+
+			h.ShowMainMenu(ctx, b, chatID, targetID, targetName)
+			return
+		}
+	}
 	if cb.Data == "panel:status" || cb.Data == "panel:status:refresh" {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "Status diperbarui"})
 		var chatID int64
@@ -24,7 +107,8 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		if chatID == 0 {
 			chatID = cb.From.ID
 		}
-		h.ShowStatus(ctx, b, chatID, cb.From.ID)
+		effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
+		h.ShowStatus(ctx, b, chatID, effectiveID)
 		return
 	}
 	parts := strings.Split(cb.Data, ":")

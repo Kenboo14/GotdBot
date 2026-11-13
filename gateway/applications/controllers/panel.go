@@ -766,7 +766,7 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, user
 		cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
 		_ = h.db.SaveUserConfig(ctx, cfg)
 
-		payload := models.PToService{ChatID: chatID, UserID: userID, Type: "start_panel_broadcast"}
+		payload := models.PToService{ChatID: chatID, UserID: userID, OwnerID: userID, Type: "start_panel_broadcast"}
 		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 			log.Printf("start_panel_broadcast broker error: %v", err)
 		}
@@ -777,7 +777,7 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, user
 		cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
 		_ = h.db.SaveUserConfig(ctx, cfg)
 
-		payload := models.PToService{ChatID: chatID, UserID: userID, Type: "stop_panel_broadcast"}
+		payload := models.PToService{ChatID: chatID, UserID: userID, OwnerID: userID, Type: "stop_panel_broadcast"}
 		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 			log.Printf("stop_panel_broadcast broker error: %v", err)
 		}
@@ -1010,7 +1010,7 @@ func (h *Handler) ShowExpertExtra(ctx context.Context, b *botgotd.Bot, chatID in
 }
 
 // ShowBantuan displays Bantuan info
-func (h *Handler) ShowBantuan(ctx context.Context, b *botgotd.Bot, chatID int64) {
+func (h *Handler) ShowBantuan(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	text := `<h1>⚠️ Panduan &amp; Bantuan Penggunaan</h1>
 <table border="1">
   <tr><th>🔘 Tombol</th><th>📘 Fungsi</th></tr>
@@ -1025,11 +1025,98 @@ func (h *Handler) ShowBantuan(ctx context.Context, b *botgotd.Bot, chatID int64)
 <hr/>
 <p>GotdBot • Multi-Configuration VPS Control Panel</p>`
 
+	effectiveID := h.GetEffectiveUserID(chatID, userID)
+	hasActive := false
+	if h.db != nil && effectiveID > 0 {
+		hasActive = h.db.HasActiveSession(ctx, effectiveID)
+	}
+
+	markup := any(cachedCreateChoiceMarkup)
+	if hasActive {
+		markup = mainMenuMarkup
+	}
+
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
-		ReplyMarkup: mainMenuMarkup,
+		ReplyMarkup: markup,
+	})
+}
+
+// ShowControlMenu displays the remote account selection menu
+func (h *Handler) ShowControlMenu(ctx context.Context, b *botgotd.Bot, chatID, userID int64, username string) {
+	h.setPanelState(chatID, "")
+
+	var accounts []databases.AccountControlInfo
+	if h.db != nil {
+		accounts = h.db.GetAccessibleAccounts(ctx, userID, username)
+	}
+
+	for i := range accounts {
+		if cached := h.GetAccountName(accounts[i].OwnerID); cached != "" {
+			if accounts[i].IsOwn {
+				accounts[i].Name = "[Saya] " + cached
+			} else {
+				accounts[i].Name = cached
+			}
+		}
+	}
+
+	if len(accounts) == 0 {
+		effectiveID := h.GetEffectiveUserID(chatID, userID)
+		hasActive := false
+		if h.db != nil {
+			hasActive = h.db.HasActiveSession(ctx, effectiveID)
+		}
+		markup := any(cachedCreateChoiceMarkup)
+		if hasActive {
+			markup = mainMenuMarkup
+		}
+
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>🎯 Akses Kontrol Userbot</h1>
+<blockquote expandable>👤 <b>Anda memiliki 0 akses</b>
+Anda belum memiliki akses untuk mengontrol akun userbot manapun.</blockquote>
+<table border="1">
+  <tr><th>User ID Anda</th><td><code>%d</code></td></tr>
+</table>
+<hr/>
+<p>Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemilik userbot lain menambahkan User ID Anda sebagai <b>ADMIN</b> di menu Pengaturan Admin.</p>`, userID),
+			ParseMode:   "HTML",
+			ReplyMarkup: markup,
+		})
+		return
+	}
+
+	var rows [][]botgotd.InlineKeyboardButton
+	for _, acc := range accounts {
+		btnText := acc.Name
+		cbData := fmt.Sprintf("panel:control_select:%d", acc.OwnerID)
+		rows = append(rows, []botgotd.InlineKeyboardButton{
+			{Text: btnText, CallbackData: cbData},
+		})
+	}
+
+	if currentTarget, isRemote := h.GetActiveRemoteTarget(chatID); isRemote && currentTarget != userID {
+		rows = append(rows, []botgotd.InlineKeyboardButton{
+			{Text: "❌ Lepas Remote Akun", CallbackData: "panel:control_select:0"},
+		})
+	}
+
+	inlineMarkup := &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
+
+	text := fmt.Sprintf(`👤 <b>Anda memiliki %d akses</b>
+📝 <i>Dibawah ini adalah list akun yang dapat anda kontrol!</i>
+
+📚 <b>Note:</b> <i>Untuk ubah text / grup semua akun secara sekaligus. Alangkah baiknya dalam posisi Status Nonaktif.</i>`, len(accounts))
+
+	b.SendMessage(ctx, &botgotd.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		ParseMode:   "HTML",
+		ReplyMarkup: inlineMarkup,
 	})
 }
 
@@ -1700,20 +1787,46 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 	if update.Message.From.LastName != "" {
 		userName += " " + update.Message.From.LastName
 	}
+	h.SetAccountName(userID, userName)
 	text := strings.TrimSpace(update.Message.Text)
 
-	// Cek apakah user sedang berada dalam input state
-	if h.HandlePanelInput(ctx, b, chatID, userID, text, update.Message) {
+	// Intersep tombol Control (dapat diakses siapa saja, termasuk yang belum punya userbot untuk remote akun lain)
+	if text == "🎯 Control 🎯" || text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/control" {
+		username := ""
+		if update.Message.From != nil {
+			username = update.Message.From.Username
+		}
+		h.ShowControlMenu(ctx, b, chatID, userID, username)
 		return true
 	}
 
-	// Periksa apakah user memiliki sesi userbot yang aktif (di SQLite lokal atau MongoDB)
-	hasActive := false
-	if h.db != nil {
-		hasActive = h.db.HasActiveSession(ctx, userID)
+	// Intersep tombol Bantuan (dapat diakses siapa saja tanpa mengubah keyboard yang tidak sesuai)
+	if text == "⚠️ Bantuan ⚠️" || strings.EqualFold(text, "bantuan") || text == "/help" {
+		effectiveUserID := h.GetEffectiveUserID(chatID, userID)
+		h.ShowBantuan(ctx, b, chatID, effectiveUserID)
+		return true
 	}
 
-	// Jika belum memasang userbot, tolak akses tombol kontrol panel dan tampilkan keyboard pilihan pemasangan
+	effectiveUserID := h.GetEffectiveUserID(chatID, userID)
+	effectiveUserName := userName
+	if effectiveUserID != userID {
+		if tName := h.GetAccountName(effectiveUserID); tName != "" {
+			effectiveUserName = tName
+		}
+	}
+
+	// Cek apakah user sedang berada dalam input state
+	if h.HandlePanelInput(ctx, b, chatID, effectiveUserID, text, update.Message) {
+		return true
+	}
+
+	// Periksa apakah user memiliki sesi userbot yang aktif (milik sendiri atau akun yang sedang di-remote)
+	hasActive := false
+	if h.db != nil {
+		hasActive = h.db.HasActiveSession(ctx, effectiveUserID)
+	}
+
+	// Jika belum memasang userbot dan tidak sedang me-remote akun aktif, tolak akses tombol kontrol panel
 	if !hasActive {
 		h.setPanelState(chatID, "")
 		if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
@@ -1728,8 +1841,8 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("<h1>👋 Halo, %s</h1>\n", html.EscapeString(userName)))
 		sb.WriteString("<blockquote expandable>⚠️ <b>Sesi Userbot Belum Terpasang</b>\n")
-		sb.WriteString("<i>Menu kontrol panel (Status, Grup &amp; List, Atur Jeda, dll.) hanya untuk akun yang sudah memasang userbot aktif.</i></blockquote>\n\n")
-		sb.WriteString("<p>Silakan gunakan <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b> untuk memasang userbot Anda.</p>")
+		sb.WriteString("<i>Menu kontrol panel (Status, Grup &amp; List, Atur Jeda, dll.) hanya untuk akun yang sudah memasang userbot aktif atau akun admin yang sedang me-remote.</i></blockquote>\n\n")
+		sb.WriteString("<p>Silakan gunakan <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b> untuk memasang userbot Anda, atau gunakan <b>🎯 Control 🎯</b> jika Anda admin dari akun lain.</p>")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
 			Text:        sb.String(),
@@ -1742,18 +1855,18 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 	// Jika server baru restart (state kosong di RAM) dan user mengklik tombol dari Cek List / Cek Grup
 	// (Angka, Kembali, Hapus Semua List, Hapus Semua Grup), otomatis kembalikan ke Home
 	if isRestartBrowseButton(text) {
-		h.ShowMainMenu(ctx, b, chatID, userID, userName)
+		h.ShowMainMenu(ctx, b, chatID, effectiveUserID, effectiveUserName)
 		return true
 	}
 
 	switch text {
 	// Main Menu Navigation
-	case "🌐 Home 🌐", "/menu", "🎮 Control 🎮", "Control":
-		h.ShowMainMenu(ctx, b, chatID, userID, userName)
+	case "🌐 Home 🌐", "/menu":
+		h.ShowMainMenu(ctx, b, chatID, effectiveUserID, effectiveUserName)
 		return true
 
 	case "💎 Status 💎", "/status":
-		h.ShowStatus(ctx, b, chatID, userID)
+		h.ShowStatus(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "🛒 Shop 🛒":
@@ -1761,7 +1874,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case "🧩 Grup & List 🧩":
-		h.ShowGrupList(ctx, b, chatID, userID)
+		h.ShowGrupList(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "⚡ Expert Extra ⚡":
@@ -1773,15 +1886,15 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case "⌛ Atur Jeda ⌛":
-		h.PromptAturJeda(ctx, b, chatID, userID)
+		h.PromptAturJeda(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "⚠️ Bantuan ⚠️":
-		h.ShowBantuan(ctx, b, chatID)
+		h.ShowBantuan(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "⚙️ Settings ⚙️":
-		h.ShowSettings(ctx, b, chatID, userID)
+		h.ShowSettings(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "📰 Feed 📰":
@@ -1794,44 +1907,44 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 
 	// Status Menu Actions
 	case "📌 Custom Watermark 📌":
-		h.PromptWatermark(ctx, b, chatID, userID)
+		h.PromptWatermark(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "✉️ Atur Email ✉️":
-		h.PromptEmail(ctx, b, chatID, userID)
+		h.PromptEmail(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "⚠️ Safemode ⚠️":
-		h.ToggleSafemode(ctx, b, chatID, userID)
+		h.ToggleSafemode(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "⏱️ Timer ⏱️":
-		h.PromptTimer(ctx, b, chatID, userID)
+		h.PromptTimer(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "👑 Ubah Mode 👑":
-		h.PromptUbahMode(ctx, b, chatID, userID)
+		h.PromptUbahMode(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "👤 Admin 👤":
-		h.PromptAdmin(ctx, b, chatID, userID)
+		h.PromptAdmin(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "📊 Ubah Status 📊":
-		h.ToggleStatus(ctx, b, chatID, userID)
+		h.ToggleStatus(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "🔔 Notifikasi 🔔":
-		h.ToggleNotifikasi(ctx, b, chatID, userID)
+		h.ToggleNotifikasi(ctx, b, chatID, effectiveUserID)
 		return true
 
 	// Grup & List Actions
 	case "📁 Cek List 📁":
-		h.DisplayList(ctx, b, chatID, userID)
+		h.DisplayList(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "📚 Cek Grup 📚":
-		h.DisplayGroup(ctx, b, chatID, userID)
+		h.DisplayGroup(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "📝 Tambah List 📝":
@@ -1843,7 +1956,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case "🔥 Tambahkan Semua Grup Dalam Akun 🔥":
-		h.FetchAllGroupsFromAccount(ctx, b, chatID, userID)
+		h.FetchAllGroupsFromAccount(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "📝 Tambahkan Grup Manual 📝":
@@ -1851,26 +1964,26 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case "🧑‍💻 Cek Topic 🧑‍💻", "📌 List Topic":
-		h.CekTopic(ctx, b, chatID, userID)
+		h.CekTopic(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "🧑‍💻 Topic 🧑‍💻":
-		h.ToggleTopic(ctx, b, chatID, userID)
+		h.ToggleTopic(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "📦 Sebar Ke RC 📦":
-		h.SebarKeRC(ctx, b, chatID, userID)
+		h.SebarKeRC(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case "⬅️ Batal ⬅️":
 		h.setPanelState(chatID, "")
-		h.ShowMainMenu(ctx, b, chatID, userID, userName)
+		h.ShowMainMenu(ctx, b, chatID, effectiveUserID, effectiveUserName)
 		return true
 
 	// Reset Menu Sub-Actions
 	case "🗑️ Hapus Semua Grup 🗑️":
-		_ = h.db.ClearGroups(ctx, userID)
-		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_groups"})
+		_ = h.db.ClearGroups(ctx, effectiveUserID)
+		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: effectiveUserID, OwnerID: effectiveUserID, Type: "clear_panel_groups"})
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: `<h1>🗑️ Seluruh Grup Berhasil Dihapus</h1>
@@ -1883,8 +1996,8 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case "🗑️ Hapus Semua List 🗑️":
-		_ = h.db.ClearLists(ctx, userID)
-		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
+		_ = h.db.ClearLists(ctx, effectiveUserID)
+		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: effectiveUserID, OwnerID: effectiveUserID, Type: "clear_panel_lists"})
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: `<h1>🗑️ Seluruh List Berhasil Dihapus</h1>
@@ -1898,7 +2011,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 
 	case "🗑️ Reset Konfigurasi 🗑️":
 		defaultCfg := &databases.UserConfig{
-			OwnerID:          userID,
+			OwnerID:          effectiveUserID,
 			Type:             "Broadcast",
 			Delay:            5,
 			SkipFloodWait:    false,

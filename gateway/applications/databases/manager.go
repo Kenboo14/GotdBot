@@ -504,3 +504,100 @@ func (m *DataManager) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID
 	}
 	return nil
 }
+
+type AccountControlInfo struct {
+	OwnerID int64
+	Name    string
+	IsOwn   bool
+}
+
+func checkIsAdmin(adminStr string, userID int64, username string) bool {
+	adminStr = strings.TrimSpace(adminStr)
+	if adminStr == "" || adminStr == "Belum diatur" || strings.Contains(adminStr, "Belum diatur") {
+		return false
+	}
+	targetIDStr := strconv.FormatInt(userID, 10)
+	cleanUsername := strings.ToLower(strings.TrimPrefix(username, "@"))
+
+	tokens := strings.FieldsFunc(adminStr, func(r rune) bool {
+		return r == ',' || r == ' ' || r == ';' || r == '\n' || r == '\t'
+	})
+
+	for _, token := range tokens {
+		t := strings.TrimSpace(token)
+		if t == "" {
+			continue
+		}
+		if t == targetIDStr {
+			return true
+		}
+		cleanToken := strings.ToLower(strings.TrimPrefix(t, "@"))
+		if cleanUsername != "" && cleanToken == cleanUsername {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *DataManager) UpdateAccountName(ctx context.Context, ownerID int64, name string) {
+	if m == nil || m.sqlite == nil || name == "" {
+		return
+	}
+	_ = m.sqlite.UpdateAccountName(ctx, ownerID, name)
+}
+
+func (m *DataManager) GetAccountName(ctx context.Context, ownerID int64) string {
+	if m == nil || m.sqlite == nil {
+		return ""
+	}
+	return m.sqlite.GetAccountName(ctx, ownerID)
+}
+
+func (m *DataManager) GetAccessibleAccounts(ctx context.Context, userID int64, username string) []AccountControlInfo {
+	var results []AccountControlInfo
+	seen := make(map[int64]bool)
+
+	// 1. Akun milik user sendiri jika memiliki sesi aktif
+	if m.HasActiveSession(ctx, userID) {
+		name := m.GetAccountName(ctx, userID)
+		if name == "" {
+			name = "Akun Utama (Saya)"
+		} else {
+			name = "[Saya] " + name
+		}
+		results = append(results, AccountControlInfo{
+			OwnerID: userID,
+			Name:    name,
+			IsOwn:   true,
+		})
+		seen[userID] = true
+	}
+
+	// 2. Akun orang lain yang menambahkan user ini sebagai admin
+	if m.sqlite != nil {
+		rows, err := m.sqlite.GetAllConfigsWithAdmin(ctx)
+		if err == nil {
+			for _, row := range rows {
+				if seen[row.OwnerID] {
+					continue
+				}
+				if checkIsAdmin(row.Admin, userID, username) {
+					if m.HasActiveSession(ctx, row.OwnerID) {
+						name := row.AccountName
+						if name == "" {
+							name = fmt.Sprintf("Akun [%d]", row.OwnerID)
+						}
+						results = append(results, AccountControlInfo{
+							OwnerID: row.OwnerID,
+							Name:    name,
+							IsOwn:   false,
+						})
+						seen[row.OwnerID] = true
+					}
+				}
+			}
+		}
+	}
+
+	return results
+}

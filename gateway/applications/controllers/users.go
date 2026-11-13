@@ -66,7 +66,7 @@ Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto be
   <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
   <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
   <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
-  <tr><td>🎮 Control</td><td>Menu utama kontrol panel userbot</td></tr>
+  <tr><td>🎯 Control</td><td>Menu utama kontrol panel userbot</td></tr>
 </table>
 <hr/>
 <p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))

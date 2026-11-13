@@ -120,6 +120,7 @@ func (s *SQLiteClient) initTables() error {
 			return err
 		}
 	}
+	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN account_name TEXT DEFAULT '';")
 	return nil
 }
 
@@ -367,4 +368,53 @@ func (s *SQLiteClient) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerI
 	_, _ = s.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET owner_id = ? WHERE owner_id = ?;`, newOwnerID, oldOwnerID)
 	_, _ = s.DB.ExecContext(ctx, `UPDATE user_licenses SET userbot_id = ? WHERE userbot_id = ?;`, newOwnerID, oldOwnerID)
 	return nil
+}
+
+type AdminAccountRow struct {
+	OwnerID     int64
+	Admin       string
+	AccountName string
+}
+
+func (s *SQLiteClient) GetAllConfigsWithAdmin(ctx context.Context) ([]AdminAccountRow, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT owner_id, admin, account_name FROM jaseb_configurasi WHERE admin != 'Belum diatur' AND admin != '';`)
+	if err != nil {
+		fallbackRows, fErr := s.DB.QueryContext(ctx, `SELECT owner_id, admin FROM jaseb_configurasi WHERE admin != 'Belum diatur' AND admin != '';`)
+		if fErr != nil {
+			return nil, fErr
+		}
+		defer fallbackRows.Close()
+		var list []AdminAccountRow
+		for fallbackRows.Next() {
+			var r AdminAccountRow
+			if scanErr := fallbackRows.Scan(&r.OwnerID, &r.Admin); scanErr == nil {
+				list = append(list, r)
+			}
+		}
+		return list, nil
+	}
+	defer rows.Close()
+
+	var list []AdminAccountRow
+	for rows.Next() {
+		var r AdminAccountRow
+		if scanErr := rows.Scan(&r.OwnerID, &r.Admin, &r.AccountName); scanErr == nil {
+			list = append(list, r)
+		}
+	}
+	return list, nil
+}
+
+func (s *SQLiteClient) UpdateAccountName(ctx context.Context, ownerID int64, name string) error {
+	if name == "" {
+		return nil
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET account_name = ? WHERE owner_id = ?;`, name, ownerID)
+	return err
+}
+
+func (s *SQLiteClient) GetAccountName(ctx context.Context, ownerID int64) string {
+	var name string
+	_ = s.DB.QueryRowContext(ctx, `SELECT account_name FROM jaseb_configurasi WHERE owner_id = ?;`, ownerID).Scan(&name)
+	return name
 }

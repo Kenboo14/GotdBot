@@ -34,6 +34,10 @@ type Handler struct {
 	detailMessages   map[int64][]int
 	promptMu         sync.Mutex
 	promptMessages   map[int64]int
+	remoteMu         sync.RWMutex
+	remoteTargets    map[int64]int64 // chatID -> targetOwnerID
+	accountNamesMu   sync.RWMutex
+	accountNames     map[int64]string
 }
 
 type cachedMediaFile struct {
@@ -68,7 +72,73 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 		cacheMedia:       make(map[int]cachedMediaFile),
 		detailMessages:   make(map[int64][]int),
 		promptMessages:   make(map[int64]int),
+		remoteTargets:    make(map[int64]int64),
+		accountNames:     make(map[int64]string),
 	}
+}
+
+func (h *Handler) GetEffectiveUserID(chatID, userID int64) int64 {
+	h.remoteMu.RLock()
+	defer h.remoteMu.RUnlock()
+	if h.remoteTargets == nil {
+		return userID
+	}
+	targetID, ok := h.remoteTargets[chatID]
+	if ok && targetID > 0 {
+		return targetID
+	}
+	return userID
+}
+
+func (h *Handler) SetActiveRemoteTarget(chatID, targetID int64) {
+	h.remoteMu.Lock()
+	if h.remoteTargets == nil {
+		h.remoteTargets = make(map[int64]int64)
+	}
+	if targetID <= 0 {
+		delete(h.remoteTargets, chatID)
+	} else {
+		h.remoteTargets[chatID] = targetID
+	}
+	h.remoteMu.Unlock()
+}
+
+func (h *Handler) GetActiveRemoteTarget(chatID int64) (int64, bool) {
+	h.remoteMu.RLock()
+	defer h.remoteMu.RUnlock()
+	if h.remoteTargets == nil {
+		return 0, false
+	}
+	targetID, ok := h.remoteTargets[chatID]
+	return targetID, ok && targetID > 0
+}
+
+func (h *Handler) SetAccountName(userID int64, name string) {
+	if name == "" {
+		return
+	}
+	h.accountNamesMu.Lock()
+	if h.accountNames == nil {
+		h.accountNames = make(map[int64]string)
+	}
+	h.accountNames[userID] = name
+	h.accountNamesMu.Unlock()
+	if h.db != nil {
+		h.db.UpdateAccountName(context.Background(), userID, name)
+	}
+}
+
+func (h *Handler) GetAccountName(userID int64) string {
+	h.accountNamesMu.RLock()
+	name, ok := h.accountNames[userID]
+	h.accountNamesMu.RUnlock()
+	if ok && name != "" {
+		return name
+	}
+	if h.db != nil {
+		return h.db.GetAccountName(context.Background(), userID)
+	}
+	return ""
 }
 
 func (h *Handler) sendProgress(ctx context.Context, b *botgotd.Bot, chatID int64, params *botgotd.SendMessageParams) {
