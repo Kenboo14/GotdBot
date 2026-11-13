@@ -861,8 +861,17 @@ func FormatRichHTML(htmlText string) string {
 }
 
 func isRichContent(text string) bool {
-	// Semua respon berformat HTML / Rich tags dikirim sebagai Rich Message
-	return strings.Contains(text, "<") && strings.Contains(text, ">")
+	// Hanya tag HTML Rich Message Bot 2.0 / MTProto yang dikirim via SetRichMessage
+	// Tag standar Telegram seperti <b>, <i>, <code>, <pre>, <a> menggunakan Entities bawaan agar format baris baru (\n) tidak rusak/berantakan
+	return strings.Contains(text, "<h1") ||
+		strings.Contains(text, "<h2") ||
+		strings.Contains(text, "<h3") ||
+		strings.Contains(text, "<table") ||
+		strings.Contains(text, "<tg-button") ||
+		strings.Contains(text, "expandable") ||
+		strings.Contains(text, "<hr") ||
+		strings.Contains(text, "<img") ||
+		strings.Contains(text, "<video")
 }
 
 func cleanHTML(text string) string {

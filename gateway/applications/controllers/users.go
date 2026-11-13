@@ -35,12 +35,12 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 		return
 	}
 
-	// Cek jika user sudah dalam proses pemasangan (session aktif)
+	// Cek jika user sudah dalam proses pemasangan (session aktif di luar waiting_create_choice)
 	h.Sessions.mu.RLock()
 	existingSession := h.Sessions.sessions[chatID]
 	h.Sessions.mu.RUnlock()
 
-	if existingSession != nil {
+	if existingSession != nil && existingSession.State != "waiting_create_choice" {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: `<h1>⏳ Pemasangan Sedang Berjalan</h1>
@@ -65,9 +65,11 @@ Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto be
   <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
   <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
   <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
+  <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
+  <tr><td>🎮 Control</td><td>Menu utama kontrol panel userbot</td></tr>
 </table>
 <hr/>
-<p>Silakan pilih opsi pemasangan pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
+<p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,

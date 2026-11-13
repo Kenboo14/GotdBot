@@ -1713,14 +1713,14 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		hasActive = h.db.HasActiveSession(ctx, userID)
 	}
 
-	// Jika belum memasang userbot, tolak akses tombol kontrol panel dan bersihkan ReplyKeyboard
+	// Jika belum memasang userbot, tolak akses tombol kontrol panel dan tampilkan keyboard pilihan pemasangan
 	if !hasActive {
 		h.setPanelState(chatID, "")
 		if text == "⬅️ Batal ⬅️" || strings.EqualFold(text, "batal") || text == "/cancel" {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
 				Text:        "↩️ Tindakan dibatalkan.",
-				ReplyMarkup: cachedRemoveKeyboard,
+				ReplyMarkup: cachedCreateChoiceMarkup,
 			})
 			return true
 		}
@@ -1729,12 +1729,12 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		sb.WriteString(fmt.Sprintf("<h1>👋 Halo, %s</h1>\n", html.EscapeString(userName)))
 		sb.WriteString("<blockquote expandable>⚠️ <b>Sesi Userbot Belum Terpasang</b>\n")
 		sb.WriteString("<i>Menu kontrol panel (Status, Grup &amp; List, Atur Jeda, dll.) hanya untuk akun yang sudah memasang userbot aktif.</i></blockquote>\n\n")
-		sb.WriteString("<p>Silakan ketik <code>/start</code> untuk memasang dan mengaktifkan sesi userbot Anda.</p>")
+		sb.WriteString("<p>Silakan gunakan <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b> untuk memasang userbot Anda.</p>")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
 			Text:        sb.String(),
 			ParseMode:   "HTML",
-			ReplyMarkup: cachedRemoveKeyboard,
+			ReplyMarkup: cachedCreateChoiceMarkup,
 		})
 		return true
 	}
@@ -1748,7 +1748,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 
 	switch text {
 	// Main Menu Navigation
-	case "🌐 Home 🌐", "/menu":
+	case "🌐 Home 🌐", "/menu", "🎮 Control 🎮", "Control":
 		h.ShowMainMenu(ctx, b, chatID, userID, userName)
 		return true
 

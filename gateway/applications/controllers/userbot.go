@@ -140,12 +140,46 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			return
 		}
 
+		if text == "⚠️ Bantuan ⚠️" || strings.EqualFold(text, "bantuan") || text == "/help" {
+			h.ShowBantuan(ctx, b, chatID)
+			return
+		}
+
+		if text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/menu" || text == "🌐 Home 🌐" {
+			userID := update.Message.From.ID
+			userName := update.Message.From.FirstName
+			if update.Message.From.LastName != "" {
+				userName += " " + update.Message.From.LastName
+			}
+			hasActive := false
+			if h.db != nil {
+				hasActive = h.db.HasActiveSession(ctx, userID)
+			}
+			if hasActive {
+				h.Sessions.mu.Lock()
+				delete(h.Sessions.sessions, chatID)
+				h.Sessions.mu.Unlock()
+				h.ShowMainMenu(ctx, b, chatID, userID, userName)
+				return
+			}
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID: chatID,
+				Text: `<h1>⚠️ Akses Kontrol Ditolak</h1>
+<blockquote expandable>Menu kontrol panel hanya dapat diakses setelah akun userbot Anda aktif dan terhubung.</blockquote>
+<hr/>
+<p>Silakan gunakan tombol <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b> untuk memulai.</p>`,
+				ParseMode:   "HTML",
+				ReplyMarkup: cachedCreateChoiceMarkup,
+			})
+			return
+		}
+
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: `<h1>⚠️ Pilihan Tidak Dikenali</h1>
-<blockquote expandable>Silakan gunakan salah satu tombol keyboard di bawah untuk melanjutkan proses pemasangan userbot.</blockquote>
+<blockquote expandable>Silakan gunakan salah satu tombol keyboard di bawah untuk memilih opsi yang tersedia.</blockquote>
 <hr/>
-<p>Pilih <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b>, atau tekan <b>⬅️ Batal ⬅️</b>.</p>`,
+<p>Pilih <b>🔑 Input Token 🔑</b>, <b>🚀 Buat Userbot 🚀</b>, <b>⚠️ Bantuan ⚠️</b>, atau <b>🎮 Control 🎮</b>.</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: cachedCreateChoiceMarkup,
 		})
@@ -401,6 +435,10 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 func (h *Handler) cancelInstall(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	chatID := update.Message.Chat.ID
 	userID := update.Message.From.ID
+	userName := update.Message.From.FirstName
+	if update.Message.From.LastName != "" {
+		userName += " " + update.Message.From.LastName
+	}
 	h.Sessions.mu.Lock()
 	delete(h.Sessions.sessions, chatID)
 	h.Sessions.mu.Unlock()
@@ -422,14 +460,29 @@ func (h *Handler) cancelInstall(ctx context.Context, b *botgotd.Bot, update *bot
 			ReplyMarkup: mainMenuMarkup,
 		})
 	} else {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: `<h1>↩️ Pemasangan Dibatalkan</h1>
-<blockquote expandable>Proses pemasangan userbot telah dibatalkan. Seluruh data sesi sementara telah dibersihkan.</blockquote>
+		// Ketika user membatalkan, otomatis reset state ke waiting_create_choice dan tampilkan Selamat Datang + 4 tombol
+		h.Sessions.mu.Lock()
+		h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_create_choice"}
+		h.Sessions.mu.Unlock()
+
+		greeting := fmt.Sprintf(`<h1>👋 Selamat Datang, %s!</h1>
+<blockquote expandable><b>GotdBot • Userbot Manager</b>
+Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto berkecepatan tinggi.</blockquote>
+<table border="1">
+  <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
+  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
+  <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
+  <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
+  <tr><td>🎮 Control</td><td>Menu utama kontrol panel userbot</td></tr>
+</table>
 <hr/>
-<p>Ketik atau tekan <b>/start</b> kapan saja untuk memulai pemasangan kembali.</p>`,
+<p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
+
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        greeting,
 			ParseMode:   "HTML",
-			ReplyMarkup: cachedRemoveKeyboard,
+			ReplyMarkup: cachedCreateChoiceMarkup,
 		})
 	}
 }
@@ -490,11 +543,11 @@ var (
 				{Text: "🚀 Buat Userbot 🚀"},
 			},
 			{
-				{Text: "⬅️ Batal ⬅️"},
+				{Text: "⚠️ Bantuan ⚠️"},
+				{Text: "🎮 Control 🎮"},
 			},
 		},
-		ResizeKeyboard:  true,
-		OneTimeKeyboard: true,
+		ResizeKeyboard: true,
 	}
 	cachedServerMarkup = &botgotd.InlineKeyboardMarkup{
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
@@ -691,6 +744,7 @@ func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botg
 	}
 
 	// Step 3: Edit pesan
+	isInline := update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != ""
 	edit := &botgotd.EditMessageTextParams{
 		Text:               text,
 		ParseMode:          "HTML",
@@ -712,21 +766,24 @@ func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botg
 	rpcCount++
 
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		errStr := strings.ToLower(editErr.Error())
-		if strings.Contains(errStr, "can't be edited") {
-			if edit.ChatID != nil {
-				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      edit.ChatID,
-					Text:        text,
-					ParseMode:   "HTML",
-					ReplyMarkup: markup,
+		if !isInline && edit.ChatID != nil {
+			if newMsg, sendErr := b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      edit.ChatID,
+				Text:        text,
+				ParseMode:   "HTML",
+				ReplyMarkup: markup,
+			}); sendErr == nil && newMsg != nil {
+				_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{
+					ChatID:    edit.ChatID,
+					MessageID: edit.MessageID,
 				})
+			} else {
+				cbErr = editErr
 			}
 		} else {
 			cbErr = editErr
 		}
 	}
-
 	totalDur := time.Since(start)
 	log.Printf("[callback] data=%q ack_dispatch=%v cache=%v db=0s render=%v edit=%v total=%v rpc_count=%d err=%v",
 		data, ackDispatch, cacheDur, renderDur, editDur, totalDur, rpcCount, cbErr)
@@ -803,21 +860,24 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 	rpcCount++
 
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		errStr := strings.ToLower(editErr.Error())
-		if strings.Contains(errStr, "can't be edited") {
-			if edit.ChatID != nil {
-				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      edit.ChatID,
-					Text:        text,
-					ParseMode:   "HTML",
-					ReplyMarkup: markup,
+		if !isInline && edit.ChatID != nil {
+			if newMsg, sendErr := b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      edit.ChatID,
+				Text:        text,
+				ParseMode:   "HTML",
+				ReplyMarkup: markup,
+			}); sendErr == nil && newMsg != nil {
+				_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{
+					ChatID:    edit.ChatID,
+					MessageID: edit.MessageID,
 				})
+			} else {
+				cbErr = editErr
 			}
 		} else {
 			cbErr = editErr
 		}
 	}
-
 	totalDur := time.Since(start)
 	log.Printf("[callback] data=\"assist_server:refresh\" ack_dispatch=%v cache=0s db=0s render=%v edit=%v total=%v rpc_count=%d err=%v",
 		ackDispatch, renderDur, editDur, totalDur, rpcCount, cbErr)

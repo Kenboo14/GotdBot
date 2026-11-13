@@ -378,10 +378,17 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 		if cb.Message.Message != nil {
+			menuText := fmt.Sprintf(`<h1>⏱️ Atur Durasi Token Free</h1>
+<blockquote expandable>Silakan tentukan masa aktif baru untuk voucher token massal free.</blockquote>
+<table border="1">
+  <tr><th>Token Voucher</th><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>Pilih durasi aktif yang diinginkan pada tombol di bawah:</p>`, token)
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:      cb.Message.Message.Chat.ID,
 				MessageID:   cb.Message.Message.ID,
-				Text:        fmt.Sprintf("⏱️ <b>Pilih Durasi Aktif Token Free:</b>\n<code>%s</code>", token),
+				Text:        menuText,
 				ParseMode:   "HTML",
 				ReplyMarkup: markup,
 			})
@@ -410,14 +417,17 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 			claimCount = tm.ClaimCount
 		}
 
-		resp := fmt.Sprintf(`🎫 <b>Token Master Free GotdBot</b>
-━━━━━━━━━━━━━━━━━━━━
-🔑 <b>Token:</b> <code>%s</code>
-⏱️ <b>Durasi:</b> <code>%s</code>
-👥 <b>Jumlah Claimed:</b> <code>%d user</code>
-🟢 <b>Status:</b> <code>Active</code> (Shared Voucher)
-
-<i>Token ini dapat digunakan oleh semua pengguna secara massal.</i>`,
+		resp := fmt.Sprintf(`<h1>🎫 Token Master Free GotdBot</h1>
+<blockquote expandable>Durasi token free berhasil diperbarui. Token ini dapat digunakan oleh semua pengguna secara massal.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Nilai</th></tr>
+  <tr><td>🔑 Token Voucher</td><td><code>%s</code></td></tr>
+  <tr><td>⏱️ Durasi Baru</td><td><code>%s</code></td></tr>
+  <tr><td>👥 Total Diklaim</td><td><code>%d pengguna</code></td></tr>
+  <tr><td>🟢 Status</td><td><code>Active (Shared)</code></td></tr>
+</table>
+<hr/>
+<p>Kirimkan token di atas kepada pengguna untuk diklaim via <b>/start</b>.</p>`,
 			token, durStr, claimCount,
 		)
 
@@ -445,14 +455,17 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 			return
 		}
 		durStr := FormatDurationID(time.Duration(tm.DurationSeconds) * time.Second)
-		resp := fmt.Sprintf(`🎫 <b>Token Master Free GotdBot</b>
-━━━━━━━━━━━━━━━━━━━━
-🔑 <b>Token:</b> <code>%s</code>
-⏱️ <b>Durasi:</b> <code>%s</code>
-👥 <b>Jumlah Claimed:</b> <code>%d user</code>
-🟢 <b>Status:</b> <code>Active</code> (Shared Voucher)
-
-<i>Token ini dapat digunakan oleh semua pengguna secara massal.</i>`,
+		resp := fmt.Sprintf(`<h1>🎫 Token Master Free GotdBot</h1>
+<blockquote expandable>Shared voucher massal aktif untuk seluruh pengguna umum.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Nilai</th></tr>
+  <tr><td>🔑 Token Voucher</td><td><code>%s</code></td></tr>
+  <tr><td>⏱️ Durasi Aktif</td><td><code>%s</code></td></tr>
+  <tr><td>👥 Total Diklaim</td><td><code>%d pengguna</code></td></tr>
+  <tr><td>🟢 Status</td><td><code>Active (Shared)</code></td></tr>
+</table>
+<hr/>
+<p>Kirimkan token di atas kepada pengguna untuk diklaim via <b>/start</b>.</p>`,
 			tm.Token, durStr, tm.ClaimCount,
 		)
 
