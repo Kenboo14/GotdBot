@@ -847,7 +847,8 @@ func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, u
   <tr><td>🏷️ Watermark Saat Ini</td><td>%s</td></tr>
 </table>
 <blockquote expandable>Kirimkan teks watermark baru. Watermark akan disematkan pada baris paling akhir setiap pesan siaran.</blockquote>
-<p>Kirimkan teks sekarang atau ketik <b>/cancel</b> untuk membatalkan.</p>`, wm)
+<hr/>
+<p>Kirimkan teks sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, wm)
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -876,7 +877,7 @@ func (h *Handler) PromptEmail(ctx context.Context, b *botgotd.Bot, chatID, userI
 </table>
 <blockquote expandable>Kirimkan alamat email valid untuk menerima laporan siaran berkala dan notifikasi alert sistem.</blockquote>
 <hr/>
-<p>Kirimkan alamat email sekarang atau ketik <b>/cancel</b> untuk membatalkan.</p>`, em)
+<p>Kirimkan alamat email sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, em)
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -905,7 +906,7 @@ func (h *Handler) PromptAdmin(ctx context.Context, b *botgotd.Bot, chatID, userI
 </table>
 <blockquote expandable>Kirimkan Telegram User ID atau Username yang diberikan akses wewenang pengelolaan userbot.</blockquote>
 <hr/>
-<p>Kirimkan User ID sekarang atau ketik <b>/cancel</b> untuk membatalkan.</p>`, adm)
+<p>Kirimkan User ID sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, adm)
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -1581,8 +1582,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			cfg.Email = "Belum diatur"
 			_ = h.db.SaveUserConfig(ctx, cfg)
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "✅ <b>Email dihapus.</b>",
+				ChatID: chatID,
+				Text: `<h1>✅ Email Berhasil Dihapus</h1>
+<blockquote expandable>Alamat email notifikasi telah dinonaktifkan dari konfigurasi akun Anda.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: statusMenuMarkup,
 			})
@@ -1591,8 +1595,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		cfg.Email = text
 		_ = h.db.SaveUserConfig(ctx, cfg)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        fmt.Sprintf("✅ <b>Email diatur ke <code>%s</code>.</b>", html.EscapeString(text)),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>✅ Email Berhasil Diperbarui</h1>
+<blockquote expandable>Alamat email notifikasi akun Anda telah diatur ke: <code>%s</code>.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`, html.EscapeString(text)),
 			ParseMode:   "HTML",
 			ReplyMarkup: statusMenuMarkup,
 		})
@@ -1605,8 +1612,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			cfg.Admin = "Belum diatur"
 			_ = h.db.SaveUserConfig(ctx, cfg)
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "✅ <b>Admin dihapus.</b>",
+				ChatID: chatID,
+				Text: `<h1>✅ Admin Berhasil Dihapus</h1>
+<blockquote expandable>Wewenang admin tambahan telah dihapus dari konfigurasi akun Anda.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: statusMenuMarkup,
 			})
@@ -1615,8 +1625,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		cfg.Admin = text
 		_ = h.db.SaveUserConfig(ctx, cfg)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        fmt.Sprintf("✅ <b>Admin diatur ke <code>%s</code>.</b>", html.EscapeString(text)),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>✅ Admin Berhasil Diperbarui</h1>
+<blockquote expandable>Wewenang admin userbot telah diserahkan ke: <code>%s</code>.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`, html.EscapeString(text)),
 			ParseMode:   "HTML",
 			ReplyMarkup: statusMenuMarkup,
 		})
@@ -1633,8 +1646,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		}
 		_ = h.db.SaveUserConfig(ctx, cfg)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        fmt.Sprintf("✅ <b>Timer diatur ke <code>%s</code>.</b>", html.EscapeString(cfg.Timer)),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>✅ Timer Siaran Diperbarui</h1>
+<blockquote expandable>Jadwal timer siaran otomatis telah diatur ke: <code>%s</code>.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`, html.EscapeString(cfg.Timer)),
 			ParseMode:   "HTML",
 			ReplyMarkup: statusMenuMarkup,
 		})
@@ -1856,8 +1872,11 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		_ = h.db.ClearGroups(ctx, userID)
 		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_groups"})
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "✅ <b>Semua grup dihapus dari database.</b>",
+			ChatID: chatID,
+			Text: `<h1>🗑️ Seluruh Grup Berhasil Dihapus</h1>
+<blockquote expandable>Semua daftar grup target broadcast telah dibersihkan secara permanen dari database.</blockquote>
+<hr/>
+<p>GotdBot • Reset Data Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: mainMenuMarkup,
 		})
@@ -1867,8 +1886,11 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		_ = h.db.ClearLists(ctx, userID)
 		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "✅ <b>Semua list dihapus dari database.</b>",
+			ChatID: chatID,
+			Text: `<h1>🗑️ Seluruh List Berhasil Dihapus</h1>
+<blockquote expandable>Semua materi list promosi telah dibersihkan secara permanen dari database.</blockquote>
+<hr/>
+<p>GotdBot • Reset Data Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: mainMenuMarkup,
 		})
@@ -1897,8 +1919,11 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		}
 		_ = h.db.SaveUserConfig(ctx, defaultCfg)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "✅ <b>Konfigurasi direset ke pengaturan default.</b>",
+			ChatID: chatID,
+			Text: `<h1>🔄 Konfigurasi Berhasil Direset</h1>
+<blockquote expandable>Seluruh parameter pengaturan bot telah dipulihkan ke setelan default pabrik.</blockquote>
+<hr/>
+<p>GotdBot • Reset Data Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: mainMenuMarkup,
 		})

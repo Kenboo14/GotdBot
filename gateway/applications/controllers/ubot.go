@@ -176,16 +176,18 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		sisaDur := FormatDurationID(time.Until(expiresAt))
 		expFormatted := expiresAt.Format("02-01-2006 15:04:05")
 
-		params.Text = fmt.Sprintf(`🎉 <b>Userbot Berhasil Terpasang!</b>
-━━━━━━━━━━━━━━━━━━━━
-🎖️ <b>Tier Lisensi:</b> <code>%s</code>
-⏳ <b>Masa Aktif:</b> <code>%s</code> (Sisa %s)
-
-🔑 <b>Token SHA Backup (Kunci Brankas):</b>
-<code>%s</code>
-
-⚠️ <b>PENTING - Simpan token ini baik-baik!</b>
-<i>Jika sesi userbot Anda terlepas di kemudian hari atau ingin memindahkan database ke akun lain, gunakan token SHA di atas saat <code>/start</code> agar seluruh data promosi, catatan notes, prefix, dan grup target tidak hilang.</i>`,
+		params.Text = fmt.Sprintf(`<h1>🎉 Userbot Berhasil Terpasang!</h1>
+<blockquote expandable>Sesi akun Telegram Anda telah terhubung dan aktif sebagai userbot GotdBot MTProto. Seluruh modul siaran siap digunakan.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Keterangan</th></tr>
+  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Masa Aktif</td><td><code>%s</code> (Sisa %s)</td></tr>
+  <tr><td>🔑 Token SHA Backup</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>⚠️ <b>PENTING - Simpan token SHA di atas baik-baik!</b>
+Jika sesi akun Anda terlepas di kemudian hari, gunakan token ini saat <code>/start</code> agar seluruh list promosi, catatan notes, prefix, dan grup target tidak hilang.</blockquote>
+<hr/>
+<p>Selamat datang di GotdBot Control Panel:</p>`,
 			tier, expFormatted, sisaDur, tokenSHA,
 		)
 		params.ParseMode = "HTML"

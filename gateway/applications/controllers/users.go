@@ -42,8 +42,11 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 
 	if existingSession != nil {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "⏳ <b>Pemasangan sedang berlangsung.</b>\nLanjutkan proses atau ketik /cancel untuk membatalkan.",
+			ChatID: chatID,
+			Text: `<h1>⏳ Pemasangan Sedang Berjalan</h1>
+<blockquote expandable>Proses pemasangan sesi userbot Anda saat ini sedang berlangsung.</blockquote>
+<hr/>
+<p>Silakan lanjutkan proses atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: cachedCancelMarkup,
 		})
@@ -55,14 +58,16 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 	h.Sessions.sessions[chatID] = &UserSession{ChatID: chatID, State: "waiting_create_choice"}
 	h.Sessions.mu.Unlock()
 
-	greeting := fmt.Sprintf(
-		"👋 <b>Selamat datang, %s!</b>\n"+
-			"━━━━━━━━━━━━━━━━━━━━\n"+
-			"<b>GotdBot • Userbot Manager</b>\n\n"+
-			"• <b>🔑 Input Token</b> — Masukkan Voucher Master dari Owner atau Token SHA Backup Anda.\n"+
-			"• <b>🚀 Buat Userbot</b> — Sambungkan ulang otomatis menggunakan lisensi aktif Anda.",
-		html.EscapeString(userName),
-	)
+	greeting := fmt.Sprintf(`<h1>👋 Selamat Datang, %s!</h1>
+<blockquote expandable><b>GotdBot • Userbot Manager</b>
+Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto berkecepatan tinggi.</blockquote>
+<table border="1">
+  <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
+  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
+  <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
+</table>
+<hr/>
+<p>Silakan pilih opsi pemasangan pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,

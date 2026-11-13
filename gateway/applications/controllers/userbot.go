@@ -81,11 +81,16 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			h.Sessions.mu.Unlock()
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID: chatID,
-				Text: `<b>🔑 Input Token Lisensi</b>
-━━━━━━━━━━━━━━━━━━━━
-Masukkan Token, berguna untuk hak klaim kepemilikan database.
-
-<i>Kirimkan Token Master (<code>GOTD:...</code>) atau Token SHA Backup (<code>GOTD_SHA:...</code>) Anda.</i>`,
+				Text: `<h1>🔑 Input Token Lisensi</h1>
+<blockquote expandable><b>Hak Kepemilikan &amp; Lisensi Database</b>
+Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (brankas) agar seluruh data (list promosi, target grup, notes, prefix) otomatis terhubung kembali.</blockquote>
+<table border="1">
+  <tr><th>Jenis Token</th><th>Format</th></tr>
+  <tr><td>Voucher Master</td><td><code>GOTD:&lt;32_huruf&gt;</code></td></tr>
+  <tr><td>Token SHA Backup</td><td><code>GOTD_SHA:&lt;sha256&gt;</code></td></tr>
+</table>
+<hr/>
+<p>Kirimkan token Anda sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: cachedCancelMarkup,
 			})
@@ -97,9 +102,10 @@ Masukkan Token, berguna untuk hak klaim kepemilikan database.
 			if err != nil || lic == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID: chatID,
-					Text: `⚠️ <b>Akses Ditolak</b>
-━━━━━━━━━━━━━━━━━━━━
-Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan gunakan tombol <b>🔑 Input Token 🔑</b> untuk memasukkan token dari Owner.`,
+					Text: `<h1>⚠️ Akses Pemasangan Ditolak</h1>
+<blockquote expandable>Akun Telegram Anda belum memiliki lisensi yang aktif, atau masa aktif token Anda sebelumnya telah kedaluwarsa.</blockquote>
+<hr/>
+<p>Silakan gunakan tombol <b>🔑 Input Token 🔑</b> untuk memasukkan voucher dari Owner.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCreateChoiceMarkup,
 				})
@@ -119,11 +125,15 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID: chatID,
-				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Sisa: %s)\n"+
-					"━━━━━━━━━━━━━━━━━━━━\n"+
-					"Seluruh data (List, Grup, Notes, Prefix) otomatis terhubung kembali.\n\n"+
-					"📱 <b>Hubungkan Nomor Telegram</b>\n"+
-					"Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk mengirim nomor akun Anda.", lic.Tier, sisaDur),
+				Text: fmt.Sprintf(`<h1>✅ Token Terdeteksi: %s</h1>
+<blockquote expandable>Hak kepemilikan database &amp; seluruh data Anda (List, Grup, Notes, Prefix) otomatis terhubung kembali.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Keterangan</th></tr>
+  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Masa Aktif</td><td><code>Sisa %s</code></td></tr>
+</table>
+<hr/>
+<p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`, lic.Tier, lic.Tier, sisaDur),
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -131,8 +141,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 		}
 
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "Silakan pilih opsi dari tombol keyboard di bawah atau tekan <b>⬅️ Batal ⬅️</b>.",
+			ChatID: chatID,
+			Text: `<h1>⚠️ Pilihan Tidak Dikenali</h1>
+<blockquote expandable>Silakan gunakan salah satu tombol keyboard di bawah untuk melanjutkan proses pemasangan userbot.</blockquote>
+<hr/>
+<p>Pilih <b>🔑 Input Token 🔑</b> atau <b>🚀 Buat Userbot 🚀</b>, atau tekan <b>⬅️ Batal ⬅️</b>.</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: cachedCreateChoiceMarkup,
 		})
@@ -144,8 +157,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 			lic, err := h.db.GetUserLicenseBySHA(ctx, text)
 			if err != nil || lic == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        "❌ <b>Token SHA Tidak Ditemukan.</b>\nPastikan token yang Anda masukkan benar atau hubungi Owner.",
+					ChatID: chatID,
+					Text: `<h1>❌ Token SHA Tidak Ditemukan</h1>
+<blockquote expandable>Token SHA Backup yang Anda masukkan tidak terdaftar dalam database sistem.</blockquote>
+<hr/>
+<p>Pastikan token yang Anda masukkan benar atau hubungi Owner untuk verifikasi.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCancelMarkup,
 				})
@@ -153,8 +169,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 			}
 			if lic.Status != "active" || time.Now().After(lic.ExpiresAt) {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        fmt.Sprintf("❌ <b>Token SHA Sudah Kedaluwarsa.</b>\nMasa aktif token ini telah habis pada %s. Silakan minta token baru kepada Owner.", lic.ExpiresAt.Format("02-01-2006 15:04")),
+					ChatID: chatID,
+					Text: fmt.Sprintf(`<h1>❌ Token SHA Kedaluwarsa</h1>
+<blockquote expandable>Masa aktif token lisensi ini telah habis pada <b>%s</b>.</blockquote>
+<hr/>
+<p>Silakan hubungi Owner untuk memperpanjang lisensi Anda.</p>`, lic.ExpiresAt.Format("02-01-2006 15:04")),
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCancelMarkup,
 				})
@@ -174,11 +193,15 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID: chatID,
-				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Sisa: %s)\n"+
-					"━━━━━━━━━━━━━━━━━━━━\n"+
-					"Hak kepemilikan database &amp; seluruh data berhasil diklaim!\n\n"+
-					"📱 <b>Hubungkan Nomor Telegram</b>\n"+
-					"Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk mengirim nomor akun Anda.", lic.Tier, sisaDur),
+				Text: fmt.Sprintf(`<h1>✅ Token Terdeteksi: %s</h1>
+<blockquote expandable>Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim secara penuh.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Keterangan</th></tr>
+  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Masa Aktif</td><td><code>Sisa %s</code></td></tr>
+</table>
+<hr/>
+<p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`, lic.Tier, lic.Tier, sisaDur),
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -188,8 +211,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 		if strings.HasPrefix(text, "GOTD:") {
 			if !reValidMasterToken.MatchString(text) {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        "❌ <b>Format Token Salah.</b>\nToken Master harus berupa <code>GOTD:&lt;32_huruf_alfabet&gt;</code>.",
+					ChatID: chatID,
+					Text: `<h1>❌ Format Token Salah</h1>
+<blockquote expandable>Token Master harus berupa format <code>GOTD:&lt;32_huruf_alfabet&gt;</code>.</blockquote>
+<hr/>
+<p>Periksa kembali karakter token voucher yang Anda terima dari Owner.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCancelMarkup,
 				})
@@ -199,8 +225,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 			tm, err := h.db.GetTokenMaster(ctx, text)
 			if err != nil || tm == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        "❌ <b>Token Tidak Ditemukan.</b>\nToken voucher tidak terdaftar dalam sistem.",
+					ChatID: chatID,
+					Text: `<h1>❌ Token Tidak Ditemukan</h1>
+<blockquote expandable>Token voucher tidak terdaftar dalam database sistem.</blockquote>
+<hr/>
+<p>Pastikan kode token belum pernah dibatalkan oleh Owner.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCancelMarkup,
 				})
@@ -209,8 +238,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 
 			if tm.Status != "active" {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        "❌ <b>Token Tidak Aktif.</b>\nToken voucher ini telah dinonaktifkan.",
+					ChatID: chatID,
+					Text: `<h1>❌ Token Tidak Aktif</h1>
+<blockquote expandable>Token voucher ini telah dinonaktifkan oleh Owner.</blockquote>
+<hr/>
+<p>Silakan hubungi Owner untuk konfirmasi status token lisensi.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCancelMarkup,
 				})
@@ -219,8 +251,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 
 			if !tm.IsShared && tm.ClaimCount >= 1 {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        "❌ <b>Token Sudah Digunakan.</b>\nToken voucher personal ini sudah pernah diklaim sebelumnya.",
+					ChatID: chatID,
+					Text: `<h1>❌ Token Sudah Digunakan</h1>
+<blockquote expandable>Token voucher personal ini sudah pernah diklaim sebelumnya.</blockquote>
+<hr/>
+<p>Voucher personal hanya dapat diklaim satu kali per akun.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: cachedCancelMarkup,
 				})
@@ -240,11 +275,15 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID: chatID,
-				Text: fmt.Sprintf("✅ <b>Token Terdeteksi: %s</b> (Masa aktif: %s)\n"+
-					"━━━━━━━━━━━━━━━━━━━━\n"+
-					"Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim!\n\n"+
-					"📱 <b>Hubungkan Nomor Telegram</b>\n"+
-					"Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk mengirim nomor akun Anda.", tm.Tier, durStr),
+				Text: fmt.Sprintf(`<h1>✅ Token Terdeteksi: %s</h1>
+<blockquote expandable>Hak kepemilikan database &amp; seluruh data Anda berhasil diklaim secara penuh.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Keterangan</th></tr>
+  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Durasi Aktif</td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`, tm.Tier, tm.Tier, durStr),
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -252,8 +291,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 		}
 
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "❌ <b>Token Tidak Dikenali.</b>\nToken harus diawali dengan <code>GOTD:</code> (Voucher) atau <code>GOTD_SHA:</code> (Backup).\nSilakan masukkan token yang valid atau tekan <b>⬅️ Batal ⬅️</b>.",
+			ChatID: chatID,
+			Text: `<h1>❌ Token Tidak Dikenali</h1>
+<blockquote expandable>Format token harus diawali dengan <code>GOTD:</code> (Voucher Master) atau <code>GOTD_SHA:</code> (Token SHA Backup).</blockquote>
+<hr/>
+<p>Silakan masukkan token yang valid atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: cachedCancelMarkup,
 		})
@@ -272,8 +314,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 			contact := update.Message.Contact
 			if contact.UserID != 0 && contact.UserID != update.Message.From.ID {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        "⚠️ <b>Kontak Tidak Sesuai.</b>\nKirim kontak milik akun Telegram Anda sendiri via tombol <b>📱 Bagikan Kontak</b>.",
+					ChatID: chatID,
+					Text: `<h1>⚠️ Kontak Tidak Sesuai</h1>
+<blockquote expandable>Kontak yang Anda kirimkan bukan milik akun Telegram Anda sendiri.</blockquote>
+<hr/>
+<p>Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk membagikan nomor akun Anda.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: installPhoneKeyboard(),
 				})
@@ -284,8 +329,11 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 			text = normalizePhone(text)
 		} else {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "⚠️ Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk membagikan nomor akun Telegram Anda.",
+				ChatID: chatID,
+				Text: `<h1>📱 Hubungkan Nomor Akun</h1>
+<blockquote expandable>Untuk melanjutkan proses otorisasi userbot, silakan bagikan nomor akun Telegram Anda.</blockquote>
+<hr/>
+<p>Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah, atau ketik nomor dalam format internasional (+62...).</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: installPhoneKeyboard(),
 			})
@@ -295,7 +343,15 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 	case "waiting_otp":
 		text = strings.ReplaceAll(text, " ", "")
 		if len(text) < 4 || len(text) > 10 {
-			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "OTP harus berisi 4-10 digit."})
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID: chatID,
+				Text: `<h1>⚠️ Format OTP Tidak Valid</h1>
+<blockquote expandable>Kode verifikasi OTP harus terdiri dari 4 sampai 10 digit angka.</blockquote>
+<hr/>
+<p>Silakan kirimkan kode OTP yang benar, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
+				ParseMode:   "HTML",
+				ReplyMarkup: cancelKeyboard(),
+			})
 			return
 		}
 		event = "auth_otp"
@@ -305,7 +361,15 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 		}
 		event = "auth_password"
 	default:
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Pemasangan sedang diproses. Tunggu atau ketik /cancel."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID: chatID,
+			Text: `<h1>⏳ Pemasangan Sedang Diproses</h1>
+<blockquote expandable>Proses otorisasi akun Telegram Anda sedang berlangsung di latar belakang.</blockquote>
+<hr/>
+<p>Silakan tunggu sesaat, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
+			ParseMode:   "HTML",
+			ReplyMarkup: cancelKeyboard(),
+		})
 		return
 	}
 
@@ -322,7 +386,15 @@ Anda belum memiliki token aktif atau masa aktif token Anda telah habis. Silakan 
 			session.State = "waiting_" + session.State
 		}
 		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "Layanan pemasangan tidak tersedia. Coba lagi."})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID: chatID,
+			Text: `<h1>❌ Layanan Pemasangan Tidak Tersedia</h1>
+<blockquote expandable>Gagal menghubungi worker service userbot. Silakan coba sesaat lagi.</blockquote>
+<hr/>
+<p>Tekan tombol <b>⬅️ Batal ⬅️</b> untuk membatalkan pemasangan.</p>`,
+			ParseMode:   "HTML",
+			ReplyMarkup: cancelKeyboard(),
+		})
 	}
 }
 
@@ -341,14 +413,22 @@ func (h *Handler) cancelInstall(ctx context.Context, b *botgotd.Bot, update *bot
 
 	if hasActive {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "Pemasangan dibatalkan.",
+			ChatID: chatID,
+			Text: `<h1>↩️ Pemasangan Dibatalkan</h1>
+<blockquote expandable>Proses instalasi userbot telah dihentikan. Sesi userbot Anda saat ini tetap aktif dan berjalan normal.</blockquote>
+<hr/>
+<p>Kembali ke menu kontrol panel GotdBot:</p>`,
+			ParseMode:   "HTML",
 			ReplyMarkup: mainMenuMarkup,
 		})
 	} else {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "Pemasangan dibatalkan. Ketik /start untuk memasang userbot.",
+			ChatID: chatID,
+			Text: `<h1>↩️ Pemasangan Dibatalkan</h1>
+<blockquote expandable>Proses pemasangan userbot telah dibatalkan. Seluruh data sesi sementara telah dibersihkan.</blockquote>
+<hr/>
+<p>Ketik atau tekan <b>/start</b> kapan saja untuk memulai pemasangan kembali.</p>`,
+			ParseMode:   "HTML",
 			ReplyMarkup: cachedRemoveKeyboard,
 		})
 	}
@@ -447,14 +527,19 @@ func (h *Handler) HelpCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 	if update.Message == nil {
 		return
 	}
-	text := "<b>📖 Panduan Cepat Perintah</b>\n━━━━━━━━━━━━━━━━━━━━\n" +
-		"• <code>!ping</code> / <code>!p</code> — Ukur latency koneksi\n" +
-		"• <code>!help</code> — Buka menu bantuan interaktif\n" +
-		"• <code>!code [bahasa]</code> — Format kode pesan reply\n" +
-		"• <code>!eval</code> / <code>!sh</code> — Eksekusi command shell\n" +
-		"• <code>!setp none</code> — Nonaktifkan prefix command\n" +
-		"• <code>/start</code> — Setup userbot baru\n" +
-		"• <code>/cancel</code> — Batalkan instalasi"
+	text := `<h1>📖 Panduan Perintah GotdBot</h1>
+<blockquote expandable>Daftar shortcut dan perintah esensial untuk kontrol userbot MTProto.</blockquote>
+<table border="1">
+  <tr><th>Perintah</th><th>Fungsi</th></tr>
+  <tr><td><code>!ping</code> / <code>!p</code></td><td>Ukur latency koneksi MTProto</td></tr>
+  <tr><td><code>!help</code></td><td>Buka menu bantuan interaktif</td></tr>
+  <tr><td><code>!code [lang]</code></td><td>Format kode pesan reply</td></tr>
+  <tr><td><code>!eval</code> / <code>!sh</code></td><td>Eksekusi command runtime</td></tr>
+  <tr><td><code>!setp none</code></td><td>Nonaktifkan prefix command</td></tr>
+  <tr><td><code>/start</code></td><td>Menu utama &amp; Setup userbot</td></tr>
+</table>
+<hr/>
+<p>GotdBot • Interactive Assistance</p>`
 	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML"})
 }
 
@@ -472,23 +557,52 @@ type helpPageSnapshot struct {
 
 var cachedHelpPages = map[string]helpPageSnapshot{
 	"assist_help:home": {
-		text:   "<b>🤖 Asisten Pribadi Userbot</b>\n━━━━━━━━━━━━━━━━━━━━\nPilih kategori di bawah untuk melihat daftar bantuan perintah userbot.",
+		text: `<h1>🤖 Asisten Pribadi Userbot</h1>
+<blockquote expandable>Pilih kategori bantuan di bawah untuk melihat dokumentasi perintah dan fitur userbot.</blockquote>
+<hr/>
+<p>Sentuh salah satu tombol kategori:</p>`,
 		markup: cachedHelpHomeMarkup,
 	},
 	"assist_help:ping": {
-		text:   "<b>⚡ Ping &amp; Latency</b>\n━━━━━━━━━━━━━━━━━━━━\n<code>!ping</code> — Mengukur latency koneksi MTProto userbot ke Telegram.\n<code>!p</code> — Alias cepat.",
+		text: `<h1>⚡ Ping &amp; Latency</h1>
+<blockquote expandable>Mengukur kecepatan respons koneksi jaringan MTProto userbot ke server Telegram.</blockquote>
+<table border="1">
+  <tr><th>Perintah</th><th>Keterangan</th></tr>
+  <tr><td><code>!ping</code></td><td>Ukur latency lengkap</td></tr>
+  <tr><td><code>!p</code></td><td>Alias cepat</td></tr>
+</table>
+<hr/>
+<p>Gunakan perintah di atas pada chat Telegram Anda.</p>`,
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:notes": {
-		text:   "<b>📝 Manajemen Catatan</b>\n━━━━━━━━━━━━━━━━━━━━\n• <code>!save &lt;nama&gt; [-cb|-pop]</code> — Simpan catatan\n• <code>!get &lt;nama&gt;</code> / <code>#&lt;nama&gt;</code> — Ambil catatan\n• <code>!lsnote</code> — Daftar semua catatan\n• <code>!delnote &lt;nama&gt;</code> — Hapus catatan\n• <code>!clearnote</code> — Hapus semua catatan\n• <code>!exportnote</code> — Ekspor catatan\n• <code>!importnote</code> — Impor catatan",
+		text: `<h1>📝 Manajemen Catatan</h1>
+<blockquote expandable>Kelola catatan atau template teks cepat yang tersimpan di cloud database.</blockquote>
+<table border="1">
+  <tr><th>Perintah</th><th>Fungsi</th></tr>
+  <tr><td><code>!save &lt;nama&gt;</code></td><td>Simpan catatan</td></tr>
+  <tr><td><code>!get &lt;nama&gt;</code> / <code>#&lt;nama&gt;</code></td><td>Ambil catatan</td></tr>
+  <tr><td><code>!lsnote</code></td><td>Daftar semua catatan</td></tr>
+  <tr><td><code>!delnote &lt;nama&gt;</code></td><td>Hapus catatan</td></tr>
+  <tr><td><code>!clearnote</code></td><td>Hapus semua catatan</td></tr>
+  <tr><td><code>!exportnote</code> / <code>!importnote</code></td><td>Backup / Restore</td></tr>
+</table>
+<hr/>
+<p>Gunakan perintah di atas pada chat Telegram Anda.</p>`,
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:code": {
-		text:   "<b>💻 Format Kode</b>\n━━━━━━━━━━━━━━━━━━━━\nReply pesan apapun dengan <code>!code</code> atau <code>!code go</code> untuk memformat syntax highlighting via inline query.",
+		text: `<h1>💻 Format Kode &amp; Syntax</h1>
+<blockquote expandable>Format cuplikan kode pemrograman dengan penyorotan sintaks (syntax highlighting).</blockquote>
+<hr/>
+<p>Reply pesan apapun dengan <code>!code</code> atau <code>!code go</code> untuk memformat via inline query.</p>`,
 		markup: cachedHelpBackMarkup,
 	},
 	"assist_help:server": {
-		text:   "<b>🖥 Status Server</b>\n━━━━━━━━━━━━━━━━━━━━\n<code>!server</code> — Menampilkan status resource sistem &amp; gateway botgotd secara real-time.",
+		text: `<h1>🖥 Status Server</h1>
+<blockquote expandable>Menampilkan beban resource CPU, RAM, Uptime, dan performa Gateway MTProto.</blockquote>
+<hr/>
+<p>Ketik <code>!server</code> pada chat untuk memeriksa statistik sistem secara real-time.</p>`,
 		markup: cachedHelpBackMarkup,
 	},
 }
@@ -568,7 +682,10 @@ func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botg
 	if !ok {
 		renderStart := time.Now()
 		category := strings.TrimPrefix(data, "assist_help:")
-		text = fmt.Sprintf("<b>📖 Bantuan: %s</b>\n━━━━━━━━━━━━━━━━━━━━\nKategori ini tersedia pada menu bantuan userbot.", html.EscapeString(strings.ToUpper(category)))
+		text = fmt.Sprintf(`<h1>📖 Bantuan: %s</h1>
+<blockquote expandable>Dokumentasi perintah dan fitur untuk modul <b>%s</b>.</blockquote>
+<hr/>
+<p>Gunakan tombol di bawah untuk kembali ke beranda bantuan.</p>`, html.EscapeString(strings.ToUpper(category)), html.EscapeString(strings.ToUpper(category)))
 		markup = cachedHelpBackMarkup
 		renderDur = time.Since(renderStart)
 	}

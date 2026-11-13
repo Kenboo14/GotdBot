@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"os"
@@ -503,7 +504,10 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 
 func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
 	if client == nil {
-		s.reply(ctx, chatID, "❌ <b>Gagal Mengambil Grup:</b> Sesi userbot belum aktif.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Gagal Mengambil Grup</h1>
+<blockquote expandable>Sesi userbot belum aktif atau sedang terputus.</blockquote>
+<hr/>
+<p>Silakan hubungkan userbot melalui <b>/start</b>.</p>`, "panel_notice")
 		return
 	}
 
@@ -851,9 +855,16 @@ func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
 	case "auth_check":
 		installed, err := s.hasInstalledSession(ctx, job.ChatID, job.UserID)
 		if err != nil {
-			s.reply(ctx, job.ChatID, "Tidak dapat memeriksa sesi userbot. Coba lagi.", "failed")
+			s.reply(ctx, job.ChatID, `<h1>❌ Gagal Memeriksa Sesi</h1>
+<blockquote expandable>Tidak dapat memverifikasi sesi userbot saat ini. Silakan coba sesaat lagi.</blockquote>
+<hr/>
+<p>Ketik /start untuk mencoba kembali.</p>`, "failed")
 		} else if installed {
-			s.reply(ctx, job.ChatID, "Userbot sudah terpasang untuk akun ini. Satu pengguna hanya dapat memiliki satu sesi aktif.", "failed")
+			s.reply(ctx, job.ChatID, `<h1>⚠️ Sesi Userbot Sudah Aktif</h1>
+<blockquote expandable>Akun Telegram ini sudah terpasang dan memiliki sesi aktif di sistem GotdBot.
+Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
+<hr/>
+<p>Gunakan menu kontrol panel atau ketik <b>/status</b> untuk melihat status akun Anda.</p>`, "failed")
 		} else {
 			// Kirim state waiting_phone tanpa text → gateway hanya update state,
 			// pesan permintaan nomor sudah dikirim oleh gateway sebelumnya (single response)
@@ -861,25 +872,41 @@ func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
 		}
 	case "auth_phone":
 		if current != nil {
-			s.reply(ctx, job.ChatID, "Pemasangan masih berjalan. Ketik /cancel bila ingin memulai ulang.", "waiting_otp")
+			s.reply(ctx, job.ChatID, `<h1>⏳ Pemasangan Sedang Berjalan</h1>
+<blockquote expandable>Proses otorisasi akun Telegram Anda masih berlangsung di latar belakang.</blockquote>
+<hr/>
+<p>Silakan kirimkan kode OTP Anda, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, "waiting_otp")
 			return
 		}
 		if installed, err := s.hasInstalledSession(ctx, job.ChatID, job.UserID); err != nil {
-			s.reply(ctx, job.ChatID, "Tidak dapat memeriksa sesi userbot. Coba lagi.", "failed")
+			s.reply(ctx, job.ChatID, `<h1>❌ Gagal Memeriksa Sesi</h1>
+<blockquote expandable>Tidak dapat memverifikasi sesi userbot saat ini. Silakan coba sesaat lagi.</blockquote>
+<hr/>
+<p>Ketik /start untuk mencoba kembali.</p>`, "failed")
 		} else if installed {
-			s.reply(ctx, job.ChatID, "Userbot sudah terpasang untuk akun ini. Satu pengguna hanya dapat memiliki satu sesi aktif.", "failed")
+			s.reply(ctx, job.ChatID, `<h1>⚠️ Sesi Userbot Sudah Aktif</h1>
+<blockquote expandable>Akun Telegram ini sudah terpasang dan memiliki sesi aktif di sistem GotdBot.
+Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
+<hr/>
+<p>Gunakan menu kontrol panel atau ketik <b>/status</b> untuk melihat status akun Anda.</p>`, "failed")
 		} else {
 			s.start(ctx, job.ChatID, job.UserID, strings.TrimSpace(job.Text))
 		}
 	case "auth_otp":
 		if current == nil {
-			s.reply(ctx, job.ChatID, "Sesi pemasangan sudah kedaluwarsa. Ketik /start untuk memulai kembali.", "failed")
+			s.reply(ctx, job.ChatID, `<h1>⏳ Sesi Pemasangan Kedaluwarsa</h1>
+<blockquote expandable>Batas waktu tunggu input kode OTP telah habis (timeout).</blockquote>
+<hr/>
+<p>Ketik atau tekan <b>/start</b> untuk memulai pemasangan kembali.</p>`, "failed")
 			return
 		}
 		sendSecret(current.otp, job.Text)
 	case "auth_password":
 		if current == nil {
-			s.reply(ctx, job.ChatID, "Sesi pemasangan sudah kedaluwarsa. Ketik /start untuk memulai kembali.", "failed")
+			s.reply(ctx, job.ChatID, `<h1>⏳ Sesi Pemasangan Kedaluwarsa</h1>
+<blockquote expandable>Batas waktu tunggu input password 2FA telah habis (timeout).</blockquote>
+<hr/>
+<p>Ketik atau tekan <b>/start</b> untuk memulai pemasangan kembali.</p>`, "failed")
 			return
 		}
 		sendSecret(current.password, job.Text)
@@ -900,7 +927,11 @@ func (s *Service) start(parent context.Context, chatID, ownerID int64, phone str
 		defer cancel()
 		defer s.remove(chatID)
 		if err := s.authorize(ctx, chatID, ownerID, phone, l); err != nil && !errors.Is(err, context.Canceled) {
-			s.reply(parent, chatID, "Pemasangan gagal: "+safeError(err), "failed")
+			errMsg := fmt.Sprintf(`<h1>❌ Pemasangan Gagal</h1>
+<blockquote expandable>%s</blockquote>
+<hr/>
+<p>Ketik atau tekan <b>/start</b> untuk memulai pemasangan kembali.</p>`, html.EscapeString(safeError(err)))
+			s.reply(parent, chatID, errMsg, "failed")
 		}
 	}()
 }
@@ -931,7 +962,17 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 			otpTarget = "alamat email yang terhubung ke Telegram"
 		}
 
-		s.reply(ctx, chatID, fmt.Sprintf("📩 <b>Kode OTP telah dikirimkan ke %s.</b>\n\nKirimkan kode OTP (4-10 digit). Spasi boleh digunakan (contoh: <code>1 2 3 4 5</code>).\nKetik /cancel jika ingin membatalkan.", otpTarget), "waiting_otp")
+		otpMsg := fmt.Sprintf(`<h1>📩 Verifikasi Kode OTP</h1>
+<blockquote expandable>Kode OTP telah dikirimkan ke <b>%s</b>.
+Silakan periksa pesan notifikasi resmi dari Telegram (bukan SMS biasa).</blockquote>
+<table border="1">
+  <tr><th>Format Kode</th><th>Ketentuan</th></tr>
+  <tr><td>Panjang Digit</td><td>4–10 digit angka</td></tr>
+  <tr><td>Pemisah Spasi</td><td>Boleh digunakan (contoh: <code>1 2 3 4 5</code>)</td></tr>
+</table>
+<hr/>
+<p>Kirimkan kode OTP sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, otpTarget)
+		s.reply(ctx, chatID, otpMsg, "waiting_otp")
 
 		// Loop percobaan OTP dengan retry otomatis bila salah input
 		var signInErr error
@@ -948,7 +989,12 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 			errStr := strings.ToLower(signInErr.Error())
 			if strings.Contains(errStr, "phone_code_invalid") {
 				if attempt < 3 {
-					s.reply(ctx, chatID, fmt.Sprintf("⚠️ <b>Kode OTP salah (Percobaan %d/3).</b>\nSilakan periksa kembali dan kirimkan kode OTP yang benar:\n(Ketik /cancel untuk membatalkan)", attempt), "waiting_otp")
+					retryMsg := fmt.Sprintf(`<h1>⚠️ Kode OTP Tidak Valid</h1>
+<blockquote expandable>Kode OTP yang Anda masukkan salah atau sudah kedaluwarsa (Percobaan <b>%d/3</b>).
+Pastikan memasukkan kode OTP terbaru yang dikirimkan oleh Telegram.</blockquote>
+<hr/>
+<p>Silakan kirimkan kode OTP yang benar, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, attempt)
+					s.reply(ctx, chatID, retryMsg, "waiting_otp")
 					continue
 				}
 			}
@@ -957,7 +1003,15 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 
 		// Jika akun memakai 2FA (Verifikasi 2 Langkah)
 		if errors.Is(signInErr, auth.ErrPasswordAuthNeeded) {
-			s.reply(ctx, chatID, "🔐 <b>Akun memakai Verifikasi 2 Langkah (2FA).</b>\nSilakan kirimkan password 2FA akun Anda.\n(Ketik /cancel untuk membatalkan)", "waiting_password")
+			twoFaMsg := `<h1>🔐 Verifikasi 2 Langkah (2FA)</h1>
+<blockquote expandable>Akun Telegram Anda diproteksi dengan kata sandi Two-Step Verification (2FA).</blockquote>
+<table border="1">
+  <tr><th>Tipe Autentikasi</th><th>Keamanan</th></tr>
+  <tr><td>Password Cloud 2FA</td><td>Terenkripsi End-to-End MTProto</td></tr>
+</table>
+<hr/>
+<p>Silakan kirimkan password 2FA akun Anda, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
+			s.reply(ctx, chatID, twoFaMsg, "waiting_password")
 			for passAttempt := 1; passAttempt <= 3; passAttempt++ {
 				password, err := receiveSecret(ctx, l.password)
 				if err != nil {
@@ -969,7 +1023,12 @@ func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone st
 					errStr := strings.ToLower(passErr.Error())
 					if strings.Contains(errStr, "password") {
 						if passAttempt < 3 {
-							s.reply(ctx, chatID, fmt.Sprintf("⚠️ <b>Password 2FA salah (Percobaan %d/3).</b>\nSilakan masukkan password 2FA Anda kembali:\n(Ketik /cancel untuk membatalkan)", passAttempt), "waiting_password")
+							passRetryMsg := fmt.Sprintf(`<h1>⚠️ Password 2FA Salah</h1>
+<blockquote expandable>Password verifikasi 2 langkah yang Anda masukkan tidak sesuai (Percobaan <b>%d/3</b>).
+Perhatikan huruf besar/kecil pada password akun Anda.</blockquote>
+<hr/>
+<p>Silakan kirimkan password 2FA yang benar, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, passAttempt)
+							s.reply(ctx, chatID, passRetryMsg, "waiting_password")
 							continue
 						}
 					}
@@ -1343,7 +1402,10 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 	s.mu.Unlock()
 
 	// Kirim pesan notifikasi instan ke bot gateway
-	s.reply(context.Background(), chatID, "⚠️ <b>Sesi Terlepas!</b>\n\n<blockquote><i>Sesi terlepas, silakan pasang kembali dengan /start</i></blockquote>", "session_revoked")
+	s.reply(context.Background(), chatID, `<h1>⚠️ Sesi Userbot Terlepas</h1>
+<blockquote expandable>Koneksi MTProto userbot Anda terputus atau sesi telah dicabut dari aplikasi Telegram.</blockquote>
+<hr/>
+<p>Ketik atau tekan <b>/start</b> untuk menyambungkan kembali akun Anda.</p>`, "session_revoked")
 }
 
 func (s *Service) recordIncomingUpdate(chatID int64) {
@@ -1866,19 +1928,19 @@ func safeError(err error) string {
 	text := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(text, "phone_code_invalid"):
-		return "OTP tidak valid. Silakan ulangi dari /start."
+		return "Kode OTP tidak valid atau salah ketik."
 	case strings.Contains(text, "phone_code_expired"):
-		return "Kode OTP sudah kedaluwarsa. Silakan ulangi dari /start."
+		return "Kode OTP sudah kedaluwarsa. Silakan mulai ulang untuk meminta kode baru."
 	case strings.Contains(text, "password_hash_invalid"), strings.Contains(text, "password"):
-		return "Password 2FA salah. Silakan ulangi dari /start."
+		return "Password 2FA yang dimasukkan salah setelah batas percobaan tercapai."
 	case strings.Contains(text, "phone_number_invalid"):
-		return "Nomor telepon tidak valid. Pastikan format nomor benar (+62...)."
+		return "Nomor telepon tidak valid. Pastikan format nomor internasional benar (+62...)."
 	case strings.Contains(text, "phone_number_banned"):
-		return "Nomor telepon diblokir oleh Telegram."
+		return "Nomor telepon ini diblokir / banned oleh Telegram."
 	case strings.Contains(text, "flood"):
-		return "Terlalu banyak percobaan (FloodWait). Tunggu beberapa menit sebelum mencoba lagi via /start."
+		return "Terlalu banyak percobaan dalam waktu singkat (FloodWait). Silakan tunggu beberapa menit."
 	default:
-		return "Telegram menolak permintaan (" + err.Error() + "). Silakan ulangi dari /start."
+		return "Telegram menolak permintaan otorisasi (" + err.Error() + ")."
 	}
 }
 

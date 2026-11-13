@@ -193,17 +193,26 @@ func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey 
 func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client, chatID, ownerID int64, taskID string) {
 	index, err := strconv.Atoi(taskID)
 	if err != nil || index < 0 {
-		s.reply(ctx, chatID, "❌ Nomor list tidak valid.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Nomor List Tidak Valid</h1>
+<blockquote expandable>Indeks materi list yang dipilih tidak sesuai atau telah berubah.</blockquote>
+<hr/>
+<p>Silakan buka ulang menu Cek List.</p>`, "panel_notice")
 		return
 	}
 	cfg := s.getJasebConfig(ctx, ownerID)
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
-		s.reply(ctx, chatID, "❌ Userbot tidak dapat mengakses cache List.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Gagal Akses Cache</h1>
+<blockquote expandable>Userbot tidak dapat terhubung ke saluran cache penyimpanan materi.</blockquote>
+<hr/>
+<p>Pastikan akun userbot bergabung ke channel cache.</p>`, "panel_notice")
 		return
 	}
 	if index >= len(cfg.Lists) {
-		s.reply(ctx, chatID, "❌ List sudah tidak tersedia. Silakan buka ulang Cek List.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ List Tidak Ditemukan</h1>
+<blockquote expandable>Materi list yang Anda pilih sudah tidak tersedia di database.</blockquote>
+<hr/>
+<p>Silakan periksa kembali daftar list pada menu Cek List.</p>`, "panel_notice")
 		return
 	}
 	msgID := cfg.Lists[index]
@@ -212,7 +221,10 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 	message, err := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
 	if err != nil || message == nil {
 		log.Printf("[list-detail] fetchCacheMessage cache=%d failed: %v", msgID, err)
-		s.reply(ctx, chatID, "❌ Detail List tidak dapat diambil dari AiotdCaches. Silakan coba sesaat lagi.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Gagal Memuat Detail List</h1>
+<blockquote expandable>Detail materi list tidak dapat diambil dari channel cache saat ini.</blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, "panel_notice")
 		return
 	}
 
@@ -381,7 +393,10 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 	cfg := s.getJasebConfig(ctx, ownerID)
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
-		s.reply(ctx, chatID, "❌ Userbot tidak dapat mengakses cache List.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Gagal Akses Cache</h1>
+<blockquote expandable>Userbot tidak dapat terhubung ke saluran cache penyimpanan materi.</blockquote>
+<hr/>
+<p>Pastikan akun userbot bergabung ke channel cache.</p>`, "panel_notice")
 		return
 	}
 	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
@@ -1063,7 +1078,10 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	if sourceCount > 0 {
 		mediaIDs, err = s.relayPanelMediaToCache(ctx, client, sourceCount, topicID)
 		if err != nil {
-			s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan Media:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+			s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Gagal Menyimpan Media</h1>
+<blockquote expandable>Terjadi kesalahan saat mengunggah media ke saluran cache: <code>%s</code></blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, html.EscapeString(err.Error())), "panel_notice")
 			return
 		}
 	}
@@ -1087,11 +1105,17 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 		mediaTypeLabel = "Teks"
 	}
 	if err != nil {
-		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan ke Cache:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+		s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Gagal Menyimpan ke Cache</h1>
+<blockquote expandable>Terjadi kesalahan saat menyimpan materi ke cache: <code>%s</code></blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, html.EscapeString(err.Error())), "panel_notice")
 		return
 	}
 	if cachedMsgID <= 0 {
-		s.reply(ctx, chatID, "❌ <b>Gagal Menyimpan ke Cache:</b> ID pesan cache tidak valid.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Gagal Menyimpan ke Cache</h1>
+<blockquote expandable>ID pesan cache yang diterima tidak valid.</blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, "panel_notice")
 		return
 	}
 
@@ -1132,7 +1156,10 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 	if sourceCount > 0 {
 		mediaIDs, err = s.relayPanelMediaToCache(ctx, client, sourceCount, topicID)
 		if err != nil {
-			s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan Media:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+			s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Gagal Menyimpan Media</h1>
+<blockquote expandable>Terjadi kesalahan saat mengunggah media watermark: <code>%s</code></blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, html.EscapeString(err.Error())), "panel_notice")
 			return
 		}
 	}
@@ -1142,11 +1169,17 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 		cachedMsgID, err = s.sendTextToAiotdCachesTopic(ctx, client, topicID, text, toMTProtoEntities(entities))
 	}
 	if err != nil {
-		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menyimpan ke Cache:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+		s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Gagal Menyimpan ke Cache</h1>
+<blockquote expandable>Terjadi kesalahan saat menyimpan watermark ke cache: <code>%s</code></blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, html.EscapeString(err.Error())), "panel_notice")
 		return
 	}
 	if cachedMsgID <= 0 {
-		s.reply(ctx, chatID, "❌ <b>Gagal Menyimpan ke Cache:</b> ID pesan cache tidak valid.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>❌ Gagal Menyimpan ke Cache</h1>
+<blockquote expandable>ID pesan cache watermark tidak valid.</blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, "panel_notice")
 		return
 	}
 
@@ -1173,7 +1206,14 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
 	s.publishConfigUpdated(ctx, ownerID)
 
-	report := fmt.Sprintf("✅ <b>Custom Watermark Berhasil Disimpan!</b>\n\n<blockquote><i>Watermark telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></i></blockquote>\n\nWatermark: <code>%s</code>", getGroupCache(), topicID, cachedMsgID, html.EscapeString(text))
+	report := fmt.Sprintf(`<h1>✅ Custom Watermark Disimpan</h1>
+<blockquote expandable>Watermark promosi telah berhasil diamankan ke saluran cache media.</blockquote>
+<table border="1">
+  <tr><th>Cache Channel</th><th>Topic ID</th><th>Message ID</th></tr>
+  <tr><td>@%s</td><td><code>%d</code></td><td><code>#%d</code></td></tr>
+</table>
+<hr/>
+<p>Watermark: <code>%s</code></p>`, getGroupCache(), topicID, cachedMsgID, html.EscapeString(text))
 	s.reply(ctx, chatID, report, "panel_notice")
 }
 
@@ -1211,25 +1251,37 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 
 	cfg := s.getJasebConfig(ctx, ownerID)
 	if len(cfg.Groups) == 0 {
-		s.reply(ctx, chatID, "⚠️ <b>Siaran Tidak Dapat Berjalan:</b>\n\n<blockquote><i>Daftar grup target masih kosong! Silakan tambahkan grup terlebih dahulu melalui menu <b>🧩 Grup & List 🧩</b>.</i></blockquote>", "panel_notice")
+		s.reply(ctx, chatID, `<h1>⚠️ Siaran Tidak Dapat Berjalan</h1>
+<blockquote expandable>Daftar grup target siaran Anda masih kosong.</blockquote>
+<hr/>
+<p>Silakan tambahkan grup terlebih dahulu melalui menu <b>🧩 Grup &amp; List 🧩</b>.</p>`, "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", "Grup target kosong")
 		return
 	}
 	if len(cfg.Lists) == 0 {
-		s.reply(ctx, chatID, "⚠️ <b>Siaran Tidak Dapat Berjalan:</b>\n\n<blockquote><i>Daftar materi list promosi masih kosong! Silakan tambahkan list terlebih dahulu melalui menu <b>🧩 Grup & List 🧩</b>.</i></blockquote>", "panel_notice")
+		s.reply(ctx, chatID, `<h1>⚠️ Siaran Tidak Dapat Berjalan</h1>
+<blockquote expandable>Daftar materi list promosi Anda masih kosong.</blockquote>
+<hr/>
+<p>Silakan tambahkan materi list terlebih dahulu melalui menu <b>🧩 Grup &amp; List 🧩</b>.</p>`, "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", "Materi list kosong")
 		return
 	}
 
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
-		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Menghubungi @%s:</b> <code>%s</code>", getGroupCache(), html.EscapeString(err.Error())), "panel_notice")
+		s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Gagal Menghubungi Saluran Cache</h1>
+<blockquote expandable>Tidak dapat terhubung ke @%s: <code>%s</code></blockquote>
+<hr/>
+<p>Pastikan akun userbot Anda telah bergabung ke saluran cache.</p>`, getGroupCache(), html.EscapeString(err.Error())), "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", "Gagal menghubungi cache")
 		return
 	}
 	cfg.Lists = s.normalizePanelListIDs(ctx, client, cachePeer, ownerID, cfg.Lists)
 	if len(cfg.Lists) == 0 {
-		s.reply(ctx, chatID, "⚠️ <b>Siaran Tidak Dapat Berjalan:</b> Materi list kosong setelah normalisasi.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>⚠️ Siaran Tidak Dapat Berjalan</h1>
+<blockquote expandable>Materi list kosong setelah dilakukan proses normalisasi cache.</blockquote>
+<hr/>
+<p>Silakan periksa kembali daftar list pada menu Cek List.</p>`, "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berhenti", "Materi list kosong")
 		return
 	}
@@ -1240,7 +1292,14 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 	}
 
 	if !resume {
-		s.reply(ctx, chatID, fmt.Sprintf("🚀 <b>Siaran Otomatis Dimulai!</b>\n\n<blockquote><i>Mengirim materi promosi ke <code>%d</code> grup target dengan jeda <code>%d detik</code> per grup.</i></blockquote>", len(cfg.Groups), delaySec), "panel_notice")
+		s.reply(ctx, chatID, fmt.Sprintf(`<h1>🚀 Siaran Otomatis Dimulai!</h1>
+<blockquote expandable>Tugas siaran promosi otomatis telah aktif dan berjalan di latar belakang.</blockquote>
+<table border="1">
+  <tr><th>Target Grup</th><th>Jeda Antar Grup</th></tr>
+  <tr><td><code>%d grup</code></td><td><code>%d detik</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Broadcast Worker</p>`, len(cfg.Groups), delaySec), "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(cfg.Groups)))
 	}
 
@@ -1428,12 +1487,18 @@ func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due tim
 func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
 	cfg := s.getJasebConfig(ctx, ownerID)
 	if len(cfg.Lists) == 0 {
-		s.reply(ctx, chatID, "⚠️ <b>Uji Coba Gagal:</b> List materi promosi masih kosong.", "panel_notice")
+		s.reply(ctx, chatID, `<h1>⚠️ Uji Coba Gagal</h1>
+<blockquote expandable>Daftar materi list promosi Anda masih kosong.</blockquote>
+<hr/>
+<p>Silakan tambahkan list materi terlebih dahulu melalui menu <b>🧩 Grup &amp; List 🧩</b>.</p>`, "panel_notice")
 		return
 	}
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
-		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Gagal Cache:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+		s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Gagal Akses Cache</h1>
+<blockquote expandable>Gagal terhubung ke saluran cache penyimpanan: <code>%s</code></blockquote>
+<hr/>
+<p>Pastikan akun userbot bergabung ke channel cache.</p>`, html.EscapeString(err.Error())), "panel_notice")
 		return
 	}
 
@@ -1453,14 +1518,24 @@ func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Cl
 	}
 	_, err = client.API().MessagesForwardMessages(ctx, req)
 	if err != nil {
-		s.reply(ctx, chatID, fmt.Sprintf("❌ <b>Uji Coba Gagal:</b> <code>%s</code>", html.EscapeString(err.Error())), "panel_notice")
+		s.reply(ctx, chatID, fmt.Sprintf(`<h1>❌ Uji Coba Siaran Gagal</h1>
+<blockquote expandable>Gagal meneruskan materi promosi ke Saved Messages: <code>%s</code></blockquote>
+<hr/>
+<p>Silakan periksa izin kirim pesan akun userbot Anda.</p>`, html.EscapeString(err.Error())), "panel_notice")
 		return
 	}
-	msgTypeInfo := "materi"
+	msgTypeInfo := "materi single"
 	if len(forwardIDs) > 1 {
 		msgTypeInfo = fmt.Sprintf("album %d media", len(forwardIDs))
 	}
-	s.reply(ctx, chatID, fmt.Sprintf("✅ <b>Uji Coba Berhasil!</b>\n\n<blockquote><i>Materi promosi (Cache ID: <code>#%d</code>, %s) telah berhasil dikirim ke Saved Messages akun Telegram Anda.</i></blockquote>", msgID, msgTypeInfo), "panel_notice")
+	s.reply(ctx, chatID, fmt.Sprintf(`<h1>✅ Uji Coba Siaran Berhasil</h1>
+<blockquote expandable>Materi promosi telah berhasil dikirim ke Saved Messages (Pesan Tersimpan) akun Telegram Anda.</blockquote>
+<table border="1">
+  <tr><th>Cache Message ID</th><th>Tipe Materi</th></tr>
+  <tr><td><code>#%d</code></td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Test Broadcast Result</p>`, msgID, msgTypeInfo), "panel_notice")
 }
 
 func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *telegram.Client, ownerID int64) {
