@@ -34,7 +34,7 @@ func TxtStartGreeting(userName string) string {
 Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto berkecepatan tinggi.</blockquote>
 <table border="1">
   <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
-  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token SHA</td></tr>
+  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token</td></tr>
   <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
   <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
   <tr><td>🎯 Control</td><td>Menu utama kontrol panel userbot</td></tr>
@@ -212,6 +212,16 @@ func TxtControlListSentSuccess(targetName string, targetID int64) string {
 	)
 }
 
+// TxtControlMediaSaving is shown while remote media is being processed.
+func TxtControlMediaSaving(targetName string, targetID int64) string {
+	return fmt.Sprintf(
+		`<h1>⏳ Media Sedang Disimpan ke Cache (Remote)</h1>`+
+			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
+			`<blockquote expandable>Media materi promosi sedang diproses oleh sesi userbot target.</blockquote>`,
+		html.EscapeString(targetName), targetID,
+	)
+}
+
 // TxtControlGrupSentSuccess is shown after remote tambah-grup completes.
 func TxtControlGrupSentSuccess(targetName string, targetID int64, count int) string {
 	return fmt.Sprintf(
@@ -369,4 +379,3 @@ const TxtResetKonfigurasiSukses = `<h1>🔄 Konfigurasi Berhasil Direset</h1>` +
 	`<hr/><p>GotdBot • Reset Data Manager</p>`
 
 const TxtTindakanDibatalkan = `<p>↩️ <b>Tindakan dibatalkan.</b></p>`
-

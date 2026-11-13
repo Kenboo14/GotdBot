@@ -289,9 +289,10 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		payload := models.PToService{
-			ChatID: 0,
-			UserID: targetID,
-			Type:   "fetch_groups",
+			ChatID:  0,
+			UserID:  targetID,
+			OwnerID: targetID,
+			Type:    "fetch_groups",
 		}
 		_ = h.broker.To(brokerCtx, "to:ubot:command", payload)
 		h.RenderControlImportGroupsStarted(ctx, b, chatID, messageID, targetID)

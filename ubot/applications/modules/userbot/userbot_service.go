@@ -320,7 +320,7 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 	var job models.PToService
-	if json.Unmarshal([]byte(payload), &job) != nil || job.ChatID == 0 {
+	if json.Unmarshal([]byte(payload), &job) != nil || (job.ChatID == 0 && job.UserID == 0 && job.OwnerID == 0) {
 		return
 	}
 	if job.Type == "broadcast_cancel" {
@@ -1082,6 +1082,9 @@ func (s *Service) reply(ctx context.Context, chatID int64, text, state string) {
 }
 
 func (s *Service) replyWithOwner(ctx context.Context, chatID, ownerID int64, text, state string) {
+	if chatID == 0 {
+		return
+	}
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, OwnerID: ownerID, Text: text, State: state})
 }
 

@@ -63,17 +63,14 @@ type AccountItem struct {
 }
 
 // CtrlAccountListIKB returns the inline keyboard for ctrl:list (single-use; built on demand).
-// Each row = one account button. Close button at the bottom.
+// Each row = one account button.
 func CtrlAccountListIKB(accounts []AccountItem) *botgotd.InlineKeyboardMarkup {
-	rows := make([][]botgotd.InlineKeyboardButton, 0, len(accounts)+1)
+	rows := make([][]botgotd.InlineKeyboardButton, 0, len(accounts))
 	for _, a := range accounts {
 		rows = append(rows, []botgotd.InlineKeyboardButton{
 			btn(a.Name, fmt.Sprintf("ctrl:select:%d", a.ID)),
 		})
 	}
-	rows = append(rows, []botgotd.InlineKeyboardButton{
-		btn(IkbTutupPanel, "ctrl:close"),
-	})
 	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -84,7 +81,6 @@ func CtrlAdminMenuIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
 			{btn(IkbStatus, "ctrl:status:"+t), btn(IkbGrupList, "ctrl:gruplist:"+t)},
 			{btn(IkbAturJeda, "ctrl:jeda:"+t), btn(IkbListAkun, "ctrl:list")},
-			{btn(IkbTutupPanel, "ctrl:close")},
 		},
 	}
 }
@@ -95,7 +91,7 @@ func CtrlStatusIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 	return &botgotd.InlineKeyboardMarkup{
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
 			{btn(IkbRefreshStatus, "ctrl:status_refresh:"+t)},
-			{btn(IkbKembali, "ctrl:menu:"+t), btn(IkbTutupPanel, "ctrl:close")},
+			{btn(IkbKembali, "ctrl:menu:"+t)},
 		},
 	}
 }
@@ -108,7 +104,7 @@ func CtrlGrupListIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 			{btn(IkbCekList, "ctrl:cek_list:"+t), btn(IkbCekGrup, "ctrl:cek_grup:"+t)},
 			{btn(IkbTambahList, "ctrl:tambah_list:"+t), btn(IkbTambahGrup, "ctrl:tambah_grup:"+t)},
 			{btn(IkbHapusList, "ctrl:hapus_list_confirm:"+t), btn(IkbHapusGrup, "ctrl:hapus_grup_confirm:"+t)},
-			{btn(IkbKembali, "ctrl:menu:"+t), btn(IkbTutupPanel, "ctrl:close")},
+			{btn(IkbKembali, "ctrl:menu:"+t)},
 		},
 	}
 }
@@ -129,7 +125,6 @@ func CtrlCekListIKB(targetID int64, page, totalPages int) *botgotd.InlineKeyboar
 	}
 	rows = append(rows, []botgotd.InlineKeyboardButton{
 		btn(IkbKembaliGrupList, "ctrl:gruplist:"+t),
-		btn(IkbTutupPanel, "ctrl:close"),
 	})
 	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -150,7 +145,6 @@ func CtrlCekGrupIKB(targetID int64, page, totalPages int) *botgotd.InlineKeyboar
 	}
 	rows = append(rows, []botgotd.InlineKeyboardButton{
 		btn(IkbKembaliGrupList, "ctrl:gruplist:"+t),
-		btn(IkbTutupPanel, "ctrl:close"),
 	})
 	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -202,7 +196,7 @@ func CtrlJedaIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 				btn(IkbJeda30, "ctrl:set_jeda:"+t+":30"),
 				btn(IkbJeda60, "ctrl:set_jeda:"+t+":60"),
 			},
-			{btn(IkbKembali, "ctrl:menu:"+t), btn(IkbTutupPanel, "ctrl:close")},
+			{btn(IkbKembali, "ctrl:menu:"+t)},
 		},
 	}
 }
@@ -234,7 +228,7 @@ func CtrlDoneIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 	t := fmt.Sprintf("%d", targetID)
 	return &botgotd.InlineKeyboardMarkup{
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-			{btn(IkbKembaliGrupList, "ctrl:gruplist:"+t), btn(IkbTutupPanel, "ctrl:close")},
+			{btn(IkbKembaliGrupList, "ctrl:gruplist:"+t)},
 		},
 	}
 }
@@ -244,6 +238,6 @@ func CtrlDoneIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 // StatusPanelIKB returns the refresh button for the user's own status page.
 var StatusPanelIKB = &botgotd.InlineKeyboardMarkup{
 	InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-		{{Text: IkbRefreshStatusPanel, CallbackData: "panel:status:refresh"}},
+		{btn(IkbRefreshStatusPanel, "panel:status:refresh")},
 	},
 }

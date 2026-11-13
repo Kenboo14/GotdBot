@@ -1600,6 +1600,7 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 		payload := models.PToService{
 			ChatID:           0, // 0 agar ubot tidak membalas via SendMessage + ReplyKeyboard
 			UserID:           targetID,
+			OwnerID:          targetID,
 			Type:             "cache_list",
 			MediaSourceCount: len(sourceIDs),
 			Text:             caption,
@@ -1612,21 +1613,12 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 			if targetName == "" {
 				targetName = fmt.Sprintf("Akun [%d]", targetID)
 			}
-			text := fmt.Sprintf(`<b>⏳ Media Sedang Disimpan ke Cache (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-
-<blockquote>Media materi promosi sedang diproses oleh sesi userbot target.</blockquote>`, html.EscapeString(targetName), targetID)
-			rows := [][]botgotd.InlineKeyboardButton{
-				{{Text: "🔙 Kembali ke Grup & List 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
-			}
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:      chatID,
 				MessageID:   parentMsgID,
-				Text:        text,
+				Text:        assets.TxtControlMediaSaving(targetName, targetID),
 				ParseMode:   "HTML",
-				ReplyMarkup: &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows},
+				ReplyMarkup: assets.CtrlDoneIKB(targetID),
 			})
 		}
 		return
@@ -1714,6 +1706,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		payload := models.PToService{
 			ChatID:   0, // 0 agar ubot tidak membalas via SendMessage + ReplyKeyboard
 			UserID:   targetID,
+			OwnerID:  targetID,
 			Type:     "cache_list",
 			Text:     text,
 			Entities: panelEntities(message),
@@ -1729,23 +1722,13 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			targetName = fmt.Sprintf("Akun [%d]", targetID)
 		}
 
-		successText := fmt.Sprintf(`<b>✅ List Promosi Berhasil Dikirim (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-
-<blockquote>Materi promosi telah dikirimkan ke worker userbot untuk disimpan ke database target.</blockquote>`, html.EscapeString(targetName), targetID)
-
-		rows := [][]botgotd.InlineKeyboardButton{
-			{{Text: "🔙 Kembali ke Grup & List 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
-		}
 		if parentMsgID > 0 {
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:      chatID,
 				MessageID:   parentMsgID,
-				Text:        successText,
+				Text:        assets.TxtControlListSentSuccess(targetName, targetID),
 				ParseMode:   "HTML",
-				ReplyMarkup: &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows},
+				ReplyMarkup: assets.CtrlDoneIKB(targetID),
 			})
 		}
 		return true
@@ -1799,6 +1782,15 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			}
 		}
 
+		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{
+			ChatID:  0,
+			UserID:  targetID,
+			OwnerID: targetID,
+			Type:    "sync_panel_config",
+		})
+
 		if message != nil {
 			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
 		}
@@ -1808,23 +1800,13 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			targetName = fmt.Sprintf("Akun [%d]", targetID)
 		}
 
-		successText := fmt.Sprintf(`<b>✅ %d Grup Target Ditambahkan (Remote)</b>
-━━━━━━━━━━━━━━━━━━━━
-
-👑 <b>Akun Target:</b> %s (<code>%d</code>)
-
-<blockquote>Target grup telah berhasil disimpan ke database akun target.</blockquote>`, addedCount, html.EscapeString(targetName), targetID)
-
-		rows := [][]botgotd.InlineKeyboardButton{
-			{{Text: "🔙 Kembali ke Grup & List 🔙", CallbackData: fmt.Sprintf("ctrl:gruplist:%d", targetID)}},
-		}
 		if parentMsgID > 0 {
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:      chatID,
 				MessageID:   parentMsgID,
-				Text:        successText,
+				Text:        assets.TxtControlGrupSentSuccess(targetName, targetID, addedCount),
 				ParseMode:   "HTML",
-				ReplyMarkup: &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows},
+				ReplyMarkup: assets.CtrlDoneIKB(targetID),
 			})
 		}
 		return true
