@@ -1,6 +1,7 @@
-package controllers
+﻿package controllers
 
 import (
+	"assterisk/gateway/applications/assets"
 	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/databases"
 	"assterisk/gateway/applications/models"
@@ -15,114 +16,17 @@ import (
 )
 
 var (
-	// Main Menu Keyboard
-	mainMenuMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "💎 Status 💎"}, {Text: "🛒 Shop 🛒"}},
-			{{Text: "🧩 Grup & List 🧩"}, {Text: "⚡ Expert Extra ⚡"}},
-			{{Text: "🗑️ Reset 🗑️"}, {Text: "⌛ Atur Jeda ⌛"}, {Text: "⚠️ Bantuan ⚠️"}},
-			{{Text: "⚙️ Settings ⚙️"}, {Text: "📰 Feed 📰"}, {Text: "🌐 Webapp 🌐"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Status Menu Keyboard
-	statusMenuMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "📌 Custom Watermark 📌"}},
-			{{Text: "✉️ Atur Email ✉️"}, {Text: "⚠️ Safemode ⚠️"}},
-			{{Text: "⏱️ Timer ⏱️"}, {Text: "👑 Ubah Mode 👑"}, {Text: "👤 Admin 👤"}},
-			{{Text: "📊 Ubah Status 📊"}, {Text: "🔔 Notifikasi 🔔"}},
-			{{Text: "🌐 Home 🌐"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Grup & List Menu Keyboard
-	grupListMenuMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "🧑‍💻 Cek Topic 🧑‍💻"}, {Text: "🧑‍💻 Topic 🧑‍💻"}, {Text: "📌 List Topic"}},
-			{{Text: "📁 Cek List 📁"}, {Text: "📚 Cek Grup 📚"}},
-			{{Text: "📝 Tambah List 📝"}, {Text: "📝 Tambah Grup 📝"}},
-			{{Text: "📦 Sebar Ke RC 📦"}, {Text: "🌐 Home 🌐"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Tambah Grup Options Keyboard
-	tambahGrupOptionsMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "🔥 Tambahkan Semua Grup Dalam Akun 🔥"}},
-			{{Text: "📝 Tambahkan Grup Manual 📝"}},
-			{{Text: "🌐 Home 🌐"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Cancel Only Keyboard
-	cancelOnlyMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "⬅️ Batal ⬅️"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Atur Jeda Keyboard
-	aturJedaMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "⏱️ 3 Detik"}, {Text: "⏱️ 5 Detik"}, {Text: "⏱️ 10 Detik"}},
-			{{Text: "⏱️ 15 Detik"}, {Text: "⏱️ 30 Detik"}, {Text: "⏱️ 60 Detik"}},
-			{{Text: "⬅️ Batal ⬅️"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Ubah Mode Keyboard
-	ubahModeMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "👑 Normal"}, {Text: "⚡ Fast"}, {Text: "🔕 Silent"}},
-			{{Text: "⬅️ Batal ⬅️"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Timer Keyboard
-	timerMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "⏱️ Nonaktifkan Timer"}, {Text: "⏱️ Tiap 1 Jam"}},
-			{{Text: "⏱️ Tiap 2 Jam"}, {Text: "⏱️ Tiap 3 Jam"}},
-			{{Text: "⬅️ Batal ⬅️"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Reset Menu Keyboard
-	resetMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "🗑️ Hapus Semua Grup 🗑️"}, {Text: "🗑️ Hapus Semua List 🗑️"}},
-			{{Text: "🗑️ Reset Konfigurasi 🗑️"}},
-			{{Text: "🌐 Home 🌐"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Hapus List Options Keyboard
-	hapusListMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "🗑️ Hapus Semua List 🗑️"}},
-			{{Text: "⬅️ Batal ⬅️"}},
-		},
-		ResizeKeyboard: true,
-	}
-
-	// Hapus Grup Options Keyboard
-	hapusGrupMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: "🗑️ Hapus Semua Grup 🗑️"}},
-			{{Text: "⬅️ Batal ⬅️"}},
-		},
-		ResizeKeyboard: true,
-	}
+	mainMenuMarkup          = assets.MainMenuMarkup
+	statusMenuMarkup        = assets.StatusMenuMarkup
+	grupListMenuMarkup      = assets.GrupListMenuMarkup
+	tambahGrupOptionsMarkup = assets.TambahGrupOptionsMarkup
+	cancelOnlyMarkup        = assets.CancelOnlyMarkup
+	aturJedaMarkup          = assets.AturJedaMarkup
+	ubahModeMarkup          = assets.UbahModeMarkup
+	timerMarkup             = assets.TimerMarkup
+	resetMarkup             = assets.ResetMarkup
+	hapusListMarkup         = assets.HapusListMarkup
+	hapusGrupMarkup         = assets.HapusGrupMarkup
 )
 
 // ShowMainMenu renders the main control panel
@@ -1988,7 +1892,7 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		payload := models.PToService{
-			ChatID:           chatID,
+			ChatID:           0, // 0 agar ubot tidak membalas via SendMessage + ReplyKeyboard
 			UserID:           targetID,
 			Type:             "cache_list",
 			MediaSourceCount: len(sourceIDs),
@@ -2102,7 +2006,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		defer cancel()
 
 		payload := models.PToService{
-			ChatID:   chatID,
+			ChatID:   0, // 0 agar ubot tidak membalas via SendMessage + ReplyKeyboard
 			UserID:   targetID,
 			Type:     "cache_list",
 			Text:     text,

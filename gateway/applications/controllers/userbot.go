@@ -1,6 +1,7 @@
-package controllers
+﻿package controllers
 
 import (
+	"assterisk/gateway/applications/assets"
 	"assterisk/gateway/applications/botgotd"
 	"assterisk/gateway/applications/broker"
 	"assterisk/gateway/applications/databases"
@@ -522,39 +523,13 @@ func normalizePhone(value string) string {
 }
 
 var (
-	cachedInstallPhoneMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{
-				{Text: "📱 Bagikan Kontak", RequestContact: true},
-			},
-			{
-				{Text: "⬅️ Batal ⬅️"},
-			},
-		},
-		ResizeKeyboard:  true,
-		OneTimeKeyboard: true,
-	}
-	cachedCancelMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard:       [][]botgotd.KeyboardButton{{{Text: "⬅️ Batal ⬅️"}}},
-		ResizeKeyboard: true,
-	}
-	cachedCreateChoiceMarkup = &botgotd.ReplyKeyboardMarkup{
-		Keyboard: [][]botgotd.KeyboardButton{
-			{
-				{Text: "🔑 Input Token 🔑"},
-				{Text: "🚀 Buat Userbot 🚀"},
-			},
-			{
-				{Text: "⚠️ Bantuan ⚠️"},
-				{Text: "🎯 Control 🎯"},
-			},
-		},
-		ResizeKeyboard: true,
-	}
-	cachedServerMarkup = &botgotd.InlineKeyboardMarkup{
+	cachedInstallPhoneMarkup = assets.InstallPhoneMarkup
+	cachedCancelMarkup       = assets.CancelOnlyMarkup
+	cachedCreateChoiceMarkup = assets.CreateChoiceMarkup
+	cachedServerMarkup       = &botgotd.InlineKeyboardMarkup{
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
 	}
-	cachedRemoveKeyboard = &botgotd.ReplyKeyboardRemove{RemoveKeyboard: true}
+	cachedRemoveKeyboard = assets.RemoveKeyboard
 )
 
 func installPhoneKeyboard() *botgotd.ReplyKeyboardMarkup {

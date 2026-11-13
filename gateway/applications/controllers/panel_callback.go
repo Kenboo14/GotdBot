@@ -289,7 +289,7 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		payload := models.PToService{
-			ChatID: chatID,
+			ChatID: 0,
 			UserID: targetID,
 			Type:   "fetch_groups",
 		}
@@ -316,7 +316,7 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 		_ = h.db.ClearLists(ctx, targetID)
 		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_lists"})
+		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{ChatID: 0, UserID: targetID, OwnerID: targetID, Type: "clear_panel_lists"})
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
 			Text:            "🗑️ Semua list promosi berhasil dihapus.",
@@ -331,7 +331,7 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 		_ = h.db.ClearGroups(ctx, targetID)
 		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_groups"})
+		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{ChatID: 0, UserID: targetID, OwnerID: targetID, Type: "clear_panel_groups"})
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
 			Text:            "🗑️ Semua target grup berhasil dihapus.",

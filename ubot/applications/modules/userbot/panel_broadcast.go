@@ -1138,7 +1138,8 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	s.publishConfigUpdated(ctx, ownerID)
 
 	totalList := s.countLists(ctx, ownerID)
-	report := fmt.Sprintf(`<h1>✅ List Berhasil Disimpan</h1>
+	if chatID != 0 {
+		report := fmt.Sprintf(`<h1>✅ List Berhasil Disimpan</h1>
 <blockquote expandable>Materi promosi (<b>%s</b>) telah diamankan ke @%s (Topic: <code>%d</code>) dengan Cache Message ID: <code>#%d</code></blockquote>
 <table border="1">
   <tr><th>📦 Tipe Materi</th><th>Total List Tersimpan</th></tr>
@@ -1146,7 +1147,8 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 </table>
 <hr/>
 <p>GotdBot • Promotional Content Manager</p>`, mediaTypeLabel, getGroupCache(), topicID, cachedMsgID, mediaTypeLabel, totalList)
-	s.reply(ctx, chatID, report, "panel_notice")
+		s.reply(ctx, chatID, report, "panel_notice")
+	}
 }
 
 func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {

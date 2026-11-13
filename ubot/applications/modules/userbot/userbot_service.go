@@ -1075,6 +1075,9 @@ Perhatikan huruf besar/kecil pada password akun Anda.</blockquote>
 }
 
 func (s *Service) reply(ctx context.Context, chatID int64, text, state string) {
+	if chatID == 0 {
+		return
+	}
 	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Text: text, State: state})
 }
 
