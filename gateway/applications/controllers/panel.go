@@ -1123,7 +1123,7 @@ Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemil
 
 	var rows [][]botgotd.InlineKeyboardButton
 	for _, acc := range accounts {
-		btnText := fmt.Sprintf("👤 %s 👤", acc.Name)
+		btnText := acc.Name
 		cbData := fmt.Sprintf("ctrl:select:%d", acc.OwnerID)
 		rows = append(rows, []botgotd.InlineKeyboardButton{
 			{Text: btnText, CallbackData: cbData},

@@ -239,6 +239,7 @@ func (m *Init) Register(ctx context.Context, b *botgotd.Bot, r *broker.Redis) {
 	// Register specific handlers before the catch-all state handler.
 	registerBotCommands(b, h)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "panel:", botgotd.MatchTypePrefix, h.PanelCallback)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "ctrl:", botgotd.MatchTypePrefix, h.PanelCallback)
 	b.RegisterHandlerMatchFunc(func(update *botgotd.Update) bool {
 		if update == nil {
 			return false
