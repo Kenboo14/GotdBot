@@ -1243,9 +1243,9 @@ func (h *Handler) RenderControlStatus(ctx context.Context, b *botgotd.Bot, chatI
 	fmt.Fprintf(&sb, "⏭️ <b>Skip Flood:</b> <code>%s</code>\n", skipFw)
 	fmt.Fprintf(&sb, "⏱️ <b>Timer:</b> <code>%s</code>\n", html.EscapeString(cfg.Timer))
 	fmt.Fprintf(&sb, "🔥 <b>Masa Aktif:</b> <code>%s</code>\n\n", html.EscapeString(cfg.MasaAktif))
-	sb.WriteString("<blockquote>\n")
-	fmt.Fprintf(&sb, "📋 <b>Tindakan Terkini:</b> <i>%s</i><br/>\n", html.EscapeString(cfg.TindakanTerkini))
-	fmt.Fprintf(&sb, "📄 <b>Tindakan Terakhir:</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerakhir))
+	sb.WriteString("<blockquote>")
+	fmt.Fprintf(&sb, "📋 <b>Tindakan Terkini:</b> <i>%s</i>\n", html.EscapeString(cfg.TindakanTerkini))
+	fmt.Fprintf(&sb, "📄 <b>Tindakan Terakhir:</b> <i>%s</i>", html.EscapeString(cfg.TindakanTerakhir))
 	sb.WriteString("</blockquote>")
 
 	rows := [][]botgotd.InlineKeyboardButton{
@@ -1368,7 +1368,10 @@ func (h *Handler) RenderControlCekList(ctx context.Context, b *botgotd.Bot, chat
 		}
 		fmt.Fprintf(&sb, "<blockquote>Total tersimpan: <b>%d materi</b> (Hal %d/%d)\n\n", total, page+1, totalPages)
 		for i := start; i < end; i++ {
-			fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code>\n", i+1, i+1, lists[i])
+			if i > start {
+				sb.WriteString("\n")
+			}
+			fmt.Fprintf(&sb, "%d. <b>List #%d</b> — <code>Cache ID: %d</code>", i+1, i+1, lists[i])
 		}
 		sb.WriteString("</blockquote>")
 	}
@@ -1447,12 +1450,15 @@ func (h *Handler) RenderControlCekGrup(ctx context.Context, b *botgotd.Bot, chat
 		}
 		fmt.Fprintf(&sb, "<blockquote>Total tersimpan: <b>%d grup</b> (Hal %d/%d)\n\n", total, page+1, totalPages)
 		for i := start; i < end; i++ {
+			if i > start {
+				sb.WriteString("\n")
+			}
 			g := groups[i]
 			title := g.Title
 			if title == "" {
 				title = g.Target
 			}
-			fmt.Fprintf(&sb, "%d. %s — <code>%s</code>\n", i+1, html.EscapeString(title), html.EscapeString(g.Target))
+			fmt.Fprintf(&sb, "%d. %s — <code>%s</code>", i+1, html.EscapeString(title), html.EscapeString(g.Target))
 		}
 		sb.WriteString("</blockquote>")
 	}
@@ -2670,6 +2676,45 @@ func isRestartBrowseButton(text string) bool {
 	return false
 }
 
+func isKnownPanelButton(text string) bool {
+	switch text {
+	case "🌐 Home 🌐", "/menu",
+		"💎 Status 💎", "/status",
+		"🛒 Shop 🛒",
+		"🧩 Grup & List 🧩",
+		"⚡ Expert Extra ⚡",
+		"🗑️ Reset 🗑️",
+		"⌛ Atur Jeda ⌛",
+		"⚙️ Settings ⚙️",
+		"📰 Feed 📰",
+		"🌐 Webapp 🌐",
+		"📌 Custom Watermark 📌",
+		"✉️ Atur Email ✉️",
+		"⚠️ Safemode ⚠️",
+		"⏱️ Timer ⏱️",
+		"👑 Ubah Mode 👑",
+		"👤 Admin 👤",
+		"📊 Ubah Status 📊",
+		"🔔 Notifikasi 🔔",
+		"📁 Cek List 📁",
+		"📚 Cek Grup 📚",
+		"📝 Tambah List 📝",
+		"📝 Tambah Grup 📝",
+		"🔥 Tambahkan Semua Grup Dalam Akun 🔥",
+		"📝 Tambahkan Grup Manual 📝",
+		"🧑‍💻 Cek Topic 🧑‍💻", "📌 List Topic",
+		"🧑‍💻 Topic 🧑‍💻",
+		"📦 Sebar Ke RC 📦",
+		"🗑️ Hapus Semua Grup 🗑️",
+		"🗑️ Hapus Semua List 🗑️",
+		"🗑️ Reset Konfigurasi 🗑️",
+		"⬅️ Batal ⬅️":
+		return true
+	default:
+		return isRestartBrowseButton(text)
+	}
+}
+
 // RoutePanelButton handles any ReplyKeyboard button click
 func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) bool {
 	if update.Message == nil || update.Message.From == nil {
@@ -2712,6 +2757,12 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 	// Cek apakah user sedang berada dalam input state
 	if h.HandlePanelInput(ctx, b, chatID, effectiveUserID, text, update.Message) {
 		return true
+	}
+
+	// Hanya tangani jika teks benar-benar salah satu tombol ReplyKeyboard panel yang dikenali
+	// Jika pesan teks biasa/ngawur, jangan diintersep (teruskan ke DefaultHandler tanpa pesan error)
+	if !isKnownPanelButton(text) {
+		return false
 	}
 
 	// Periksa apakah user memiliki sesi userbot yang aktif (milik sendiri atau akun yang sedang di-remote)

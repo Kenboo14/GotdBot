@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
@@ -216,7 +217,74 @@ func (b *Bot) parseHTMLToEntities(rawHTML string) (string, []tg.MessageEntityCla
 		return text, nil
 	}
 	plain, entities := builder.Complete()
-	return plain, entities
+	return plain, sanitizeEntities(plain, entities)
+}
+
+func sanitizeEntities(plain string, entities []tg.MessageEntityClass) []tg.MessageEntityClass {
+	if len(entities) == 0 {
+		return nil
+	}
+	u16Len := len(utf16.Encode([]rune(plain)))
+	valid := make([]tg.MessageEntityClass, 0, len(entities))
+	for _, e := range entities {
+		offset := e.GetOffset()
+		length := e.GetLength()
+		if offset < 0 || offset >= u16Len {
+			continue
+		}
+		if offset+length > u16Len {
+			newLen := u16Len - offset
+			if newLen <= 0 {
+				continue
+			}
+			setEntityLength(e, newLen)
+		}
+		valid = append(valid, e)
+	}
+	return valid
+}
+
+func setEntityLength(e tg.MessageEntityClass, newLen int) {
+	switch ent := e.(type) {
+	case *tg.MessageEntityBlockquote:
+		ent.Length = newLen
+	case *tg.MessageEntityBold:
+		ent.Length = newLen
+	case *tg.MessageEntityItalic:
+		ent.Length = newLen
+	case *tg.MessageEntityCode:
+		ent.Length = newLen
+	case *tg.MessageEntityPre:
+		ent.Length = newLen
+	case *tg.MessageEntityTextURL:
+		ent.Length = newLen
+	case *tg.MessageEntityMentionName:
+		ent.Length = newLen
+	case *tg.MessageEntityMention:
+		ent.Length = newLen
+	case *tg.MessageEntityHashtag:
+		ent.Length = newLen
+	case *tg.MessageEntityBotCommand:
+		ent.Length = newLen
+	case *tg.MessageEntityURL:
+		ent.Length = newLen
+	case *tg.MessageEntityEmail:
+		ent.Length = newLen
+	case *tg.MessageEntityUnderline:
+		ent.Length = newLen
+	case *tg.MessageEntityStrike:
+		ent.Length = newLen
+	case *tg.MessageEntitySpoiler:
+		ent.Length = newLen
+	case *tg.MessageEntityCustomEmoji:
+		ent.Length = newLen
+	case *tg.MessageEntityBankCard:
+		ent.Length = newLen
+	case *tg.MessageEntityPhone:
+		ent.Length = newLen
+	case *tg.MessageEntityCashtag:
+		ent.Length = newLen
+	}
 }
 
 func convertReplyMarkup(markup any) tg.ReplyMarkupClass {
@@ -553,8 +621,7 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 			if strings.Contains(strings.ToLower(err.Error()), "not_modified") || strings.Contains(strings.ToLower(err.Error()), "not modified") {
 				return &Message{}, nil
 			}
-			log.Printf("[botgotd] MessagesEditInlineBotMessage error: %v", err)
-			return nil, err
+			log.Printf("[botgotd] MessagesEditInlineBotMessage MTProto error: %v, falling back to HTTP", err)
 		}
 
 		// 2. Chat Message edit via MTProto
@@ -579,8 +646,7 @@ func (b *Bot) EditMessageText(ctx context.Context, params *EditMessageTextParams
 				if strings.Contains(strings.ToLower(err.Error()), "not_modified") || strings.Contains(strings.ToLower(err.Error()), "not modified") {
 					return &Message{ID: params.MessageID, Chat: Chat{ID: chatID}}, nil
 				}
-				log.Printf("[botgotd] MessagesEditMessage error: %v", err)
-				return nil, err
+				log.Printf("[botgotd] MessagesEditMessage MTProto error: %v, falling back to HTTP", err)
 			}
 		}
 	}
@@ -886,6 +952,8 @@ func isRichContent(text string) bool {
 
 func cleanHTML(text string) string {
 	s := strings.ReplaceAll(text, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "<blockquote>\n", "<blockquote>")
+	s = strings.ReplaceAll(s, "\n</blockquote>", "</blockquote>")
 	s = strings.ReplaceAll(s, "<br/>\n", "\n")
 	s = strings.ReplaceAll(s, "<br />\n", "\n")
 	s = strings.ReplaceAll(s, "<br>\n", "\n")

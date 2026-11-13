@@ -55,18 +55,52 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	chatID, text := update.Message.Chat.ID, strings.TrimSpace(update.Message.Text)
+	userID := update.Message.From.ID
 	userName := update.Message.From.FirstName
 	if update.Message.From.LastName != "" {
 		userName += " " + update.Message.From.LastName
 	}
-	h.SetAccountName(update.Message.From.ID, userName)
+	h.SetAccountName(userID, userName)
+
+	// 1. PRIORITAS UTAMA: Intersep input panel (Tambah List, Tambah Grup, Atur Jeda, dll.)
+	// Baik untuk remote control (ctrl_add_*) maupun panel userbot lokal.
+	if h.getPanelState(chatID) != "" {
+		effectiveUserID := h.GetEffectiveUserID(chatID, userID)
+		if h.HandlePanelInput(ctx, b, chatID, effectiveUserID, text, update.Message) {
+			return
+		}
+	}
+
+	// 2. Akses tombol Control / Remote (bebas diakses kapan saja tanpa terhambat wizard install)
+	if text == "🎯 Control 🎯" || text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/control" {
+		h.Sessions.mu.Lock()
+		delete(h.Sessions.sessions, chatID)
+		h.Sessions.mu.Unlock()
+
+		username := update.Message.From.Username
+		h.ShowControlMenu(ctx, b, chatID, userID, username)
+		return
+	}
+
+	// 3. Akses tombol Bantuan
+	if text == "⚠️ Bantuan ⚠️" || strings.EqualFold(text, "bantuan") || text == "/help" {
+		effectiveUserID := h.GetEffectiveUserID(chatID, userID)
+		h.ShowBantuan(ctx, b, chatID, effectiveUserID)
+		return
+	}
+
+	// 4. Pembatalan global
+	if text == "/cancel" || strings.EqualFold(text, "cancel") || text == "⬅️ Batal ⬅️" {
+		h.cancelInstall(ctx, b, update)
+		return
+	}
+
 	h.Sessions.mu.RLock()
 	session := h.Sessions.sessions[chatID]
 	h.Sessions.mu.RUnlock()
 
-	// Jika user tidak sedang dalam proses pemasangan userbot (/start)
+	// 5. Jika tidak ada sesi install aktif, rute tombol panel reply keyboard
 	if session == nil {
-		// Intersep tombol ReplyKeyboard dan state input panel kontrol
 		if h.RoutePanelButton(ctx, b, update) {
 			return
 		}
@@ -74,11 +108,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 		return
 	}
 
-	if text == "/cancel" || strings.EqualFold(text, "cancel") || text == "⬅️ Batal ⬅️" {
-		h.cancelInstall(ctx, b, update)
-		return
-	}
-
+	// 6. Jika user dalam menu start wizard ('waiting_create_choice')
 	if session.State == "waiting_create_choice" {
 		if text == "🔑 Input Token 🔑" {
 			h.Sessions.mu.Lock()
@@ -145,25 +175,16 @@ Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (bran
 			return
 		}
 
-		if text == "⚠️ Bantuan ⚠️" || strings.EqualFold(text, "bantuan") || text == "/help" {
-			h.ShowBantuan(ctx, b, chatID, update.Message.From.ID)
+		// Jika user menekan tombol panel ReplyKeyboard yang lain saat masih di wizard start
+		if h.RoutePanelButton(ctx, b, update) {
+			h.Sessions.mu.Lock()
+			delete(h.Sessions.sessions, chatID)
+			h.Sessions.mu.Unlock()
 			return
 		}
 
-		if text == "🎯 Control 🎯" || text == "🎮 Control 🎮" || strings.EqualFold(text, "control") || text == "/control" {
-			h.ShowControlMenu(ctx, b, chatID, update.Message.From.ID, update.Message.From.Username)
-			return
-		}
-
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: `<h1>⚠️ Pilihan Tidak Dikenali</h1>
-<blockquote expandable>Silakan gunakan salah satu tombol keyboard di bawah untuk memilih opsi yang tersedia.</blockquote>
-<hr/>
-<p>Pilih <b>🔑 Input Token 🔑</b>, <b>🚀 Buat Userbot 🚀</b>, <b>⚠️ Bantuan ⚠️</b>, atau <b>🎯 Control 🎯</b>.</p>`,
-			ParseMode:   "HTML",
-			ReplyMarkup: cachedCreateChoiceMarkup,
-		})
+		// Jika user mengirim teks acak / bukan tombol wizard, teruskan ke DefaultHandler tanpa spam error
+		h.DefaultHandler(ctx, b, update)
 		return
 	}
 
