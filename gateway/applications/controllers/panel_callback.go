@@ -15,28 +15,30 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		return
 	}
 	cb := update.CallbackQuery
+	var chatID int64
+	var messageID int
+	if cb.Message != nil && cb.Message.Message != nil {
+		chatID = cb.Message.Message.Chat.ID
+		messageID = cb.Message.Message.ID
+	}
+	if chatID == 0 {
+		chatID = cb.From.ID
+	}
+
+	// 1. Control remote callbacks
+	if strings.HasPrefix(cb.Data, "ctrl:") {
+		h.handleControlCallback(ctx, b, chatID, messageID, cb)
+		return
+	}
+
 	if cb.Data == "panel:control" {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		var chatID int64
-		if cb.Message != nil && cb.Message.Message != nil {
-			chatID = cb.Message.Message.Chat.ID
-		}
-		if chatID == 0 {
-			chatID = cb.From.ID
-		}
-		h.ShowControlMenu(ctx, b, chatID, cb.From.ID, cb.From.Username)
+		h.RenderControlAccountList(ctx, b, chatID, messageID, cb.From.ID, cb.From.Username)
 		return
 	}
 	if strings.HasPrefix(cb.Data, "panel:control_select:") {
 		parts := strings.Split(cb.Data, ":")
 		if len(parts) >= 3 {
-			var chatID int64
-			if cb.Message != nil && cb.Message.Message != nil {
-				chatID = cb.Message.Message.Chat.ID
-			}
-			if chatID == 0 {
-				chatID = cb.From.ID
-			}
 			targetID, _ := strconv.ParseInt(parts[2], 10, 64)
 			if targetID == 0 {
 				h.SetActiveRemoteTarget(chatID, 0)
@@ -44,37 +46,12 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 					CallbackQueryID: cb.ID,
 					Text:            "✅ Remote akun dinonaktifkan.",
 				})
-				hasActive := false
-				if h.db != nil {
-					hasActive = h.db.HasActiveSession(ctx, cb.From.ID)
-				}
-				if hasActive {
-					h.ShowMainMenu(ctx, b, chatID, cb.From.ID, cb.From.FirstName)
-				} else {
-					b.SendMessage(ctx, &botgotd.SendMessageParams{
-						ChatID:      chatID,
-						Text:        "✅ Remote akun dilepas. Anda kembali ke menu awal.",
-						ReplyMarkup: cachedCreateChoiceMarkup,
-					})
-				}
+				h.RenderControlAccountList(ctx, b, chatID, messageID, cb.From.ID, cb.From.Username)
 				return
 			}
 
 			// Validasi otorisasi kontrol akun
-			authorized := false
-			if targetID == cb.From.ID {
-				authorized = true
-			} else if h.db != nil {
-				accounts := h.db.GetAccessibleAccounts(ctx, cb.From.ID, cb.From.Username)
-				for _, acc := range accounts {
-					if acc.OwnerID == targetID {
-						authorized = true
-						break
-					}
-				}
-			}
-
-			if !authorized {
+			if !h.isAuthorizedAdmin(ctx, cb.From.ID, cb.From.Username, targetID) {
 				_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 					CallbackQueryID: cb.ID,
 					Text:            "⛔ Anda tidak memiliki wewenang untuk mengontrol akun ini.",
@@ -83,18 +60,11 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 				return
 			}
 
-			h.SetActiveRemoteTarget(chatID, targetID)
-			targetName := h.GetAccountName(targetID)
-			if targetName == "" {
-				targetName = fmt.Sprintf("Akun [%d]", targetID)
-			}
-
 			_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 				CallbackQueryID: cb.ID,
-				Text:            fmt.Sprintf("✅ Mengontrol: %s", targetName),
+				Text:            "✅ Membuka Menu Admin",
 			})
-
-			h.ShowMainMenu(ctx, b, chatID, targetID, targetName)
+			h.RenderControlAdminMenu(ctx, b, chatID, messageID, cb.From.ID, cb.From.FirstName, targetID)
 			return
 		}
 	}
@@ -157,7 +127,7 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "Mohon pilih kembali list yang ingin dihapus.", ShowAlert: true})
 		return
 	}
-	chatID := cb.Message.Message.Chat.ID
+	chatID = cb.Message.Message.Chat.ID
 	userID := cb.From.ID
 	switch parts[1] {
 	case "list":
@@ -223,5 +193,136 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
 		}
 		h.DisplayGroup(ctx, b, chatID, userID)
+	}
+}
+
+func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, cb *botgotd.CallbackQuery) {
+	data := cb.Data
+	if data == "ctrl:list_akun" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlAccountList(ctx, b, chatID, messageID, cb.From.ID, cb.From.Username)
+		return
+	}
+
+	parts := strings.Split(data, ":")
+	if len(parts) < 3 {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		return
+	}
+
+	action := parts[1]
+	targetID, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || targetID == 0 {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		return
+	}
+
+	// Validasi hak akses
+	if !h.isAuthorizedAdmin(ctx, cb.From.ID, cb.From.Username, targetID) {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "⛔ Anda tidak memiliki wewenang untuk mengontrol akun ini.",
+			ShowAlert:       true,
+		})
+		return
+	}
+
+	switch action {
+	case "select", "menu":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlAdminMenu(ctx, b, chatID, messageID, cb.From.ID, cb.From.FirstName, targetID)
+
+	case "status":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlStatus(ctx, b, chatID, messageID, targetID)
+
+	case "status_refresh":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "🔄 Status diperbarui",
+		})
+		h.RenderControlStatus(ctx, b, chatID, messageID, targetID)
+
+	case "gruplist":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlGrupList(ctx, b, chatID, messageID, targetID)
+
+	case "cek_list":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlCekList(ctx, b, chatID, messageID, targetID)
+
+	case "cek_grup":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlCekGrup(ctx, b, chatID, messageID, targetID)
+
+	case "tambah_list":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlTambahList(ctx, b, chatID, messageID, targetID)
+
+	case "tambah_grup":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlTambahGrupOptions(ctx, b, chatID, messageID, targetID)
+
+	case "fetch_all_groups":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "⏳ Memulai import semua grup...",
+		})
+		h.FetchAllGroupsFromAccount(ctx, b, chatID, targetID)
+		h.RenderControlImportGroupsStarted(ctx, b, chatID, messageID, targetID)
+
+	case "tambah_grup_manual":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlTambahGrupManual(ctx, b, chatID, messageID, targetID)
+
+	case "hapus_list_confirm":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlHapusListConfirm(ctx, b, chatID, messageID, targetID)
+
+	case "hapus_list_do":
+		_ = h.db.ClearLists(ctx, targetID)
+		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_lists"})
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "🗑️ Semua list promosi berhasil dihapus.",
+		})
+		h.RenderControlHapusListDone(ctx, b, chatID, messageID, targetID)
+
+	case "hapus_grup_confirm":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlHapusGrupConfirm(ctx, b, chatID, messageID, targetID)
+
+	case "hapus_grup_do":
+		_ = h.db.ClearGroups(ctx, targetID)
+		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: targetID, OwnerID: targetID, Type: "clear_panel_groups"})
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "🗑️ Semua target grup berhasil dihapus.",
+		})
+		h.RenderControlHapusGrupDone(ctx, b, chatID, messageID, targetID)
+
+	case "jeda":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.RenderControlJeda(ctx, b, chatID, messageID, targetID)
+
+	case "set_jeda":
+		if len(parts) >= 4 {
+			sec, _ := strconv.Atoi(parts[3])
+			if sec > 0 {
+				cfg := h.db.GetUserConfig(ctx, targetID)
+				cfg.Delay = sec
+				_ = h.db.SaveUserConfig(ctx, cfg)
+				_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+					CallbackQueryID: cb.ID,
+					Text:            fmt.Sprintf("✅ Jeda diatur ke %d detik", sec),
+				})
+				h.RenderControlJeda(ctx, b, chatID, messageID, targetID)
+				return
+			}
+		}
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+
+	default:
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 	}
 }
