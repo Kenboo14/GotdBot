@@ -18,6 +18,7 @@ services:
       dockerfile: Dockerfile
     image: ghcr.io/kenboo14/gotdbot-gateway:latest
     restart: unless-stopped
+    user: "0:0"
     mem_limit: 80m
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
