@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"regexp"
@@ -105,10 +106,21 @@ func FormatDurationID(d time.Duration) string {
 func isOwner(userID int64) bool {
 	ownerEnv := strings.TrimSpace(os.Getenv("OWNER"))
 	if ownerEnv == "" {
+		ownerEnv = strings.TrimSpace(os.Getenv("OWNER_ID"))
+	}
+	if ownerEnv == "" {
 		return false
 	}
-	ownerID, _ := strconv.ParseInt(ownerEnv, 10, 64)
-	return ownerID > 0 && ownerID == userID
+	ownerEnv = strings.Trim(ownerEnv, `"'`)
+	for _, part := range strings.FieldsFunc(ownerEnv, func(r rune) bool {
+		return r == ',' || r == ' ' || r == ';'
+	}) {
+		part = strings.TrimSpace(part)
+		if id, err := strconv.ParseInt(part, 10, 64); err == nil && id > 0 && id == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // TokenCommand handles /token commands by Owner
@@ -121,8 +133,11 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 
 	if !isOwner(senderID) {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      "⛔ <b>Akses Ditolak.</b> Hanya Owner sistem yang berwenang mengelola token lisensi.",
+			ChatID: chatID,
+			Text: `<h1>⛔ Akses Ditolak</h1>
+<blockquote expandable>Hanya Owner sistem yang memiliki wewenang untuk membuat dan mengelola token lisensi GotdBot.</blockquote>
+<hr/>
+<p>GotdBot • Access Control</p>`,
 			ParseMode: "HTML",
 		})
 		return
@@ -132,17 +147,17 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 	fields := strings.Fields(text)
 
 	if len(fields) < 2 {
-		helpText := `<b>🔑 Panduan Perintah /token (Khusus Owner)</b>
-━━━━━━━━━━━━━━━━━━━━
-1. <b>Token Massal Free:</b>
-   <code>/token -free</code> — Generate/lihat shared token free massal.
-
-2. <b>Token Lisensi Personal:</b>
-   <code>/token pro &lt;durasi&gt;</code> (Contoh: <code>/token pro 2h4j</code>)
-   <code>/token pro++ &lt;durasi&gt;</code> (Contoh: <code>/token pro++ 30h</code>)
-   <code>/token vip &lt;durasi&gt;</code> (Contoh: <code>/token vip 365h</code>)
-
-<i>Format durasi: <b>h</b> (Hari), <b>j</b> (Jam), <b>m</b> (Menit).</i>`
+		helpText := `<h1>🔑 Panduan Perintah /token</h1>
+<blockquote expandable>Menu khusus Owner untuk membuat voucher lisensi userbot GotdBot.</blockquote>
+<table border="1">
+  <tr><th>Format Perintah</th><th>Keterangan</th></tr>
+  <tr><td><code>/token -free</code></td><td>Shared voucher Free massal</td></tr>
+  <tr><td><code>/token pro &lt;durasi&gt;</code></td><td>Voucher tier Pro (Personal)</td></tr>
+  <tr><td><code>/token pro++ &lt;durasi&gt;</code></td><td>Voucher tier Pro++ (Custom WM)</td></tr>
+  <tr><td><code>/token vip &lt;durasi&gt;</code></td><td>Voucher tier VIP Unlimited</td></tr>
+</table>
+<hr/>
+<p>Format durasi: <code>h</code> (Hari), <code>j</code> (Jam), <code>m</code> (Menit). Contoh: <code>/token pro++ 30h</code></p>`
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
 			Text:      helpText,
@@ -180,14 +195,17 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 		}
 
 		durStr := FormatDurationID(time.Duration(tm.DurationSeconds) * time.Second)
-		resp := fmt.Sprintf(`🎫 <b>Token Master Free GotdBot</b>
-━━━━━━━━━━━━━━━━━━━━
-🔑 <b>Token:</b> <code>%s</code>
-⏱️ <b>Durasi:</b> <code>%s</code>
-👥 <b>Jumlah Claimed:</b> <code>%d user</code>
-🟢 <b>Status:</b> <code>Active</code> (Shared Voucher)
-
-<i>Token ini dapat digunakan oleh semua pengguna secara massal.</i>`,
+		resp := fmt.Sprintf(`<h1>🎫 Token Master Free GotdBot</h1>
+<blockquote expandable>Shared voucher massal aktif untuk seluruh pengguna umum.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Nilai</th></tr>
+  <tr><td>🔑 Token Voucher</td><td><code>%s</code></td></tr>
+  <tr><td>⏱️ Durasi Aktif</td><td><code>%s</code></td></tr>
+  <tr><td>👥 Total Diklaim</td><td><code>%d pengguna</code></td></tr>
+  <tr><td>🟢 Status</td><td><code>Active (Shared)</code></td></tr>
+</table>
+<hr/>
+<p>Kirimkan token di atas kepada pengguna untuk diklaim via <b>/start</b>.</p>`,
 			tm.Token, durStr, tm.ClaimCount,
 		)
 
@@ -218,8 +236,11 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 		normalizedTier = "Vip"
 	default:
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      "⚠️ Tier tidak valid. Pilihan tier: <code>pro</code>, <code>pro++</code>, <code>vip</code>, atau <code>-free</code>.",
+			ChatID: chatID,
+			Text: `<h1>⚠️ Tier Tidak Valid</h1>
+<blockquote expandable>Pilihan tier lisensi yang tersedia adalah <code>pro</code>, <code>pro++</code>, <code>vip</code>, atau <code>-free</code>.</blockquote>
+<hr/>
+<p>Contoh: <code>/token pro 30h</code></p>`,
 			ParseMode: "HTML",
 		})
 		return
@@ -227,8 +248,11 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 
 	if len(fields) < 3 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      fmt.Sprintf("⚠️ Masukkan format durasi untuk tier <b>%s</b>.\nContoh: <code>/token %s 2h4j</code> atau <code>/token %s 30h</code>.", normalizedTier, subCmd, subCmd),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>⚠️ Format Durasi Diperlukan</h1>
+<blockquote expandable>Silakan masukkan format durasi yang valid untuk tier <b>%s</b>.</blockquote>
+<hr/>
+<p>Contoh: <code>/token %s 30h</code> atau <code>/token %s 2h4j</code></p>`, normalizedTier, subCmd, subCmd),
 			ParseMode: "HTML",
 		})
 		return
@@ -238,8 +262,11 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 	dur, durErr := ParseDurationStr(durationStr)
 	if durErr != nil {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      "⚠️ Format durasi salah: " + durErr.Error() + "\nContoh: <code>2h4j</code> (2 hari 4 jam), <code>30h</code> (30 hari), <code>1h30m</code>.",
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>⚠️ Format Durasi Tidak Valid</h1>
+<blockquote expandable>%s</blockquote>
+<hr/>
+<p>Format satuan: <code>h</code> (Hari), <code>j</code> (Jam), <code>m</code> (Menit). Contoh: <code>30h</code> atau <code>1h30m</code>.</p>`, html.EscapeString(durErr.Error())),
 			ParseMode: "HTML",
 		})
 		return
@@ -260,8 +287,11 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 	if err := h.db.SaveTokenMaster(ctx, tm); err != nil {
 		log.Printf("[token] SaveTokenMaster err: %v", err)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      "❌ Gagal menyimpan token ke database: " + err.Error(),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>❌ Gagal Menyimpan Token</h1>
+<blockquote expandable>%s</blockquote>
+<hr/>
+<p>Silakan coba beberapa saat lagi.</p>`, html.EscapeString(err.Error())),
 			ParseMode: "HTML",
 		})
 		return
@@ -271,25 +301,25 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 	featureDesc := ""
 	switch normalizedTier {
 	case "Pro":
-		featureDesc = "• Jeda Cepat & Kuota Besar\n• Media Group/Album Aktif\n• ❌ Custom Watermark Terkunci"
+		featureDesc = "• Jeda Cepat &amp; Kuota Besar<br/>• Media Group/Album Aktif<br/>• ❌ Custom Watermark Terkunci"
 	case "Pro++":
-		featureDesc = "• Semua Fitur Siaran Aktif\n• ✅ Custom Watermark Aktif\n• ✅ Topic Forum Telegram Aktif"
+		featureDesc = "• Semua Fitur Siaran Aktif<br/>• ✅ Custom Watermark Aktif<br/>• ✅ Topic Forum Telegram Aktif"
 	case "Vip":
-		featureDesc = "• Khusus Admin/VIP (Unlimited)\n• Prioritas Jalur MTProto Tertinggi"
+		featureDesc = "• Khusus Admin/VIP (Unlimited)<br/>• Prioritas Jalur MTProto Tertinggi"
 	}
 
-	resp := fmt.Sprintf(`🎫 <b>Token Lisensi GotdBot (%s)</b>
-━━━━━━━━━━━━━━━━━━━━
-🔑 <b>Token:</b> <code>%s</code>
-🎖️ <b>Tier:</b> <code>%s</code>
-⏳ <b>Durasi:</b> <code>%s</code>
-👥 <b>Status Claim:</b> <code>0 / 1 (Personal)</code>
-🟢 <b>Status:</b> <code>Active</code>
-
-<b>Ketentuan Fitur:</b>
-%s
-
-<i>Kirimkan token di atas kepada pengguna untuk diklaim via /start.</i>`,
+	resp := fmt.Sprintf(`<h1>🎫 Token Lisensi GotdBot (%s)</h1>
+<blockquote expandable>Voucher lisensi personal berhasil digenerate dan tersimpan di database.</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Keterangan</th></tr>
+  <tr><td>🔑 Token Voucher</td><td><code>%s</code></td></tr>
+  <tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Durasi Aktif</td><td><code>%s</code></td></tr>
+  <tr><td>👥 Status Klaim</td><td><code>0 / 1 (Personal)</code></td></tr>
+</table>
+<blockquote expandable><b>Ketentuan Fitur:</b><br/>%s</blockquote>
+<hr/>
+<p>Kirimkan token di atas kepada pembeli untuk diklaim via <b>/start</b>.</p>`,
 		normalizedTier, newToken, normalizedTier, durDesc, featureDesc,
 	)
 
