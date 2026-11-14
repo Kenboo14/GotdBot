@@ -9,6 +9,7 @@ func registerBotCommands(b *botgotd.Bot, h *Handler) {
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/status", botgotd.MatchTypeExact, h.User)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/broadcast", botgotd.MatchTypePrefix, h.SimulateLoad)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/ping", botgotd.MatchTypeExact, h.PingCommand)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/simulasi", botgotd.MatchTypePrefix, h.SimulasiCommand)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/help", botgotd.MatchTypeExact, h.HelpCommandMenu)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/server", botgotd.MatchTypeExact, h.ServerCommand)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "!server", botgotd.MatchTypeExact, h.ServerCommand)

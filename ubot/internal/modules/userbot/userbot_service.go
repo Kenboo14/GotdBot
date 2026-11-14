@@ -139,14 +139,6 @@ type Service struct {
 	sudoMu              sync.RWMutex
 	sudoCache           map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
 	broadcastSem        chan struct{}             // Semaphore untuk membatasi concurrent gcast
-	simMu               sync.Mutex                // guard state simulasi
-	simulasiActive      bool                      // apakah simulasi sedang aktif
-	simulasiStres       int                       // jumlah sesi stres simulasi
-	simulasiIdle        int                       // jumlah sesi idle simulasi
-	simulasiAktif       int                       // jumlah sesi aktif simulasi
-	simulasiUpdatedAt   time.Time                 // waktu simulasi terakhir diubah
-	simulasiMem         [][]byte                  // blok memori dialokasi untuk simulasi RAM
-	simulasiCancel      context.CancelFunc        // fungsi cancel untuk goroutine CPU simulasi
 }
 
 // publishSessionState mengirimkan perubahan lifecycle akun sebagai event
@@ -248,7 +240,6 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		sudoCache:       make(map[string]sudoCacheEntry),
 		broadcastSem:    make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
 		cmdSem:          make(chan struct{}, 32), // batas concurrency perintah background
-		simMu:           sync.Mutex{},
 	}
 }
 
