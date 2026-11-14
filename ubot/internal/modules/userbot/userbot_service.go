@@ -405,6 +405,11 @@ func (s *Service) Restore(ctx context.Context) {
 		s.accountStates[row.ChatID] = StateStopped
 		s.mu.Unlock()
 		log.Printf("📋 Metadata sesi dimuat (lazy): chat_id=%d owner_id=%d", row.ChatID, accID)
+
+		// Aktifkan session MTProto secara bertahap (batasi oleh maxActiveSession di activate()).
+		// Ini memastikan session yang sudah ada tetap dapat menerima pesan langsung dari Telegram
+		// setelah restart, sambil masih mencegah overload saat jumlah session sangat banyak.
+		s.activate(row.ChatID, accID)
 	}
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).
