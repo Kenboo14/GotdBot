@@ -159,10 +159,11 @@ func (h *Handler) PromptHapusList(ctx context.Context, b *botgotd.Bot, chatID, u
 }
 
 func isRestartBrowseButton(text string) bool {
-	switch text {
-	case assets.BtnCekList, assets.BtnCekGrup, assets.BtnTambahList, assets.BtnTambahGrup:
+	if text == "Kembali" {
 		return true
-	default:
-		return false
 	}
+	if n, err := strconv.Atoi(text); err == nil && n > 0 && n <= 100 {
+		return true
+	}
+	return false
 }
