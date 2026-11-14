@@ -161,7 +161,30 @@ func (s *Service) startSessionHeartbeatWorker(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.heartbeatActiveSessions(ctx)
+			s.syncSessionStates(ctx)
 		}
+	}
+}
+
+func (s *Service) syncSessionStates(ctx context.Context) {
+	s.mu.Lock()
+	type item struct {
+		chatID  int64
+		ownerID int64
+		state   AccountSessionState
+	}
+	items := make([]item, 0, len(s.accountStates))
+	for chatID, state := range s.accountStates {
+		items = append(items, item{
+			chatID:  chatID,
+			ownerID: s.owners[chatID],
+			state:   state,
+		})
+	}
+	s.mu.Unlock()
+
+	for _, it := range items {
+		s.publishSessionState(it.chatID, it.ownerID, it.state, "periodic_sync")
 	}
 }
 

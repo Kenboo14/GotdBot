@@ -13,6 +13,7 @@ import (
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 type Module interface {
@@ -87,9 +88,6 @@ func Run(ctx context.Context) {
 	opts := telegram.Options{
 		UpdateHandler: botInstance.Dispatcher,
 	}
-	client := telegram.NewClient(appID, appHash, opts)
-	botInstance.Client = client
-	botInstance.API = tg.NewClient(client)
 
 	go WaitShutdown(ctx, redis, dbManager)
 
@@ -100,6 +98,10 @@ func Run(ctx context.Context) {
 			return
 		default:
 		}
+
+		client := telegram.NewClient(appID, appHash, opts)
+		botInstance.Client = client
+		botInstance.API = tg.NewClient(client)
 
 		err := client.Run(ctx, func(runCtx context.Context) error {
 			status, err := client.Auth().Status(runCtx)
@@ -125,8 +127,18 @@ func Run(ctx context.Context) {
 		})
 
 		if err != nil && ctx.Err() == nil {
-			log.Printf("⚠️ MTProto client disconnected: %v; reconnecting in 5s...", err)
-			time.Sleep(5 * time.Second)
+			retryDelay := 5 * time.Second
+			if waitDur, ok := tgerr.AsFloodWait(err); ok {
+				retryDelay = waitDur + 2*time.Second
+				log.Printf("⚠️ MTProto hit FLOOD_WAIT: sleeping for %v before reconnecting...", retryDelay)
+			} else {
+				log.Printf("⚠️ MTProto client disconnected: %v; reconnecting in %v...", err, retryDelay)
+			}
+			select {
+			case <-time.After(retryDelay):
+			case <-ctx.Done():
+				return
+			}
 		} else {
 			break
 		}
