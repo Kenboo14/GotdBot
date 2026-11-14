@@ -1142,55 +1142,50 @@ func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string 
 	st := collectServerStats(invokerID, invokeDuration)
 	nowStr := time.Now().Format("15:04:05 WIB")
 
-	simulasiLine := ""
+	simulasiTable := ""
 	if st.simulasi.Status == "RUNNING" {
 		sim := st.simulasi
-		simulasiLine = fmt.Sprintf(`
+		simulasiTable = fmt.Sprintf(`
 
-🧪 <b>Virtual Userbot Simulation:</b>
-• Status: 🟢 <b>RUNNING</b>
-• Target Users: <b>%d</b> | Active Users: <b>%d</b>
-• Generated Updates: <b>%d</b>
-• Processed Updates: <b>%d</b>
-• Failed Updates: <b>%d</b> | Pending Queue: <b>%d</b>
-• Throughput: <b>%.1f updates/sec</b>
-• Latency: P50: <code>%.2f ms</code> | P95: <code>%.2f ms</code> | P99: <code>%.2f ms</code>
-• Simulation Goroutines: <b>%d</b>`,
+<table border="1">
+  <tr><th>🧪 Simulasi Beban</th><th>📊 Metrik Live</th></tr>
+  <tr><td>👥 Target / Aktif</td><td><code>%d / %d Users</code></td></tr>
+  <tr><td>📨 Updates (Gen/Proc)</td><td><code>%d / %d</code></td></tr>
+  <tr><td>🚀 Throughput</td><td><code>%.1f updates/sec</code></td></tr>
+  <tr><td>⏱️ Latensi P50 / P99</td><td><code>%.2f ms / %.2f ms</code></td></tr>
+  <tr><td>🧵 Goroutines</td><td><code>%d</code></td></tr>
+</table>`,
 			sim.TargetUsers, sim.ActiveUsers,
-			sim.GeneratedUpdates,
-			sim.ProcessedUpdates,
-			sim.FailedUpdates, sim.PendingQueue,
+			sim.GeneratedUpdates, sim.ProcessedUpdates,
 			sim.ThroughputSec,
-			sim.LatencyP50Ms, sim.LatencyP95Ms, sim.LatencyP99Ms,
+			sim.LatencyP50Ms, sim.LatencyP99Ms,
 			sim.Goroutines,
 		)
 	}
 
 	return fmt.Sprintf(`⚡ <b>[GOTDBOT SYSTEM & SERVER STATUS]</b>
 🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s
-────────────────────────
 
-<blockquote expandable>💻 <b>Spesifikasi Host VPS</b>
-• 🐧 <b>OS / Arch</b>          : <code>%s (%s)</code>
-• ⚙️ <b>CPU Host</b>           : <code>%.1f%% (%d vCPU Cores)</code>
-• 🧠 <b>System RAM VPS</b>     : <code>%.1f / %.1f MiB (%.1f%%)</code>
-• 💾 <b>Swap Memory</b>        : <code>%.1f / %.1f MiB (%.1f%%)</code>
-• 🌐 <b>Ping Server</b>        : <code>%s</code>
-• 👤 <b>User Invoke</b>        : %s (Latency: <code>%s</code>)</blockquote>
+<table border="1">
+  <tr><th>💻 Host VPS</th><th>📊 Spesifikasi</th></tr>
+  <tr><td>🐧 OS / Arch</td><td><code>%s (%s)</code></td></tr>
+  <tr><td>⚙️ CPU Host</td><td><code>%.1f%% (%d vCPU)</code></td></tr>
+  <tr><td>🧠 RAM VPS</td><td><code>%.1f / %.1f MiB (%.1f%%)</code></td></tr>
+  <tr><td>💾 Swap VPS</td><td><code>%.1f / %.1f MiB (%.1f%%)</code></td></tr>
+  <tr><td>🌐 Ping Server</td><td><code>%s</code></td></tr>
+  <tr><td>👤 User Invoke</td><td>%s (<code>%s</code>)</td></tr>
+</table>
 
-<blockquote expandable>👥 <b>MTProto Session Pool</b>
-• 🟢 Online (Connected)  : <b>%d</b> akun
-• 🟡 Menghubungkan      : <b>%d</b> akun
-• 🟠 Reconnecting       : <b>%d</b> akun
-• 🔴 Revoked / Invalid  : <b>%d</b> akun%s</blockquote>
-
-<blockquote expandable>⚙️ <b>Kesehatan Mesin & Runtime</b>
-• ⚡ CPU All Image     : <b>%.2f%%</b>
-• ♾️ RAM All Image     : <b>%.2f MiB</b>
-• 🧠 RAM Alloc / Sys    : <b>%.0f MiB</b> / %.0f MiB
-• 💻 Concurrency        : <b>%d Goroutines</b>
-• 🚀 Redis Broker Pool  : <b>16 Workers</b> (PEL Auto-Recovery)
-• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50</blockquote>
+<table border="1">
+  <tr><th>⚙️ GotdBot Runtime</th><th>📊 Metrik Live</th></tr>
+  <tr><td>👥 Sesi MTProto</td><td><code>%d Online (%d Revoked)</code></td></tr>
+  <tr><td>⚡ CPU Container</td><td><code>%.2f%%</code></td></tr>
+  <tr><td>♾️ RAM Container</td><td><code>%.2f MiB</code></td></tr>
+  <tr><td>🧠 Go Alloc / Sys</td><td><code>%.0f MiB / %.0f MiB</code></td></tr>
+  <tr><td>💻 Concurrency</td><td><code>%d Goroutines</code></td></tr>
+  <tr><td>🚀 Redis Broker</td><td><code>16 Workers (PEL)</code></td></tr>
+  <tr><td>🛡️ GC Tuning</td><td><code>GOMEMLIMIT=1100M</code></td></tr>
+</table>%s
 ────────────────────────
 Status: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>
 <i>GotdBot Infrastructure • Layer 227 MTProto</i>`,
@@ -1201,10 +1196,11 @@ Status: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>
 		st.usedSwapMB, st.totalSwapMB, st.swapPercent,
 		st.serverPingStr,
 		st.userInvokeStr, st.invokeStr,
-		st.connected, st.connecting, st.reconnecting, st.revoked, simulasiLine,
+		st.connected, st.revoked,
 		st.cpuAllImage, st.ramAllImage,
 		st.heapAllocMB, st.sysMemMB,
 		st.goroutines,
+		simulasiTable,
 	)
 }
 
