@@ -95,45 +95,33 @@ func (m *MongoClient) EnsureIndexes(ctx context.Context) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	createIndexSafe := func(col *mongo.Collection, model mongo.IndexModel) {
+		_, err := col.Indexes().CreateOne(ctxTimeout, model)
+		if err != nil && !strings.Contains(err.Error(), "IndexOptionsConflict") && !strings.Contains(err.Error(), "already exists") {
+			log.Printf("⚠️ Gagal membuat index %s: %v", col.Name(), err)
+		}
+	}
+
 	// 1. userbot_sessions indexes (fast lookup by owner_id & account_id)
 	colSessions := m.Database.Collection("userbot_sessions")
-	_, err := colSessions.Indexes().CreateMany(ctxTimeout, []mongo.IndexModel{
-		{
-			Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "account_id", Value: 1}},
-			Options: options.Index().SetName("idx_sessions_owner_account"),
-		},
-		{
-			Keys: bson.D{{Key: "account_id", Value: 1}},
-			Options: options.Index().SetName("idx_sessions_account"),
-		},
+	createIndexSafe(colSessions, mongo.IndexModel{
+		Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "account_id", Value: 1}},
 	})
-	if err != nil {
-		log.Printf("⚠️ Gagal membuat index userbot_sessions: %v", err)
-	}
+	createIndexSafe(colSessions, mongo.IndexModel{
+		Keys: bson.D{{Key: "account_id", Value: 1}},
+	})
 
 	// 2. userbot_notes indexes (fast note lookup per owner)
 	colNotes := m.Database.Collection("userbot_notes")
-	_, err = colNotes.Indexes().CreateMany(ctxTimeout, []mongo.IndexModel{
-		{
-			Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "name", Value: 1}},
-			Options: options.Index().SetName("idx_notes_owner_name"),
-		},
+	createIndexSafe(colNotes, mongo.IndexModel{
+		Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "name", Value: 1}},
 	})
-	if err != nil {
-		log.Printf("⚠️ Gagal membuat index userbot_notes: %v", err)
-	}
 
 	// 3. userbot_sudo indexes
 	colSudo := m.Database.Collection("userbot_sudo")
-	_, err = colSudo.Indexes().CreateMany(ctxTimeout, []mongo.IndexModel{
-		{
-			Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
-			Options: options.Index().SetName("idx_sudo_owner_user"),
-		},
+	createIndexSafe(colSudo, mongo.IndexModel{
+		Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
 	})
-	if err != nil {
-		log.Printf("⚠️ Gagal membuat index userbot_sudo: %v", err)
-	}
 
 	log.Println("🍃 MongoDB indexes ensured (sessions, notes, sudo).")
 }

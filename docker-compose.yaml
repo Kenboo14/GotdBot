@@ -29,6 +29,8 @@ services:
       MONGO_URI: ${MONGO_URI:-${MONGO_BACKUP_URI:-}}
       MONGO_DB: ${MONGO_DB:-${MONGO_BACKUP_DB:-gotdbot}}
       SQLITE_PATH: /app/data/userbot.db
+      GROUP_DEV: ${GROUP_DEV:-}
+      MONITOR_TOPIC: ${MONITOR_TOPIC:-}
       GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-65MiB}
       GOGC: ${GATEWAY_GOGC:-50}
     volumes:
