@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
@@ -459,7 +459,7 @@ var (
 	cachedCancelMarkup       = assets.CancelOnlyMarkup
 	cachedCreateChoiceMarkup = assets.CreateChoiceMarkup
 	cachedServerMarkup       = &botgotd.InlineKeyboardMarkup{
-		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "Refresh", CallbackData: "assist_server:refresh"}}},
+		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "🔄 Refresh Status", CallbackData: "assist_server:refresh"}}},
 	}
 	cachedRemoveKeyboard = assets.RemoveKeyboard
 )
@@ -736,15 +736,8 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 	}
 
 	isInline := update.CallbackQuery.RawInlineMessageID != nil || update.CallbackQuery.InlineMessageID != ""
-	var text string
-	var markup any
-	if isInline {
-		text = serverStatusTextPlain(invokerID, time.Since(start))
-		markup = serverKeyboard()
-	} else {
-		text = serverStatusTextRich(invokerID, time.Since(start))
-		markup = nil
-	}
+	text := serverStatusTextRich(invokerID, time.Since(start))
+	markup := serverKeyboard()
 
 	edit := &botgotd.EditMessageTextParams{
 		Text:               text,
@@ -809,8 +802,12 @@ func (h *Handler) ServerCommand(ctx context.Context, b *botgotd.Bot, update *bot
 		invokerID = update.Message.From.ID
 	}
 	text := serverStatusTextRich(invokerID, time.Since(invokeStart))
-	// /server menggunakan tombol rich saja di dalam body pesan (tg-button-row), tanpa ReplyMarkup tombol keyboard biasa di bawah
-	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML"})
+	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+		ChatID:      update.Message.Chat.ID,
+		Text:        text,
+		ParseMode:   "HTML",
+		ReplyMarkup: serverKeyboard(),
+	})
 }
 
 func (h *Handler) CodeCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
@@ -990,19 +987,26 @@ type serverStats struct {
 	usedSwapMB    float64
 	totalSwapMB   float64
 	swapPercent   float64
-	readMB        float64
-	writeMB       float64
 	heapAllocMB   float64
 	sysMemMB      float64
 	goroutines    int
 	uptimeStr     string
+
+	osPlatform   string
+	kernelArch   string
+	connected    int
+	connecting   int
+	reconnecting int
+	revoked      int
+	cpuAllImage  float64
+	ramAllImage  float64
+	simulasi     simulationMetricsDoc
 }
 
 func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverStats {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	// Latency / Ping Server (TCP connect ke DNS 1.1.1.1:53 dengan timeout ketat 350ms agar responsif)
 	pingServerStart := time.Now()
 	conn, err := net.DialTimeout("tcp", "1.1.1.1:53", 350*time.Millisecond)
 	pingServerMs := float64(time.Since(pingServerStart).Microseconds()) / 1000.0
@@ -1012,14 +1016,12 @@ func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverSt
 		pingServerMs = -1
 	}
 
-	// CPU Usage
 	cpuPercents, _ := cpu.Percent(0, false)
 	cpuUsage := 0.0
 	if len(cpuPercents) > 0 {
 		cpuUsage = cpuPercents[0]
 	}
 
-	// System RAM & Swap / Swapon
 	vMem, _ := mem.VirtualMemory()
 	sMem, _ := mem.SwapMemory()
 
@@ -1041,16 +1043,17 @@ func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverSt
 		swapPercent = sMem.UsedPercent
 	}
 
-	// Disk I/O
-	diskStats, _ := disk.IOCounters()
-	readMB := 0.0
-	writeMB := 0.0
-	for _, stat := range diskStats {
-		readMB += float64(stat.ReadBytes) / 1024 / 1024
-		writeMB += float64(stat.WriteBytes) / 1024 / 1024
+	osPlatform := runtime.GOOS
+	kernelArch := runtime.GOARCH
+	if hInfo, err := host.Info(); err == nil && hInfo != nil {
+		if hInfo.Platform != "" {
+			osPlatform = strings.Title(hInfo.Platform)
+		}
+		if hInfo.KernelArch != "" {
+			kernelArch = hInfo.KernelArch
+		}
 	}
 
-	// Format invoke & ping
 	invokeStr := "-"
 	if invokeDuration > 0 {
 		invokeStr = fmt.Sprintf("%.2f ms", float64(invokeDuration.Microseconds())/1000.0)
@@ -1065,6 +1068,52 @@ func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverSt
 		userInvokeStr = fmt.Sprintf("<code>%d</code>", invokerID)
 	}
 
+	var (
+		connected    int
+		connecting   int
+		reconnecting int
+		revoked      int
+		cpuAllImage  float64
+		ramAllImage  float64
+		simDoc       simulationMetricsDoc
+	)
+
+	if globalTelemetry != nil {
+		globalTelemetry.mu.RLock()
+		for _, st := range globalTelemetry.sessionStates {
+			switch strings.ToUpper(st) {
+			case "CONNECTED":
+				connected++
+			case "CONNECTING":
+				connecting++
+			case "RECONNECTING", "SUSPECTED":
+				reconnecting++
+			case "SESSION_INVALID":
+				revoked++
+			}
+		}
+		simDoc = globalTelemetry.simulasiMetrics
+		cpuAllImage = globalTelemetry.cpuAllImage
+		ramAllImage = globalTelemetry.ramAllImage
+		globalTelemetry.mu.RUnlock()
+	}
+
+	if cpuAllImage == 0 && ramAllImage == 0 {
+		if dStats, err := fetchDockerStackStats(context.Background()); err == nil && dStats != nil {
+			cpuAllImage = dStats.TotalCPU
+			ramAllImage = dStats.TotalMemMB
+		}
+	}
+
+	ramAllocMB := m.Alloc / 1024 / 1024
+	ramSysMB := m.Sys / 1024 / 1024
+	goroutines := runtime.NumGoroutine()
+	if simDoc.Status == "RUNNING" {
+		ramAllocMB += simDoc.RAMAllocMB
+		ramSysMB += simDoc.RAMSysMB
+		goroutines += simDoc.Goroutines
+	}
+
 	return &serverStats{
 		userInvokeStr: userInvokeStr,
 		invokeStr:     invokeStr,
@@ -1077,91 +1126,100 @@ func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverSt
 		usedSwapMB:    usedSwapMB,
 		totalSwapMB:   totalSwapMB,
 		swapPercent:   swapPercent,
-		readMB:        readMB,
-		writeMB:       writeMB,
-		heapAllocMB:   float64(m.HeapAlloc) / 1024 / 1024,
-		sysMemMB:      float64(m.Sys) / 1024 / 1024,
-		goroutines:    runtime.NumGoroutine(),
+		heapAllocMB:   float64(ramAllocMB),
+		sysMemMB:      float64(ramSysMB),
+		goroutines:    goroutines,
 		uptimeStr:     formatUptime(time.Since(gatewayStartedAt)),
+		osPlatform:    osPlatform,
+		kernelArch:    kernelArch,
+		connected:     connected,
+		connecting:    connecting,
+		reconnecting:  reconnecting,
+		revoked:       revoked,
+		cpuAllImage:   cpuAllImage,
+		ramAllImage:   ramAllImage,
+		simulasi:      simDoc,
 	}
 }
 
-// serverStatusTextRich renders the table-based Rich Message format for /server
 func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string {
 	st := collectServerStats(invokerID, invokeDuration)
-	return fmt.Sprintf(`<h1>⚡ Status Server GotdBot</h1>
-<table border="1">
-  <tr><th>🖥 Resource</th><th>📊 Nilai</th><th>⚙️ Kapasitas</th></tr>
-  <tr><td>⚙️ CPU</td><td><code>%.1f%%</code></td><td>%d Cores</td></tr>
-  <tr><td>🧠 System RAM</td><td><code>%.1f MB</code></td><td>%.1f MB (%.1f%%)</td></tr>
-  <tr><td>💾 Swapon</td><td><code>%.1f MB</code></td><td>%.1f MB (%.1f%%)</td></tr>
-  <tr><td>🔄 Disk I/O</td><td><code>R: %.1f MB</code></td><td>W: %.1f MB</td></tr>
-  <tr><td>📦 Go Heap</td><td><code>%.1f MB</code></td><td>Sys: %.1f MB</td></tr>
-  <tr><td>🧵 Goroutine</td><td><code>%d</code></td><td>Threads</td></tr>
-  <tr><td>🌐 Ping Server</td><td><code>%s</code></td><td>Latency: %s</td></tr>
-</table>
-<blockquote expandable>👤 <b>User Invoke :</b> %s
-⏳ <b>Uptime Server :</b> <code>%s</code></blockquote>
+	nowStr := time.Now().Format("15:04:05 WIB")
+
+	simulasiLine := ""
+	if st.simulasi.Status == "RUNNING" {
+		sim := st.simulasi
+		simulasiLine = fmt.Sprintf(`
+
+🧪 <b>Virtual Userbot Simulation:</b>
+• Status: 🟢 <b>RUNNING</b>
+• Target Users: <b>%d</b> | Active Users: <b>%d</b>
+• Generated Updates: <b>%d</b>
+• Processed Updates: <b>%d</b>
+• Failed Updates: <b>%d</b> | Pending Queue: <b>%d</b>
+• Throughput: <b>%.1f updates/sec</b>
+• Latency: P50: <code>%.2f ms</code> | P95: <code>%.2f ms</code> | P99: <code>%.2f ms</code>
+• Simulation Goroutines: <b>%d</b>`,
+			sim.TargetUsers, sim.ActiveUsers,
+			sim.GeneratedUpdates,
+			sim.ProcessedUpdates,
+			sim.FailedUpdates, sim.PendingQueue,
+			sim.ThroughputSec,
+			sim.LatencyP50Ms, sim.LatencyP95Ms, sim.LatencyP99Ms,
+			sim.Goroutines,
+		)
+	}
+
+	return fmt.Sprintf(`<h1>⚡ Status Server & Sistem GotdBot</h1>
+🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s
+
+<blockquote expandable>
+💻 <b>Spesifikasi Host VPS:</b>
+• 🐧 <b>OS / Arch</b>          : <code>%s (%s)</code>
+• ⚙️ <b>CPU Host</b>           : <code>%.1f%% (%d vCPU Cores)</code>
+• 🧠 <b>System RAM VPS</b>     : <code>%.1f / %.1f MiB (%.1f%%)</code>
+• 💾 <b>Swap Memory</b>        : <code>%.1f / %.1f MiB (%.1f%%)</code>
+• 🌐 <b>Ping Server</b>        : <code>%s</code>
+• 👤 <b>User Invoke</b>        : %s (Latency: <code>%s</code>)
+</blockquote>
+
+<blockquote expandable>
+👥 <b>MTProto Session Pool:</b>
+• 🟢 Online (Connected)  : <b>%d</b> akun
+• 🟡 Menghubungkan      : <b>%d</b> akun
+• 🟠 Reconnecting       : <b>%d</b> akun
+• 🔴 Revoked / Invalid  : <b>%d</b> akun%s
+
+⚙️ <b>Kesehatan Mesin & Runtime:</b>
+• ⚡ CPU All Image     : <b>%.2f%%</b>
+• ♾️ RAM All Image     : <b>%.2f MiB</b>
+• 🧠 RAM Alloc / Sys    : <b>%.0f MiB</b> / %.0f MiB
+• 💻 Concurrency        : <b>%d Goroutines</b>
+• 🚀 Redis Broker Pool  : <b>16 Workers</b> (PEL Auto-Recovery)
+• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50
+</blockquote>
+
 <tg-button-row>
-  <tg-button type="callback_data" data="assist_server:refresh" style="primary">🔄 Refresh Server</tg-button>
+  <tg-button type="callback_data" data="assist_server:refresh" style="primary">🔄 Refresh Status</tg-button>
 </tg-button-row>
 <hr/>
 <p>GotdBot Infrastructure • Layer 227 MTProto</p>`,
-		st.cpuUsage,
-		st.numCPU,
-		st.usedRAMMB,
-		st.totalRAMMB,
-		st.ramPercent,
-		st.usedSwapMB,
-		st.totalSwapMB,
-		st.swapPercent,
-		st.readMB,
-		st.writeMB,
-		st.heapAllocMB,
-		st.sysMemMB,
-		st.goroutines,
+		nowStr, st.uptimeStr,
+		st.osPlatform, st.kernelArch,
+		st.cpuUsage, st.numCPU,
+		st.usedRAMMB, st.totalRAMMB, st.ramPercent,
+		st.usedSwapMB, st.totalSwapMB, st.swapPercent,
 		st.serverPingStr,
-		st.invokeStr,
-		st.userInvokeStr,
-		st.uptimeStr,
+		st.userInvokeStr, st.invokeStr,
+		st.connected, st.connecting, st.reconnecting, st.revoked, simulasiLine,
+		st.cpuAllImage, st.ramAllImage,
+		st.heapAllocMB, st.sysMemMB,
+		st.goroutines,
 	)
 }
 
-// serverStatusTextPlain renders the structured clean text format for !server (via inline bot)
 func serverStatusTextPlain(invokerID int64, invokeDuration time.Duration) string {
-	st := collectServerStats(invokerID, invokeDuration)
-	return fmt.Sprintf(`<b>⚡ Status Server GotdBot</b>
-
-👤 <b>User Invoke:</b> %s
-⏱️ <b>Latency Invoke:</b> <code>%s</code>
-🌐 <b>Ping Server:</b> <code>%s</code>
-
-⚙️ <b>CPU:</b> <code>%.1f%%</code> (%d Cores)
-🧠 <b>System RAM:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
-💾 <b>Swapon:</b> <code>%.1f / %.1f MB (%.1f%%)</code>
-🔄 <b>Disk I/O:</b> <code>R: %.1f MB | W: %.1f MB</code>
-
-📦 <b>RAM Proses (Go):</b> <code>%.1f MB</code> (Heap: <code>%.1f MB</code>)
-🧵 <b>Goroutine:</b> <code>%d</code>
-⏳ <b>Uptime:</b> <code>%s</code>`,
-		st.userInvokeStr,
-		st.invokeStr,
-		st.serverPingStr,
-		st.cpuUsage,
-		st.numCPU,
-		st.usedRAMMB,
-		st.totalRAMMB,
-		st.ramPercent,
-		st.usedSwapMB,
-		st.totalSwapMB,
-		st.swapPercent,
-		st.readMB,
-		st.writeMB,
-		st.sysMemMB,
-		st.heapAllocMB,
-		st.goroutines,
-		st.uptimeStr,
-	)
+	return serverStatusTextRich(invokerID, invokeDuration)
 }
 
 func serverStatusText(invokerID int64, invokeDuration time.Duration) string {
