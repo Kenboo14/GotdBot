@@ -885,7 +885,10 @@ func HandleInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 		// !server via inline bot menggunakan teks biasa terstruktur (Gambar 1) agar kompatibel di semua chat Telegram
 		text := serverStatusTextPlain(invokerID, time.Since(invokeStart))
 		result := &botgotd.InlineQueryResultArticle{ID: "assist_server", Title: "Server status", Description: "Status gateway dan resource sistem lengkap", InputMessageContent: &botgotd.InputTextMessageContent{MessageText: text, ParseMode: "HTML"}, ReplyMarkup: serverKeyboard()}
-		_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: false})
+		_, err := b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: false})
+		if err != nil {
+			log.Printf("⚠️ [inline-server] AnswerInlineQuery error: %v", err)
+		}
 		return
 	}
 	if strings.HasPrefix(query, "code ") {
@@ -1098,13 +1101,6 @@ func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverSt
 		globalTelemetry.mu.RUnlock()
 	}
 
-	if cpuAllImage == 0 && ramAllImage == 0 {
-		if dStats, err := fetchDockerStackStats(context.Background()); err == nil && dStats != nil {
-			cpuAllImage = dStats.TotalCPU
-			ramAllImage = dStats.TotalMemMB
-		}
-	}
-
 	ramAllocMB := m.Alloc / 1024 / 1024
 	ramSysMB := m.Sys / 1024 / 1024
 	goroutines := runtime.NumGoroutine()
@@ -1170,21 +1166,18 @@ func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string 
 		)
 	}
 
-	return fmt.Sprintf(`<h1>⚡ Status Server & Sistem GotdBot</h1>
+	return fmt.Sprintf(`⚡ <b>[GOTDBOT SYSTEM & SERVER STATUS]</b>
 🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s
 
-<blockquote expandable>
-💻 <b>Spesifikasi Host VPS:</b>
+<blockquote expandable>💻 <b>Spesifikasi Host VPS:</b>
 • 🐧 <b>OS / Arch</b>          : <code>%s (%s)</code>
 • ⚙️ <b>CPU Host</b>           : <code>%.1f%% (%d vCPU Cores)</code>
 • 🧠 <b>System RAM VPS</b>     : <code>%.1f / %.1f MiB (%.1f%%)</code>
 • 💾 <b>Swap Memory</b>        : <code>%.1f / %.1f MiB (%.1f%%)</code>
 • 🌐 <b>Ping Server</b>        : <code>%s</code>
-• 👤 <b>User Invoke</b>        : %s (Latency: <code>%s</code>)
-</blockquote>
+• 👤 <b>User Invoke</b>        : %s (Latency: <code>%s</code>)</blockquote>
 
-<blockquote expandable>
-👥 <b>MTProto Session Pool:</b>
+<blockquote expandable>👥 <b>MTProto Session Pool:</b>
 • 🟢 Online (Connected)  : <b>%d</b> akun
 • 🟡 Menghubungkan      : <b>%d</b> akun
 • 🟠 Reconnecting       : <b>%d</b> akun
@@ -1196,14 +1189,9 @@ func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string 
 • 🧠 RAM Alloc / Sys    : <b>%.0f MiB</b> / %.0f MiB
 • 💻 Concurrency        : <b>%d Goroutines</b>
 • 🚀 Redis Broker Pool  : <b>16 Workers</b> (PEL Auto-Recovery)
-• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50
-</blockquote>
-
-<tg-button-row>
-  <tg-button type="callback_data" data="assist_server:refresh" style="primary">🔄 Refresh Status</tg-button>
-</tg-button-row>
-<hr/>
-<p>GotdBot Infrastructure • Layer 227 MTProto</p>`,
+• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50</blockquote>
+────────────────────────
+<i>GotdBot Infrastructure • Layer 227 MTProto</i>`,
 		nowStr, st.uptimeStr,
 		st.osPlatform, st.kernelArch,
 		st.cpuUsage, st.numCPU,
