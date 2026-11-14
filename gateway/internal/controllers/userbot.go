@@ -1168,16 +1168,16 @@ func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string 
 
 	return fmt.Sprintf(`⚡ <b>[GOTDBOT SYSTEM & SERVER STATUS]</b>
 🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s
-
-<blockquote expandable>💻 <b>Spesifikasi Host VPS:</b>
+────────────────────────
+💻 <b>Spesifikasi Host VPS:</b>
 • 🐧 <b>OS / Arch</b>          : <code>%s (%s)</code>
 • ⚙️ <b>CPU Host</b>           : <code>%.1f%% (%d vCPU Cores)</code>
 • 🧠 <b>System RAM VPS</b>     : <code>%.1f / %.1f MiB (%.1f%%)</code>
 • 💾 <b>Swap Memory</b>        : <code>%.1f / %.1f MiB (%.1f%%)</code>
 • 🌐 <b>Ping Server</b>        : <code>%s</code>
-• 👤 <b>User Invoke</b>        : %s (Latency: <code>%s</code>)</blockquote>
+• 👤 <b>User Invoke</b>        : %s (Latency: <code>%s</code>)
 
-<blockquote expandable>👥 <b>MTProto Session Pool:</b>
+👥 <b>MTProto Session Pool:</b>
 • 🟢 Online (Connected)  : <b>%d</b> akun
 • 🟡 Menghubungkan      : <b>%d</b> akun
 • 🟠 Reconnecting       : <b>%d</b> akun
@@ -1189,8 +1189,9 @@ func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string 
 • 🧠 RAM Alloc / Sys    : <b>%.0f MiB</b> / %.0f MiB
 • 💻 Concurrency        : <b>%d Goroutines</b>
 • 🚀 Redis Broker Pool  : <b>16 Workers</b> (PEL Auto-Recovery)
-• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50</blockquote>
+• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50
 ────────────────────────
+Status: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>
 <i>GotdBot Infrastructure • Layer 227 MTProto</i>`,
 		nowStr, st.uptimeStr,
 		st.osPlatform, st.kernelArch,
