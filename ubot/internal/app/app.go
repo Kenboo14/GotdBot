@@ -4,6 +4,7 @@ import (
 	"assterisk/ubot/internal/config"
 	"assterisk/ubot/internal/databases"
 	"assterisk/ubot/internal/modules/broadcast"
+	"assterisk/ubot/internal/modules/simulation"
 	"assterisk/ubot/internal/modules/userbot"
 	"assterisk/ubot/internal/utils"
 	"context"
@@ -70,6 +71,7 @@ func Run(ctx context.Context) {
 	modules := []Module{
 		&broadcast.Init{},
 		&userbot.Init{Config: cfg},
+		&simulation.Init{},
 	}
 
 	for _, m := range modules {

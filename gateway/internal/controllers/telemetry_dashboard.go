@@ -27,6 +27,27 @@ type alertEventItem struct {
 	Timestamp time.Time
 }
 
+type simulationMetricsDoc struct {
+	Status           string  `json:"status"`
+	TargetUsers      int     `json:"target_users"`
+	ActiveUsers      int     `json:"active_users"`
+	LowProfile       int     `json:"low_profile"`
+	MedProfile       int     `json:"med_profile"`
+	HighProfile      int     `json:"high_profile"`
+	GeneratedUpdates int64   `json:"generated_updates"`
+	ProcessedUpdates int64   `json:"processed_updates"`
+	FailedUpdates    int64   `json:"failed_updates"`
+	PendingQueue     int     `json:"pending_queue"`
+	ThroughputSec    float64 `json:"throughput_sec"`
+	LatencyP50Ms     float64 `json:"latency_p50_ms"`
+	LatencyP95Ms     float64 `json:"latency_p95_ms"`
+	LatencyP99Ms     float64 `json:"latency_p99_ms"`
+	UptimeSec        int64   `json:"uptime_sec"`
+	Goroutines       int     `json:"goroutines"`
+	ErrorsCount      int64   `json:"errors_count"`
+	UpdatedAt        int64   `json:"updated_at"`
+}
+
 type telemetryTracker struct {
 	mu                  sync.RWMutex
 	sessionStates       map[int64]string // chatID -> state
@@ -35,11 +56,7 @@ type telemetryTracker struct {
 	lastDashboardMsgID  int
 	dashboardChatTarget any
 	monitorTopicID      int
-	simulasiActive      bool
-	simulasiStres       int
-	simulasiIdle        int
-	simulasiAktif       int
-	simulasiUpdatedAt   int64
+	simulasiMetrics     simulationMetricsDoc
 	rdb                 *redis.Client
 }
 
@@ -152,27 +169,16 @@ func (t *telemetryTracker) loadSimulasiState(rdb *redis.Client) {
 	if rdb == nil {
 		return
 	}
-	data, err := rdb.Get(context.Background(), "simulasi:state").Result()
+	data, err := rdb.Get(context.Background(), "simulasi:metrics").Result()
 	if err != nil {
 		return
 	}
-	var st struct {
-		Active       bool   `json:"active"`
-		State        string `json:"state"`
-		Stres        int    `json:"stres"`
-		Idle         int    `json:"idle"`
-		Aktif        int    `json:"aktif"`
-		UpdatedAt    int64  `json:"updated_at"`
-	}
-	if json.Unmarshal([]byte(data), &st) != nil {
+	var doc simulationMetricsDoc
+	if json.Unmarshal([]byte(data), &doc) != nil {
 		return
 	}
 	t.mu.Lock()
-	t.simulasiActive = st.Active
-	t.simulasiStres = st.Stres
-	t.simulasiIdle = st.Idle
-	t.simulasiAktif = st.Aktif
-	t.simulasiUpdatedAt = st.UpdatedAt
+	t.simulasiMetrics = doc
 	t.mu.Unlock()
 }
 
@@ -273,13 +279,26 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	nowStr := time.Now().Format("15:04:05 WIB")
 
 	simulasiLine := ""
-	if t.simulasiActive {
+	if t.simulasiMetrics.Status == "RUNNING" {
+		sim := t.simulasiMetrics
 		simulasiLine = fmt.Sprintf(`
-🧪 <b>Simulasi Beban:</b>
-• Stres: <code>%d</code> | Idle: <code>%d</code> | Aktif: <code>%d</code>
-• Diperbarui: <code>%s</code>`,
-			t.simulasiStres, t.simulasiIdle, t.simulasiAktif,
-			time.Unix(t.simulasiUpdatedAt, 0).Format("15:04:05"),
+
+🧪 <b>Virtual Userbot Simulation:</b>
+• Status: 🟢 <b>RUNNING</b>
+• Target Users: <b>%d</b> | Active Users: <b>%d</b>
+• Generated Updates: <b>%d</b>
+• Processed Updates: <b>%d</b>
+• Failed Updates: <b>%d</b> | Pending Queue: <b>%d</b>
+• Throughput: <b>%.1f updates/sec</b>
+• Latency: P50: <code>%.2f ms</code> | P95: <code>%.2f ms</code> | P99: <code>%.2f ms</code>
+• Simulation Goroutines: <b>%d</b>`,
+			sim.TargetUsers, sim.ActiveUsers,
+			sim.GeneratedUpdates,
+			sim.ProcessedUpdates,
+			sim.FailedUpdates, sim.PendingQueue,
+			sim.ThroughputSec,
+			sim.LatencyP50Ms, sim.LatencyP95Ms, sim.LatencyP99Ms,
+			sim.Goroutines,
 		)
 	}
 
