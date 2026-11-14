@@ -52,20 +52,33 @@ type stackResourceStats struct {
 	TotalMemMB float64
 }
 
+var (
+	dockerClientOnce sync.Once
+	dockerHTTPClient *http.Client
+)
+
+func getDockerClient(socketPath string) *http.Client {
+	dockerClientOnce.Do(func() {
+		dockerHTTPClient = &http.Client{
+			Transport: &http.Transport{
+				DisableKeepAlives: true,
+				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
+				},
+			},
+			Timeout: 4 * time.Second,
+		}
+	})
+	return dockerHTTPClient
+}
+
 func fetchDockerStackStats(ctx context.Context) (*stackResourceStats, error) {
 	socketPath := "/var/run/docker.sock"
 	if _, err := os.Stat(socketPath); err != nil {
 		return nil, fmt.Errorf("docker socket not accessible: %w", err)
 	}
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-			},
-		},
-		Timeout: 4 * time.Second,
-	}
+	client := getDockerClient(socketPath)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/containers/json", nil)
 	if err != nil {
