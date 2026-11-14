@@ -50,6 +50,8 @@ type Config struct {
 		WatermarkCache int    `yaml:"watermark_cache"`
 		SessionCache   int    `yaml:"session_cache"`
 	} `yaml:"cache"`
+
+	OwnerID int64 `yaml:"owner_id"`
 }
 
 func Load(path string) (*Config, error) {
@@ -166,5 +168,9 @@ func applyEnv(cfg *Config) {
 	}
 	if cfg.Cache.SessionCache <= 0 {
 		cfg.Cache.SessionCache = 7073
+	}
+
+	if value := os.Getenv("OWNER"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.OwnerID)
 	}
 }

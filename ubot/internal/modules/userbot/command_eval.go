@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/message"
-	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
 	"github.com/redis/go-redis/v9"
 	"github.com/traefik/yaegi/interp"
@@ -27,47 +25,7 @@ const (
 // evaluatorCommand evaluates Go code. Shell commands remain exclusively in
 // command_shell.go.
 func (s *Service) evaluatorCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, prefix, args string) error {
-	commandArgs := args
-	var reply *tg.Message
-	if msg != nil {
-		reply, _ = s.replyMessage(ctx, client, msg, target)
-	}
-	if strings.TrimSpace(args) == "" && reply != nil {
-		args = reply.Message
-	}
-	if strings.TrimSpace(args) == "" {
-		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: "+prefix+"eval <kode Go>")
-		return err
-	}
-	if len(args) > maxEvalCodeBytes {
-		_, err := s.getSender(client).To(target).Text(ctx, fmt.Sprintf("Kode eval terlalu panjang (maksimal %d KB).", maxEvalCodeBytes/1024))
-		return err
-	}
-	sender := s.getSender(client)
-	replyFunc := func(replyCtx context.Context, text string) error {
-		// Use the command context even when Yaegi calls m.Reply(), so a reply
-		// cannot outlive the eval timeout.
-		if replyCtx == nil {
-			replyCtx = ctx
-		}
-		_, err := sender.To(target).Text(replyCtx, text)
-		return err
-	}
-	output, err := evaluateGo(ctx, args, commandArgs, s, client, msg, reply, entities, replyFunc)
-	if err != nil {
-		output = err.Error() + "\n" + output
-	}
-	result := args + "\n\nOutput:\n" + output
-	if len(result) > 3900 {
-		_, sendErr := sender.To(target).Upload(message.FromBytes("dump.txt", []byte(result))).File(ctx)
-		return sendErr
-	}
-	_, err = sender.To(target).StyledText(ctx,
-		styling.Bold("Go\n"),
-		styling.Pre(args, "go"),
-		styling.Bold("\n\nOutput:\n"),
-		styling.Pre(output, "go"),
-	)
+	_, err := s.getSender(client).To(target).Text(ctx, "Fitur !eval dinonaktifkan untuk menghemat RAM.")
 	return err
 }
 

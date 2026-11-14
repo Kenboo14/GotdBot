@@ -9,10 +9,16 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func WaitShutdown(ctx context.Context, sqliteClient *databases.SQLiteClient, mClient *mongo.Client) {
+func WaitShutdown(ctx context.Context, sqliteClient *databases.SQLiteClient, mClient *mongo.Client, redisClient *databases.Redis) {
 	<-ctx.Done()
 
 	log.Println("⚠️ Shutting down services...")
+
+	if redisClient != nil && redisClient.Client != nil {
+		if err := redisClient.Client.Close(); err != nil {
+			log.Printf("Error closing Redis: %v", err)
+		}
+	}
 
 	if sqliteClient != nil {
 		if err := sqliteClient.Close(); err != nil {

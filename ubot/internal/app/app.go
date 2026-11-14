@@ -82,5 +82,5 @@ func Run(ctx context.Context) {
 	if mongoClient != nil {
 		rawMongoClient = mongoClient.Client
 	}
-	WaitShutdown(ctx, sqliteClient, rawMongoClient)
+	WaitShutdown(ctx, sqliteClient, rawMongoClient, redisClient)
 }

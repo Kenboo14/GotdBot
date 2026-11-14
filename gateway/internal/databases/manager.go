@@ -601,3 +601,26 @@ func (m *DataManager) GetAccessibleAccounts(ctx context.Context, userID int64, u
 
 	return results
 }
+
+// Close membersihkan koneksi SQLite dan MongoDB saat shutdown.
+func (m *DataManager) Close() error {
+	if m == nil {
+		return nil
+	}
+	if m.sqlite != nil {
+		if err := m.sqlite.Close(); err != nil {
+			log.Printf("Error closing SQLite in DataManager: %v", err)
+		}
+	}
+	m.mu.RLock()
+	mc := m.mongo
+	m.mu.RUnlock()
+	if mc != nil && mc.Client != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := mc.Client.Disconnect(shutdownCtx); err != nil {
+			log.Printf("Error closing MongoDB in DataManager: %v", err)
+		}
+	}
+	return nil
+}

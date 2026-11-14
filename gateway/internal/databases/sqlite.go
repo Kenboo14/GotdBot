@@ -33,9 +33,9 @@ func NewSQLiteClient(path string) (*SQLiteClient, error) {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
 
-	db.SetMaxOpenConns(50)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxLifetime(1 * time.Hour)
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping sqlite: %w", err)
@@ -46,7 +46,7 @@ func NewSQLiteClient(path string) (*SQLiteClient, error) {
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
 		"PRAGMA busy_timeout = 5000;",
-		"PRAGMA cache_size = -64000;",
+		"PRAGMA cache_size = -8000;",
 		"PRAGMA temp_store = MEMORY;",
 		"PRAGMA mmap_size = 268435456;",
 		"PRAGMA wal_autocheckpoint = 1000;",
@@ -433,4 +433,11 @@ func (s *SQLiteClient) GetAccountName(ctx context.Context, ownerID int64) string
 	var name string
 	_ = s.DB.QueryRowContext(ctx, `SELECT account_name FROM jaseb_configurasi WHERE owner_id = ?;`, ownerID).Scan(&name)
 	return name
+}
+
+func (s *SQLiteClient) Close() error {
+	if s.DB != nil {
+		return s.DB.Close()
+	}
+	return nil
 }

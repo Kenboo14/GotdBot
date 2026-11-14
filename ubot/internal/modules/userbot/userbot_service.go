@@ -100,6 +100,7 @@ type Service struct {
 	key                 []byte
 	botToken            string
 	logBotToken         string
+	ownerID             int64 // OWNER dari .env, pembatasan perintah simulasi
 	logBotID            int64
 	logBotUsername      string
 	startedLogBots      sync.Map // key: [2]int64{userbotID, logBotID} -> true
@@ -138,6 +139,14 @@ type Service struct {
 	sudoMu              sync.RWMutex
 	sudoCache           map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
 	broadcastSem        chan struct{}             // Semaphore untuk membatasi concurrent gcast
+	simMu               sync.Mutex                // guard state simulasi
+	simulasiActive      bool                      // apakah simulasi sedang aktif
+	simulasiStres       int                       // jumlah sesi stres simulasi
+	simulasiIdle        int                       // jumlah sesi idle simulasi
+	simulasiAktif       int                       // jumlah sesi aktif simulasi
+	simulasiUpdatedAt   time.Time                 // waktu simulasi terakhir diubah
+	simulasiMem         [][]byte                  // blok memori dialokasi untuk simulasi RAM
+	simulasiCancel      context.CancelFunc        // fungsi cancel untuk goroutine CPU simulasi
 }
 
 // publishSessionState mengirimkan perubahan lifecycle akun sebagai event
@@ -204,7 +213,7 @@ type record struct {
 	UpdatedAt time.Time `bson:"updated_at"`
 }
 
-func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken, logBotToken string) *Service {
+func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken, logBotToken string, ownerID int64) *Service {
 	return &Service{
 		root:            root,
 		sqlite:          sqlite,
@@ -215,6 +224,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		key:             key,
 		botToken:        botToken,
 		logBotToken:     logBotToken,
+		ownerID:         ownerID,
 		logins:          make(map[int64]*login),
 		active:          make(map[int64]*telegram.Client),
 		connecting:      make(map[int64]uint64),
@@ -238,6 +248,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		sudoCache:       make(map[string]sudoCacheEntry),
 		broadcastSem:    make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
 		cmdSem:          make(chan struct{}, 32), // batas concurrency perintah background
+		simMu:           sync.Mutex{},
 	}
 }
 
@@ -366,9 +377,13 @@ func (s *Service) Restore(ctx context.Context) {
 	// Muat seluruh catatan dari SQLite ke Redis cache untuk navigasi inline instan
 	s.syncAllNotesToRedis(ctx)
 
+	// Lazy-load: jangan aktifkan semua MTProto client saat startup.
+	// Hanya muat metadata (prefix + owner) ke memori. Session aktif akan
+	// dihidupkan on-demand saat ada command dari Gateway via HandleCommand,
+	// sehingga RAM tidak menumpuk untuk 1000 user sekaligus.
 	sessions, err := s.sqlite.GetAllSessions(ctx)
 	if err != nil {
-		log.Printf("Gagal memuat sesi dari SQLite: %v", err)
+		log.Printf("Gagal memuat metadata sesi dari SQLite: %v", err)
 		return
 	}
 
@@ -387,12 +402,9 @@ func (s *Service) Restore(ctx context.Context) {
 		s.mu.Lock()
 		s.prefixes[row.ChatID] = prefix
 		s.owners[row.ChatID] = accID
+		s.accountStates[row.ChatID] = StateStopped
 		s.mu.Unlock()
-		s.activate(row.ChatID, accID)
-
-		// Staggered Startup Jitter (Anti-CPU-Starvation for 1 vCPU)
-		// Membuka 500 akun bertahap ~15 detik tanpa memicu CPU 100% starvation
-		time.Sleep(30 * time.Millisecond)
+		log.Printf("📋 Metadata sesi dimuat (lazy): chat_id=%d owner_id=%d", row.ChatID, accID)
 	}
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
 	// Reaper TIDAK memutus koneksi MTProto akun aktif (Persistent MTProto 24/7).

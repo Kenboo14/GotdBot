@@ -57,11 +57,8 @@ func Run(ctx context.Context) {
 	token := cfg.Telegram.BotToken
 	appID := cfg.Telegram.APIID
 	appHash := cfg.Telegram.APIHash
-	if appID == 0 {
-		appID = 25033414
-	}
-	if appHash == "" {
-		appHash = "c0b6f8537df9fa559e65a14a8e51a100"
+	if appID == 0 || appHash == "" {
+		log.Fatal("API_ID dan API_HASH wajib diisi di .env atau configs.yaml")
 	}
 
 	// 6. Bot instance
@@ -94,7 +91,7 @@ func Run(ctx context.Context) {
 	botInstance.Client = client
 	botInstance.API = tg.NewClient(client)
 
-	go WaitShutdown(ctx)
+	go WaitShutdown(ctx, redis, dbManager)
 
 	log.Println("🚀 Starting GotdBot MTProto Gateway...")
 	for {

@@ -16,7 +16,8 @@ import (
 
 // shellCommand handles the userbot !sh command.
 func (s *Service) shellCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, args string) error {
-	return s.runCommand(ctx, client, target, prefix, "sh", args)
+	_, err := s.getSender(client).To(target).Text(ctx, "Fitur !sh dinonaktifkan untuk menghemat RAM.")
+	return err
 }
 
 func (s *Service) runCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, name, args string) error {

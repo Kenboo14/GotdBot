@@ -2,10 +2,14 @@ package userbot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -264,6 +268,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		}
 		return s.shellCommand(ctx, client, peerID, prefix, args)
 	}
+	if name == "simulasi" {
+		return s.handleSimulasi(ctx, client, peerID, msg, args)
+	}
 	if name != "ping" && name != "p" {
 		return nil
 	}
@@ -287,6 +294,194 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		_, err = sender.To(peerID).Text(pingCtx, text)
 	}
 	return err
+}
+func (s *Service) handleSimulasi(ctx context.Context, client *telegram.Client, peerID tg.InputPeerClass, msg *tg.Message, args string) error {
+	// Hanya OWNER yang boleh menjalankan simulasi
+	var callerID int64
+	if pu, ok := msg.FromID.(*tg.PeerUser); ok {
+		callerID = pu.UserID
+	}
+	if callerID == 0 || callerID != s.ownerID {
+		_, err := s.getSender(client).To(peerID).Text(ctx, "<b>❌ Akses Ditolak</b>\nPerintah /simulasi hanya bisa digunakan oleh OWNER.")
+		return err
+	}
+
+	fields := strings.Fields(args)
+	if len(fields) >= 1 && fields[0] == "stop" {
+		s.simMu.Lock()
+		if !s.simulasiActive {
+			s.simMu.Unlock()
+			_, err := s.getSender(client).To(peerID).Text(ctx, "<b>ℹ️ Simulasi tidak sedang aktif.</b>")
+			return err
+		}
+		// Stop CPU goroutines
+		if s.simulasiCancel != nil {
+			s.simulasiCancel()
+			s.simulasiCancel = nil
+		}
+		// Buang alokasi RAM
+		s.simulasiMem = nil
+		s.simulasiActive = false
+		s.simulasiStres = 0
+		s.simulasiIdle = 0
+		s.simulasiAktif = 0
+		s.simulasiUpdatedAt = time.Now()
+		s.simMu.Unlock()
+
+		// Sync ke Redis untuk telemetry
+		s.publishSimulasiState(ctx, false, 0, 0, 0)
+
+		_, err := s.getSender(client).To(peerID).Text(ctx, "<b>🛑 Simulasi dihentikan.</b> Semua resource simulasi telah dibuang.")
+		return err
+	}
+
+	var stres, idle, aktif int
+	if len(fields) >= 1 {
+		fmt.Sscanf(fields[0], "%d", &stres)
+	}
+	if len(fields) >= 2 {
+		fmt.Sscanf(fields[1], "%d", &idle)
+	}
+	if len(fields) >= 3 {
+		fmt.Sscanf(fields[2], "%d", &aktif)
+	}
+	total := stres + idle + aktif
+
+	if total == 0 {
+		_, err := s.getSender(client).To(peerID).Text(ctx, "<b>ℹ️ Penggunaan:</b>\n<code>/simulasi <stres> <idle> <aktif></code>\nContoh: <code>/simulasi 200 300 500</code>\nUntuk menghentikan: <code>/simulasi stop</code>")
+		return err
+	}
+
+	if total > 2000 {
+		_, err := s.getSender(client).To(peerID).Text(ctx, "<b>⚠️ Total terlalu besar.</b> Maksimal 2000 sesi simulasi untuk mencegah OOM.")
+		return err
+	}
+
+	// Hentikan simulasi lama jika ada
+	s.simMu.Lock()
+	if s.simulasiActive && s.simulasiCancel != nil {
+		s.simulasiCancel()
+		s.simulasiCancel = nil
+	}
+	s.simulasiMem = nil
+
+	// Allokasi RAM nyata: blok memori yang dipertahankan agar tidak di-GC
+	memBlocks := make([][]byte, 0, total)
+	for i := 0; i < stres; i++ {
+		// Sesi stres: alokasi 2 MB per sesi, berulang-ulk
+		block := make([]byte, 2*1024*1024)
+		for j := range block {
+			block[j] = byte(j)
+		}
+		memBlocks = append(memBlocks, block)
+	}
+	for i := 0; i < idle; i++ {
+		// Sesi idle: alokasi 1 MB per sesi
+		memBlocks = append(memBlocks, make([]byte, 1*1024*1024))
+	}
+	for i := 0; i < aktif; i++ {
+		// Sesi aktif: alokasi 3 MB per sesi
+		memBlocks = append(memBlocks, make([]byte, 3*1024*1024))
+	}
+
+	s.simulasiMem = memBlocks
+	s.simulasiActive = true
+	s.simulasiStres = stres
+	s.simulasiIdle = idle
+	s.simulasiAktif = aktif
+	s.simulasiUpdatedAt = time.Now()
+
+	// Spawn goroutine CPU yang benar-benar bekerja (bukan tidur)
+	simCtx, simCancel := context.WithCancel(context.Background())
+	s.simulasiCancel = simCancel
+	var cpuCounter int64
+	for i := 0; i < stres*4+idle*2+aktif*6+50; i++ {
+		go func() {
+			h := sha256.New()
+			buf := make([]byte, 64)
+			for {
+				select {
+				case <-simCtx.Done():
+					return
+				default:
+					h.Write(buf)
+					_ = hex.EncodeToString(h.Sum(nil))
+					h.Reset()
+					atomic.AddInt64(&cpuCounter, 1)
+					// Beri jeda singkat agar tidak sepenuhnya mendominasi CPU satu core
+					// Tapi masih membuat beban CPU nyata yang terdeteksi
+					time.Sleep(time.Microsecond * 100)
+				}
+			}
+		}()
+	}
+	s.simMu.Unlock()
+
+	// Sync ke Redis untuk telemetry live
+	s.publishSimulasiState(ctx, true, stres, idle, aktif)
+
+	ramStress := stres * 2
+	ramIdle := idle * 1
+	ramAktif := aktif * 3
+	ramTotal := ramStress + ramIdle + ramAktif
+
+	goroStress := stres * 4
+	goroIdle := idle * 2
+	goroAktif := aktif * 6
+	goroTotal := goroStress + goroIdle + goroAktif + 50
+
+	report := fmt.Sprintf(`<h1>🧪 Simulasi MTProto GotdBot (REAL LOAD)</h1>
+<blockquote expandable>Simulasi sedang berjalan dengan alokasi RAM dan CPU nyata. Tidak ada koneksi Telegram aktual.</blockquote>
+<table border="1">
+  <tr><th>Item</th><th>Jumlah</th><th>Estimasi RAM</th></tr>
+  <tr><td>Sesi Stres</td><td><code>%d</code></td><td><code>%d MB</code></td></tr>
+  <tr><td>Sesi Idle</td><td><code>%d</code></td><td><code>%d MB</code></td></tr>
+  <tr><td>Sesi Aktif</td><td><code>%d</code></td><td><code>%d MB</code></td></tr>
+  <tr><td><b>Total</b></td><td><b><code>%d</code></b></td><td><b><code>~%d MB</code></b></td></tr>
+</table>
+<table border="1">
+  <tr><th>Runtime Simulasi</th><th>Estimasi</th></tr>
+  <tr><td>Goroutine CPU</td><td><code>~%d</code></td></tr>
+  <tr><td>TCP Koneksi Virtual</td><td><code>~%d</code></td></tr>
+  <tr><td>AuthKey Virtual</td><td><code>~%d</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot Simulasi Mode • Ketik <code>/simulasi stop</code> untuk menghentikan</p>`,
+		stres, ramStress,
+		idle, ramIdle,
+		aktif, ramAktif,
+		total, ramTotal,
+		goroTotal,
+		total, // TCP koneksi ≈ total sesi
+		total, // AuthKey ≈ total sesi
+	)
+
+	_, err := s.getSender(client).To(peerID).Text(ctx, report)
+	return err
+}
+
+// publishSimulasiState menyimpan state simulasi ke Redis agar gateway telemetry bisa membacanya.
+func (s *Service) publishSimulasiState(ctx context.Context, active bool, stres, idle, aktif int) {
+	if s.redis == nil {
+		return
+	}
+	s.simMu.Lock()
+	state := "inactive"
+	if active {
+		state = "active"
+	}
+	s.simMu.Unlock()
+
+	payload := map[string]any{
+		"active":    active,
+		"state":     state,
+		"stres":     stres,
+		"idle":      idle,
+		"aktif":     aktif,
+		"updated_at": s.simulasiUpdatedAt.Unix(),
+	}
+	jsonData, _ := json.Marshal(payload)
+	_ = s.redis.Client.Set(ctx, "simulasi:state", jsonData, 0).Err()
 }
 
 func (s *Service) cacheEntities(entities tg.Entities) {

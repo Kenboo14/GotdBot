@@ -35,6 +35,12 @@ type telemetryTracker struct {
 	lastDashboardMsgID  int
 	dashboardChatTarget any
 	monitorTopicID      int
+	simulasiActive      bool
+	simulasiStres       int
+	simulasiIdle        int
+	simulasiAktif       int
+	simulasiUpdatedAt   int64
+	rdb                 *redis.Client
 }
 
 var globalTelemetry *telemetryTracker
@@ -75,6 +81,7 @@ func startTelemetryDashboard(ctx context.Context, b *botgotd.Bot, r *broker.Redi
 	globalTelemetry.mu.Lock()
 	globalTelemetry.dashboardChatTarget = chatTarget
 	globalTelemetry.monitorTopicID = monitorTopic
+	globalTelemetry.rdb = r.Client
 	globalTelemetry.mu.Unlock()
 
 	// 1. Worker Consumer: Listen to session:events stream
@@ -139,6 +146,36 @@ func (t *telemetryTracker) recordSessionEvent(event models.PFromService) {
 	}
 }
 
+// loadSimulasiState reads the simulasi state from Redis key "simulasi:state"
+// so the dashboard can display it alongside live telemetry.
+func (t *telemetryTracker) loadSimulasiState(rdb *redis.Client) {
+	if rdb == nil {
+		return
+	}
+	data, err := rdb.Get(context.Background(), "simulasi:state").Result()
+	if err != nil {
+		return
+	}
+	var st struct {
+		Active       bool   `json:"active"`
+		State        string `json:"state"`
+		Stres        int    `json:"stres"`
+		Idle         int    `json:"idle"`
+		Aktif        int    `json:"aktif"`
+		UpdatedAt    int64  `json:"updated_at"`
+	}
+	if json.Unmarshal([]byte(data), &st) != nil {
+		return
+	}
+	t.mu.Lock()
+	t.simulasiActive = st.Active
+	t.simulasiStres = st.Stres
+	t.simulasiIdle = st.Idle
+	t.simulasiAktif = st.Aktif
+	t.simulasiUpdatedAt = st.UpdatedAt
+	t.mu.Unlock()
+}
+
 func (t *telemetryTracker) runDashboardLoop(ctx context.Context, b *botgotd.Bot) {
 	// Initial delay so bot finishes MTProto / HTTP handshake
 	select {
@@ -151,6 +188,7 @@ func (t *telemetryTracker) runDashboardLoop(ctx context.Context, b *botgotd.Bot)
 	defer ticker.Stop()
 
 	// Update immediately once
+	t.loadSimulasiState(t.rdb)
 	t.updateDashboardMessage(ctx, b)
 
 	for {
@@ -158,6 +196,7 @@ func (t *telemetryTracker) runDashboardLoop(ctx context.Context, b *botgotd.Bot)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			t.loadSimulasiState(t.rdb)
 			t.updateDashboardMessage(ctx, b)
 		}
 	}
@@ -233,6 +272,17 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	uptime := time.Since(t.bootTime).Truncate(time.Second)
 	nowStr := time.Now().Format("15:04:05 WIB")
 
+	simulasiLine := ""
+	if t.simulasiActive {
+		simulasiLine = fmt.Sprintf(`
+🧪 <b>Simulasi Beban:</b>
+• Stres: <code>%d</code> | Idle: <code>%d</code> | Aktif: <code>%d</code>
+• Diperbarui: <code>%s</code>`,
+			t.simulasiStres, t.simulasiIdle, t.simulasiAktif,
+			time.Unix(t.simulasiUpdatedAt, 0).Format("15:04:05"),
+		)
+	}
+
 	return fmt.Sprintf(`📊 <b>[GOTDBOT TELEMETRY LIVE]</b>
 🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s
 ────────────────────────
@@ -240,7 +290,7 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 • 🟢 Online (Connected)  : <b>%d</b> akun
 • 🟡 Menghubungkan      : <b>%d</b> akun
 • 🟠 Reconnecting       : <b>%d</b> akun
-• 🔴 Revoked / Invalid  : <b>%d</b> akun
+• 🔴 Revoked / Invalid  : <b>%d</b> akun%s
 
 ⚙️ <b>Kesehatan Mesin & Runtime:</b>
 • 🧠 RAM Alloc / Sys    : <b>%d MiB</b> / %d MiB
@@ -250,7 +300,7 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 ────────────────────────
 Status: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>`,
 		nowStr, uptime.String(),
-		connected, connecting, reconnecting, revoked,
+		connected, connecting, reconnecting, revoked, simulasiLine,
 		ramAllocMB, ramSysMB, goroutines,
 	)
 }
