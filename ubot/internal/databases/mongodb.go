@@ -97,7 +97,10 @@ func (m *MongoClient) EnsureIndexes(ctx context.Context) {
 
 	createIndexSafe := func(col *mongo.Collection, model mongo.IndexModel) {
 		_, err := col.Indexes().CreateOne(ctxTimeout, model)
-		if err != nil && !strings.Contains(err.Error(), "IndexOptionsConflict") && !strings.Contains(err.Error(), "already exists") {
+		if err != nil &&
+			!strings.Contains(err.Error(), "IndexOptionsConflict") &&
+			!strings.Contains(err.Error(), "IndexKeySpecsConflict") &&
+			!strings.Contains(err.Error(), "already exists") {
 			log.Printf("⚠️ Gagal membuat index %s: %v", col.Name(), err)
 		}
 	}
@@ -117,10 +120,11 @@ func (m *MongoClient) EnsureIndexes(ctx context.Context) {
 		Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "name", Value: 1}},
 	})
 
-	// 3. userbot_sudo indexes
+	// 3. userbot_sudo indexes (unique per owner_id & user_id)
 	colSudo := m.Database.Collection("userbot_sudo")
 	createIndexSafe(colSudo, mongo.IndexModel{
-		Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
+		Keys:    bson.D{{Key: "owner_id", Value: 1}, {Key: "user_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 
 	log.Println("🍃 MongoDB indexes ensured (sessions, notes, sudo).")
