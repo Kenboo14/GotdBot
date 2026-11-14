@@ -35,7 +35,7 @@ type SimulationEngine struct {
 func NewSimulationEngine(rdb *redis.Client) *SimulationEngine {
 	metrics := NewMetricsCollector()
 	transport := NewFakeTransport()
-	generator := NewSyntheticGenerator(transport, metrics, 2000)
+	generator := NewSyntheticGenerator(transport, metrics, 10000)
 
 	return &SimulationEngine{
 		rdb:       rdb,
@@ -57,9 +57,6 @@ func (e *SimulationEngine) Scale(target int) error {
 
 	if target <= 0 {
 		return fmt.Errorf("target must be greater than zero")
-	}
-	if target > 2000 {
-		return fmt.Errorf("target exceeds maximum limit of 2000")
 	}
 
 	if !e.running {
