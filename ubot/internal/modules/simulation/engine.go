@@ -165,7 +165,13 @@ func (e *SimulationEngine) startPeriodicSync() {
 			case <-syncCtx.Done():
 				return
 			case <-ticker.C:
-				e.metrics.SetGoroutines(runtime.NumGoroutine())
+				var mem runtime.MemStats
+				runtime.ReadMemStats(&mem)
+				e.metrics.SetRuntimeStats(
+					runtime.NumGoroutine(),
+					mem.Alloc/1024/1024,
+					mem.Sys/1024/1024,
+				)
 				e.exportMetrics()
 			}
 		}

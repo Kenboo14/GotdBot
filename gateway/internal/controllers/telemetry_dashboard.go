@@ -44,6 +44,8 @@ type simulationMetricsDoc struct {
 	LatencyP99Ms     float64 `json:"latency_p99_ms"`
 	UptimeSec        int64   `json:"uptime_sec"`
 	Goroutines       int     `json:"goroutines"`
+	RAMAllocMB       uint64  `json:"ram_alloc_mb"`
+	RAMSysMB         uint64  `json:"ram_sys_mb"`
 	ErrorsCount      int64   `json:"errors_count"`
 	UpdatedAt        int64   `json:"updated_at"`
 }
@@ -274,6 +276,12 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	ramAllocMB := m.Alloc / 1024 / 1024
 	ramSysMB := m.Sys / 1024 / 1024
 	goroutines := runtime.NumGoroutine()
+
+	if t.simulasiMetrics.Status == "RUNNING" {
+		ramAllocMB += t.simulasiMetrics.RAMAllocMB
+		ramSysMB += t.simulasiMetrics.RAMSysMB
+		goroutines += t.simulasiMetrics.Goroutines
+	}
 
 	uptime := time.Since(t.bootTime).Truncate(time.Second)
 	nowStr := time.Now().Format("15:04:05 WIB")

@@ -24,6 +24,8 @@ type Snapshot struct {
 	LatencyP99Ms     float64 `json:"latency_p99_ms"`
 	UptimeSec        int64   `json:"uptime_sec"`
 	Goroutines       int     `json:"goroutines"`
+	RAMAllocMB       uint64  `json:"ram_alloc_mb"`
+	RAMSysMB         uint64  `json:"ram_sys_mb"`
 	ErrorsCount      int64   `json:"errors_count"`
 	UpdatedAt        int64   `json:"updated_at"`
 }
@@ -38,6 +40,8 @@ type MetricsCollector struct {
 	highProfile  int
 	pendingQueue int
 	goroutines   int
+	ramAllocMB   uint64
+	ramSysMB     uint64
 	startTime    time.Time
 
 	generated atomic.Int64
@@ -109,6 +113,14 @@ func (m *MetricsCollector) SetGoroutines(val int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.goroutines = val
+}
+
+func (m *MetricsCollector) SetRuntimeStats(goroutines int, allocMB, sysMB uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.goroutines = goroutines
+	m.ramAllocMB = allocMB
+	m.ramSysMB = sysMB
 }
 
 func (m *MetricsCollector) IncGenerated() {
@@ -190,6 +202,8 @@ func (m *MetricsCollector) Snapshot() Snapshot {
 		LatencyP99Ms:     p99,
 		UptimeSec:        uptime,
 		Goroutines:       m.goroutines,
+		RAMAllocMB:       m.ramAllocMB,
+		RAMSysMB:         m.ramSysMB,
 		ErrorsCount:      m.errors.Load(),
 		UpdatedAt:        time.Now().Unix(),
 	}
