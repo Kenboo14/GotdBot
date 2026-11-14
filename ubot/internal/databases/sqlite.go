@@ -273,7 +273,7 @@ func (s *SQLiteClient) SaveSession(ctx context.Context, chatID, ownerID, account
 		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(chat_id) DO UPDATE SET
 			owner_id = excluded.owner_id,
-			account_id = excluded.account_id,
+			account_id = CASE WHEN excluded.account_id > 0 THEN excluded.account_id ELSE sessions.account_id END,
 			session_blob = excluded.session_blob,
 			prefix = CASE WHEN excluded.prefix_set = 1 THEN excluded.prefix ELSE sessions.prefix END,
 			prefix_set = CASE WHEN excluded.prefix_set = 1 THEN 1 ELSE sessions.prefix_set END,

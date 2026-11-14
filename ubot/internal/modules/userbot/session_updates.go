@@ -21,7 +21,6 @@ func isSessionRevokedError(err error) bool {
 	}
 	errStr := strings.ToUpper(err.Error())
 
-	// Fast exclusion: jika network/I/O error atau timeout, JANGAN PERNAH dianggap session revoked
 	if strings.Contains(errStr, "TIMEOUT") ||
 		strings.Contains(errStr, "DEADLINE EXCEEDED") ||
 		strings.Contains(errStr, "RESET BY PEER") ||
@@ -33,7 +32,6 @@ func isSessionRevokedError(err error) bool {
 		return false
 	}
 
-	// Non-auth Telegram error: JANGAN dianggap session revoked
 	if strings.Contains(errStr, "FLOOD_WAIT") ||
 		strings.Contains(errStr, "CHAT_WRITE_FORBIDDEN") ||
 		strings.Contains(errStr, "PEER_ID_INVALID") ||
@@ -42,7 +40,6 @@ func isSessionRevokedError(err error) bool {
 		return false
 	}
 
-	// Klasifikasi error autentikasi permanen resmi Telegram MTProto
 	return strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") ||
 		strings.Contains(errStr, "SESSION_REVOKED") ||
 		strings.Contains(errStr, "SESSION_EXPIRED") ||
@@ -111,6 +108,61 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 <p>Ketik atau tekan <b>/start</b> untuk menyambungkan kembali akun Anda.</p>`, "session_revoked")
 }
 
+func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chatID int64, entities tg.Entities, p tg.PeerClass) (tg.InputPeerClass, error) {
+	if p == nil {
+		return nil, fmt.Errorf("peer is nil")
+	}
+
+	s.mu.Lock()
+	ownerID := s.owners[chatID]
+	if ownerID == 0 && client != nil {
+		ownerID = s.clientOwners[client]
+	}
+	s.mu.Unlock()
+
+	switch peerObj := p.(type) {
+	case *tg.PeerUser:
+		if (ownerID > 0 && peerObj.UserID == ownerID) || peerObj.UserID == 0 {
+			return &tg.InputPeerSelf{}, nil
+		}
+		if u, ok := entities.Users[peerObj.UserID]; ok && u != nil {
+			if u.AccessHash != 0 {
+				s.userAccessHashes.Store(u.ID, u.AccessHash)
+			}
+			return &tg.InputPeerUser{UserID: u.ID, AccessHash: u.AccessHash}, nil
+		}
+		if val, ok := s.userAccessHashes.Load(peerObj.UserID); ok {
+			if hash, ok := val.(int64); ok {
+				return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}, nil
+			}
+		}
+		if ownerID == 0 {
+			return &tg.InputPeerSelf{}, nil
+		}
+		return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: 0}, nil
+
+	case *tg.PeerChat:
+		return &tg.InputPeerChat{ChatID: peerObj.ChatID}, nil
+
+	case *tg.PeerChannel:
+		if ch, ok := entities.Channels[peerObj.ChannelID]; ok && ch != nil {
+			if ch.AccessHash != 0 {
+				s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+			}
+			return &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
+		}
+		if val, ok := s.channelAccessHashes.Load(peerObj.ChannelID); ok {
+			if hash, ok := val.(int64); ok {
+				return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: hash}, nil
+			}
+		}
+		return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: 0}, nil
+
+	default:
+		return peer.EntitiesFromUpdate(entities).ExtractPeer(p)
+	}
+}
+
 func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
 	msg, ok := update.Message.(*tg.Message)
 	if !ok {
@@ -123,26 +175,25 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	s.mu.Unlock()
 
-	// 0. Cek trigger hashtag note: misal "#nama" (diperbolehkan tanpa prefix perintah)
 	if strings.HasPrefix(msg.Message, "#") && len(msg.Message) > 1 && !strings.ContainsAny(msg.Message, " \t\r\n") {
 		hashName := strings.TrimPrefix(msg.Message, "#")
 		if isValidNoteName(hashName) && s.commandAllowed(ctx, client, msg) {
-			peerID, err := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
+			peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID)
 			if err == nil {
 				return s.showNote(ctx, client, peerID, hashName, false)
 			}
 		}
 	}
 
-	// 1. Jika prefix aktif dan pesan tidak diawali prefix, tolak langsung dalam < 10 nanodetik
 	if prefix != "" {
 		if !strings.HasPrefix(msg.Message, prefix) {
 			return nil
 		}
 	} else {
-		// 2. Jika prefix == "none" (tanpa prefix):
 		if !msg.Out {
+			s.mu.Lock()
 			ownerID := s.owners[chatID]
+			s.mu.Unlock()
 			senderID := int64(0)
 			if sender, ok := msg.FromID.(*tg.PeerUser); ok {
 				senderID = sender.UserID
@@ -159,10 +210,22 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if !s.commandAllowed(ctx, client, msg) {
 		return nil
 	}
-	peerID, err := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
+	peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID)
 	if err != nil {
+		slog.Error("failed to resolve peer for userbot command",
+			slog.String("command", name),
+			slog.Int64("chat_id", chatID),
+			slog.String("error", err.Error()),
+		)
 		return err
 	}
+
+	slog.Info("executing userbot command",
+		slog.String("command", name),
+		slog.Int64("chat_id", chatID),
+		slog.Bool("out", msg.Out),
+	)
+
 	if name == "setp" {
 		return s.handleSetPrefix(ctx, client, chatID, peerID, args)
 	}
@@ -269,7 +332,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	started := time.Now()
 	text := "Ping gagal. Periksa koneksi dan status sesi userbot."
-	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+	pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)
 	defer pingCancel()
 	if err := client.Ping(pingCtx); err == nil {
 		latency := float64(time.Since(started).Microseconds()) / 1000
@@ -279,12 +342,14 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 			text = fmt.Sprintf("<code>%.3f ms</code>", latency)
 		}
 	}
+	sendCtx, sendCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer sendCancel()
 	sender := s.getSender(client)
 	if strings.HasPrefix(text, "<code>") {
 		text = strings.TrimSuffix(strings.TrimPrefix(text, "<code>"), "</code>")
-		_, err = sender.To(peerID).StyledText(pingCtx, styling.Code(text))
+		_, err = sender.To(peerID).StyledText(sendCtx, styling.Code(text))
 	} else {
-		_, err = sender.To(peerID).Text(pingCtx, text)
+		_, err = sender.To(peerID).Text(sendCtx, text)
 	}
 	return err
 }
@@ -299,134 +364,5 @@ func (s *Service) cacheEntities(entities tg.Entities) {
 		if ch != nil && ch.ID != 0 && ch.AccessHash != 0 {
 			s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
 		}
-	}
-}
-
-type userbotUpdateHandler struct {
-	dispatcher tg.UpdateDispatcher
-	s          *Service
-	chatID     int64
-	clientRef  **telegram.Client
-}
-
-func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) error {
-	h.s.recordIncomingUpdate(h.chatID)
-
-	switch upd := u.(type) {
-	case *tg.UpdateShort:
-		if _, ok := upd.Update.(*tg.UpdateServiceNotification); ok {
-			h.s.triggerImmediateVerification(h.chatID)
-		}
-		return h.dispatcher.Handle(ctx, u)
-
-	case *tg.UpdateShortMessage:
-		if upd.UserID == 777000 {
-			h.s.triggerImmediateVerification(h.chatID)
-		}
-		h.s.mu.Lock()
-		ownerID := h.s.owners[h.chatID]
-		h.s.mu.Unlock()
-
-		var fromPeer tg.PeerClass
-		if upd.Out {
-			fromPeer = &tg.PeerUser{UserID: ownerID}
-		} else {
-			fromPeer = &tg.PeerUser{UserID: upd.UserID}
-		}
-
-		msg := &tg.Message{
-			Flags:       upd.Flags,
-			Out:         upd.Out,
-			Mentioned:   upd.Mentioned,
-			MediaUnread: upd.MediaUnread,
-			Silent:      upd.Silent,
-			ID:          upd.ID,
-			FromID:      fromPeer,
-			PeerID:      &tg.PeerUser{UserID: upd.UserID},
-			Message:     upd.Message,
-			Date:        upd.Date,
-			FwdFrom:     upd.FwdFrom,
-			ViaBotID:    upd.ViaBotID,
-			ReplyTo:     upd.ReplyTo,
-			Entities:    upd.Entities,
-			TTLPeriod:   upd.TTLPeriod,
-		}
-		if upd.ReplyTo != nil {
-			msg.SetReplyTo(upd.ReplyTo)
-		}
-
-		return h.dispatcher.Handle(ctx, &tg.Updates{
-			Updates: []tg.UpdateClass{
-				&tg.UpdateNewMessage{
-					Message:  msg,
-					Pts:      upd.Pts,
-					PtsCount: upd.PtsCount,
-				},
-			},
-		})
-
-	case *tg.UpdateShortChatMessage:
-		h.s.mu.Lock()
-		ownerID := h.s.owners[h.chatID]
-		h.s.mu.Unlock()
-
-		var fromPeer tg.PeerClass
-		if upd.Out {
-			fromPeer = &tg.PeerUser{UserID: ownerID}
-		} else {
-			fromPeer = &tg.PeerUser{UserID: upd.FromID}
-		}
-
-		msg := &tg.Message{
-			Flags:       upd.Flags,
-			Out:         upd.Out,
-			Mentioned:   upd.Mentioned,
-			MediaUnread: upd.MediaUnread,
-			Silent:      upd.Silent,
-			ID:          upd.ID,
-			FromID:      fromPeer,
-			PeerID:      &tg.PeerChat{ChatID: upd.ChatID},
-			Message:     upd.Message,
-			Date:        upd.Date,
-			FwdFrom:     upd.FwdFrom,
-			ViaBotID:    upd.ViaBotID,
-			ReplyTo:     upd.ReplyTo,
-			Entities:    upd.Entities,
-			TTLPeriod:   upd.TTLPeriod,
-		}
-		if upd.ReplyTo != nil {
-			msg.SetReplyTo(upd.ReplyTo)
-		}
-
-		return h.dispatcher.Handle(ctx, &tg.Updates{
-			Updates: []tg.UpdateClass{
-				&tg.UpdateNewMessage{
-					Message:  msg,
-					Pts:      upd.Pts,
-					PtsCount: upd.PtsCount,
-				},
-			},
-		})
-
-	case *tg.Updates:
-		for _, item := range upd.Updates {
-			if _, ok := item.(*tg.UpdateServiceNotification); ok {
-				h.s.triggerImmediateVerification(h.chatID)
-				break
-			}
-		}
-		return h.dispatcher.Handle(ctx, u)
-
-	case *tg.UpdatesCombined:
-		for _, item := range upd.Updates {
-			if _, ok := item.(*tg.UpdateServiceNotification); ok {
-				h.s.triggerImmediateVerification(h.chatID)
-				break
-			}
-		}
-		return h.dispatcher.Handle(ctx, u)
-
-	default:
-		return h.dispatcher.Handle(ctx, u)
 	}
 }

@@ -112,7 +112,6 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 				}
 			}
 			if client != nil {
-				sessionChatID = targetOwner
 				break
 			}
 			s.mu.Unlock()
