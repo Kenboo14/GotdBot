@@ -55,13 +55,6 @@ func (h *Handler) SimulasiCommand(ctx context.Context, b *botgotd.Bot, update *b
 			})
 			return
 		}
-		if target > 2000 {
-			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   "<b>⚠️ Target terlalu besar.</b> Maksimal 2.000 virtual userbot untuk mencegah beban berlebih.",
-			})
-			return
-		}
 		h.handleSimulasiScale(ctx, b, update.Message.Chat.ID, target)
 	}
 }

@@ -60,6 +60,8 @@ type telemetryTracker struct {
 	monitorTopicID      int
 	simulasiMetrics     simulationMetricsDoc
 	rdb                 *redis.Client
+	cpuAllImage         float64
+	ramAllImage         float64
 }
 
 var globalTelemetry *telemetryTracker
@@ -197,6 +199,7 @@ func (t *telemetryTracker) runDashboardLoop(ctx context.Context, b *botgotd.Bot)
 
 	// Update immediately once
 	t.loadSimulasiState(t.rdb)
+	t.updateSystemResourceStats(ctx)
 	t.updateDashboardMessage(ctx, b)
 
 	for {
@@ -205,6 +208,7 @@ func (t *telemetryTracker) runDashboardLoop(ctx context.Context, b *botgotd.Bot)
 			return
 		case <-ticker.C:
 			t.loadSimulasiState(t.rdb)
+			t.updateSystemResourceStats(ctx)
 			t.updateDashboardMessage(ctx, b)
 		}
 	}
@@ -286,6 +290,11 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	uptime := time.Since(t.bootTime).Truncate(time.Second)
 	nowStr := time.Now().Format("15:04:05 WIB")
 
+	t.mu.RLock()
+	cpuAll := t.cpuAllImage
+	ramAll := t.ramAllImage
+	t.mu.RUnlock()
+
 	simulasiLine := ""
 	if t.simulasiMetrics.Status == "RUNNING" {
 		sim := t.simulasiMetrics
@@ -320,6 +329,8 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 • 🔴 Revoked / Invalid  : <b>%d</b> akun%s
 
 ⚙️ <b>Kesehatan Mesin & Runtime:</b>
+• ⚡ CPU All Image     : <b>%.2f%%</b>
+• ♾️ RAM All Image     : <b>%.2f MiB</b>
 • 🧠 RAM Alloc / Sys    : <b>%d MiB</b> / %d MiB
 • 💻 Concurrency        : <b>%d Goroutines</b>
 • 🚀 Redis Broker Pool  : <b>16 Workers</b> (PEL Auto-Recovery)
@@ -328,6 +339,7 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 Status: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>`,
 		nowStr, uptime.String(),
 		connected, connecting, reconnecting, revoked, simulasiLine,
+		cpuAll, ramAll,
 		ramAllocMB, ramSysMB, goroutines,
 	)
 }

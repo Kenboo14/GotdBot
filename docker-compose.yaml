@@ -38,6 +38,7 @@ services:
       GOGC: ${GATEWAY_GOGC:-50}
     volumes:
       - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
 
     depends_on:
       redis:
