@@ -52,7 +52,7 @@ $env:IDLE_TIMEOUT_MINUTES = if ($env:IDLE_TIMEOUT_MINUTES) { $env:IDLE_TIMEOUT_M
 $env:MAX_ACTIVE_SESSIONS = if ($env:MAX_ACTIVE_SESSIONS) { $env:MAX_ACTIVE_SESSIONS } else { '100' }
 
 Write-Host "Starting gateway and ubot in separate PowerShell windows (GOMEMLIMIT=$($env:GOMEMLIMIT), GOGC=$($env:GOGC), IDLE=$($env:IDLE_TIMEOUT_MINUTES)m, MAX_SESSIONS=$($env:MAX_ACTIVE_SESSIONS))..."
-Start-Process powershell -ArgumentList '-NoExit', '-Command', "`$env:GOMEMLIMIT='$($env:GOMEMLIMIT)'; `$env:GOGC='$($env:GOGC)'; Set-Location '$PWD\gateway'; go run ./main"
-Start-Process powershell -ArgumentList '-NoExit', '-Command', "`$env:GOMEMLIMIT='$($env:GOMEMLIMIT)'; `$env:GOGC='$($env:GOGC)'; `$env:IDLE_TIMEOUT_MINUTES='$($env:IDLE_TIMEOUT_MINUTES)'; `$env:MAX_ACTIVE_SESSIONS='$($env:MAX_ACTIVE_SESSIONS)'; Set-Location '$PWD\ubot'; go run ./main"
+Start-Process powershell -ArgumentList '-NoExit', '-Command', "`$env:GOMEMLIMIT='$($env:GOMEMLIMIT)'; `$env:GOGC='$($env:GOGC)'; Set-Location '$PWD\gateway'; go run ./cmd/gateway"
+Start-Process powershell -ArgumentList '-NoExit', '-Command', "`$env:GOMEMLIMIT='$($env:GOMEMLIMIT)'; `$env:GOGC='$($env:GOGC)'; `$env:IDLE_TIMEOUT_MINUTES='$($env:IDLE_TIMEOUT_MINUTES)'; `$env:MAX_ACTIVE_SESSIONS='$($env:MAX_ACTIVE_SESSIONS)'; Set-Location '$PWD\ubot'; go run ./cmd/ubot"
 
 Write-Host 'Development services started. Tutup jendela gateway/ubot untuk menghentikan aplikasinya.'
