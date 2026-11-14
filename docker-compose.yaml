@@ -24,6 +24,8 @@ services:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
       OWNER: ${OWNER:-}
       OWNER_ID: ${OWNER_ID:-${OWNER:-}}
+      API_ID: ${API_ID:?Set API_ID in .env before starting gateway}
+      API_HASH: ${API_HASH:?Set API_HASH in .env before starting gateway}
       REDIS_ADDR: redis:6379
       REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
       MONGO_URI: ${MONGO_URI:-${MONGO_BACKUP_URI:-}}
