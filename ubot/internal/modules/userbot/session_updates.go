@@ -102,7 +102,7 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 	s.accountStates[chatID] = StateStopped
 	s.mu.Unlock()
 
-	s.reply(context.Background(), chatID, `<h1>⚠️ Sesi Userbot Terlepas</h1>
+	s.reply(context.Background(), chatID, 0, `<h1>⚠️ Sesi Userbot Terlepas</h1>
 <blockquote expandable>Koneksi MTProto userbot Anda terputus atau sesi telah dicabut dari aplikasi Telegram.</blockquote>
 <hr/>
 <p>Ketik atau tekan <b>/start</b> untuk menyambungkan kembali akun Anda.</p>`, "session_revoked")

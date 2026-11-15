@@ -56,6 +56,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	chatID, text := update.Message.Chat.ID, strings.TrimSpace(update.Message.Text)
+	threadID := update.Message.MessageThreadID
 	userID := update.Message.From.ID
 	userName := update.Message.From.FirstName
 	if update.Message.From.LastName != "" {
@@ -359,7 +360,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	h.Sessions.mu.Lock()
 	session.State = "waiting_worker"
 	h.Sessions.mu.Unlock()
-	payload := models.PToService{ChatID: chatID, UserID: update.Message.From.ID, Username: update.Message.From.Username, Text: text, Type: event}
+	payload := models.PToService{ChatID: chatID, ThreadID: threadID, UserID: update.Message.From.ID, Username: update.Message.From.Username, Text: text, Type: event}
 	if err := h.broker.To(ctx, "to:ubot:auth", payload); err != nil {
 		h.Sessions.mu.Lock()
 		session.State = strings.TrimPrefix(event, "auth_")
@@ -480,8 +481,8 @@ func (h *Handler) PingCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
-	if err := h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: update.Message.Chat.ID, UserID: update.Message.From.ID, Text: "!ping", Type: "userbot_command"}); err != nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: "Ping gagal. Periksa koneksi dan status sesi userbot."})
+	if err := h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: update.Message.Chat.ID, ThreadID: update.Message.MessageThreadID, UserID: update.Message.From.ID, Text: "!ping", Type: "userbot_command"}); err != nil {
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, MessageThreadID: update.Message.MessageThreadID, Text: "Ping gagal. Periksa koneksi dan status sesi userbot."})
 	}
 }
 
@@ -502,7 +503,7 @@ func (h *Handler) HelpCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 </table>
 <hr/>
 <p>GotdBot • Interactive Assistance</p>`
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML"})
+	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, MessageThreadID: update.Message.MessageThreadID, Text: text, ParseMode: "HTML"})
 }
 
 var (
@@ -803,10 +804,11 @@ func (h *Handler) ServerCommand(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 	text := serverStatusTextRich(invokerID, time.Since(invokeStart))
 	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      update.Message.Chat.ID,
-		Text:        text,
-		ParseMode:   "HTML",
-		ReplyMarkup: serverKeyboard(),
+		ChatID:          update.Message.Chat.ID,
+		MessageThreadID: update.Message.MessageThreadID,
+		Text:            text,
+		ParseMode:       "HTML",
+		ReplyMarkup:     serverKeyboard(),
 	})
 }
 
@@ -824,7 +826,7 @@ func (h *Handler) CodeCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 		language = fields[1]
 	}
 	text := fmt.Sprintf("<pre><code class=\"language-%s\">%s</code></pre>", html.EscapeString(language), html.EscapeString(update.Message.ReplyToMessage.Text))
-	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, Text: text, ParseMode: "HTML", ReplyParameters: &botgotd.ReplyParameters{MessageID: update.Message.ID}})
+	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, MessageThreadID: update.Message.MessageThreadID, Text: text, ParseMode: "HTML", ReplyParameters: &botgotd.ReplyParameters{MessageID: update.Message.ID}})
 }
 
 func (h *Handler) HelpInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {

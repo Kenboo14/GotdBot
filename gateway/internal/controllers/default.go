@@ -14,6 +14,7 @@ func (h *Handler) DefaultHandler(ctx context.Context, b *botgotd.Bot, update *bo
 
 	payload := models.PToService{
 		ChatID:   update.Message.Chat.ID,
+		ThreadID: update.Message.MessageThreadID,
 		UserID:   update.Message.From.ID,
 		Username: update.Message.From.Username,
 		Text:     update.Message.Text,

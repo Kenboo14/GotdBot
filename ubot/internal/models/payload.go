@@ -3,6 +3,7 @@ package models
 // GatewayToBackend adalah data yang dikirim ke backend
 type PToService struct {
 	ChatID           int64           `json:"chat_id"`
+	ThreadID         int             `json:"thread_id,omitempty"`
 	UserID           int64           `json:"user_id"`
 	OwnerID          int64           `json:"owner_id,omitempty"`
 	Username         string          `json:"username"`
@@ -10,7 +11,7 @@ type PToService struct {
 	IsBot            bool            `json:"is_bot"`
 	Type             string          `json:"type"`
 	TaskID           string          `json:"task_id,omitempty"`
-	Target           []int64         `json:"target,omitempty"` // Target user IDs untuk broadcast
+	Target           []int64         `json:"target,omitempty"`
 	Entities         []MessageEntity `json:"entities,omitempty"`
 	MediaCacheIDs    []int           `json:"media_cache_ids,omitempty"`
 	MediaSourceCount int             `json:"media_source_count,omitempty"`
@@ -28,8 +29,9 @@ type MessageEntity struct {
 
 // BackendToGateway adalah data balasan dari backend
 type PFromService struct {
-	ChatID        int64    `json:"chat_id"`
-	Text          string   `json:"text"`
+	ChatID        int64   `json:"chat_id"`
+	ThreadID      int     `json:"thread_id,omitempty"`
+	Text          string  `json:"text"`
 	State         string   `json:"state,omitempty"`
 	Type          string   `json:"type,omitempty"`
 	OwnerID       int64    `json:"owner_id,omitempty"`

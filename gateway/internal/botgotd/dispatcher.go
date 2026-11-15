@@ -263,6 +263,16 @@ func (b *Bot) convertMessageToUpdate(msg *tg.Message, e tg.Entities) *Update {
 		m.Entities = entities
 	}
 
+	if replyTo, ok := msg.GetReplyTo(); ok {
+		if header, ok := replyTo.(*tg.MessageReplyHeader); ok && header.ForumTopic {
+			topicID := header.ReplyToTopID
+			if topicID == 0 {
+				topicID = header.ReplyToMsgID
+			}
+			m.MessageThreadID = topicID
+		}
+	}
+
 	return &Update{
 		ID:      msg.ID,
 		Message: m,

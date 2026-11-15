@@ -41,12 +41,12 @@ func (s *Service) Handle(ctx context.Context, msg redis.XMessage) {
 	case "auth_check":
 		installed, err := s.hasInstalledSession(ctx, job.ChatID, job.UserID)
 		if err != nil {
-			s.reply(ctx, job.ChatID, `<h1>❌ Gagal Memeriksa Sesi</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>❌ Gagal Memeriksa Sesi</h1>
 <blockquote expandable>Tidak dapat memverifikasi sesi userbot saat ini. Silakan coba sesaat lagi.</blockquote>
 <hr/>
 <p>Ketik /start untuk mencoba kembali.</p>`, "failed")
 		} else if installed {
-			s.reply(ctx, job.ChatID, `<h1>⚠️ Sesi Userbot Sudah Aktif</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>⚠️ Sesi Userbot Sudah Aktif</h1>
 <blockquote expandable>Akun Telegram ini sudah terpasang dan memiliki sesi aktif di sistem GotdBot.
 Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
 <hr/>
@@ -54,23 +54,23 @@ Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
 		} else {
 			// Kirim state waiting_phone tanpa text → gateway hanya update state,
 			// pesan permintaan nomor sudah dikirim oleh gateway sebelumnya (single response)
-			s.reply(ctx, job.ChatID, "", "waiting_phone")
+			s.reply(ctx, job.ChatID, job.ThreadID, "", "waiting_phone")
 		}
 	case "auth_phone":
 		if current != nil {
-			s.reply(ctx, job.ChatID, `<h1>⏳ Pemasangan Sedang Berjalan</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>⏳ Pemasangan Sedang Berjalan</h1>
 <blockquote expandable>Proses otorisasi akun Telegram Anda masih berlangsung di latar belakang.</blockquote>
 <hr/>
 <p>Silakan kirimkan kode OTP Anda, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, "waiting_otp")
 			return
 		}
 		if installed, err := s.hasInstalledSession(ctx, job.ChatID, job.UserID); err != nil {
-			s.reply(ctx, job.ChatID, `<h1>❌ Gagal Memeriksa Sesi</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>❌ Gagal Memeriksa Sesi</h1>
 <blockquote expandable>Tidak dapat memverifikasi sesi userbot saat ini. Silakan coba sesaat lagi.</blockquote>
 <hr/>
 <p>Ketik /start untuk mencoba kembali.</p>`, "failed")
 		} else if installed {
-			s.reply(ctx, job.ChatID, `<h1>⚠️ Sesi Userbot Sudah Aktif</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>⚠️ Sesi Userbot Sudah Aktif</h1>
 <blockquote expandable>Akun Telegram ini sudah terpasang dan memiliki sesi aktif di sistem GotdBot.
 Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
 <hr/>
@@ -80,7 +80,7 @@ Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
 		}
 	case "auth_otp":
 		if current == nil {
-			s.reply(ctx, job.ChatID, `<h1>⏳ Sesi Pemasangan Kedaluwarsa</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>⏳ Sesi Pemasangan Kedaluwarsa</h1>
 <blockquote expandable>Batas waktu tunggu input kode OTP telah habis (timeout).</blockquote>
 <hr/>
 <p>Ketik atau tekan <b>/start</b> untuk memulai pemasangan kembali.</p>`, "failed")
@@ -89,7 +89,7 @@ Satu akun hanya diperbolehkan memiliki satu sesi userbot aktif.</blockquote>
 		sendSecret(current.otp, job.Text)
 	case "auth_password":
 		if current == nil {
-			s.reply(ctx, job.ChatID, `<h1>⏳ Sesi Pemasangan Kedaluwarsa</h1>
+			s.reply(ctx, job.ChatID, job.ThreadID, `<h1>⏳ Sesi Pemasangan Kedaluwarsa</h1>
 <blockquote expandable>Batas waktu tunggu input password 2FA telah habis (timeout).</blockquote>
 <hr/>
 <p>Ketik atau tekan <b>/start</b> untuk memulai pemasangan kembali.</p>`, "failed")
@@ -117,7 +117,7 @@ func (s *Service) start(parent context.Context, chatID, ownerID int64, phone str
 <blockquote expandable>%s</blockquote>
 <hr/>
 <p>Ketik atau tekan <b>/start</b> untuk memulai pemasangan kembali.</p>`, html.EscapeString(safeError(err)))
-			s.reply(parent, chatID, errMsg, "failed")
+			s.reply(parent, chatID, 0, errMsg, "failed")
 		}
 	}()
 }
@@ -158,7 +158,7 @@ Silakan periksa pesan notifikasi resmi dari Telegram (bukan SMS biasa).</blockqu
 </table>
 <hr/>
 <p>Kirimkan kode OTP sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, otpTarget)
-		s.reply(ctx, chatID, otpMsg, "waiting_otp")
+		s.reply(ctx, chatID, 0, otpMsg, "waiting_otp")
 
 		var signInErr error
 		for attempt := 1; attempt <= 3; attempt++ {
@@ -179,7 +179,7 @@ Silakan periksa pesan notifikasi resmi dari Telegram (bukan SMS biasa).</blockqu
 Pastikan memasukkan kode OTP terbaru yang dikirimkan oleh Telegram.</blockquote>
 <hr/>
 <p>Silakan kirimkan kode OTP yang benar, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, attempt)
-					s.reply(ctx, chatID, retryMsg, "waiting_otp")
+					s.reply(ctx, chatID, 0, retryMsg, "waiting_otp")
 					continue
 				}
 			}
@@ -195,7 +195,7 @@ Pastikan memasukkan kode OTP terbaru yang dikirimkan oleh Telegram.</blockquote>
 </table>
 <hr/>
 <p>Silakan kirimkan password 2FA akun Anda, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
-			s.reply(ctx, chatID, twoFaMsg, "waiting_password")
+			s.reply(ctx, chatID, 0, twoFaMsg, "waiting_password")
 			for passAttempt := 1; passAttempt <= 3; passAttempt++ {
 				password, err := receiveSecret(ctx, l.password)
 				if err != nil {
@@ -212,7 +212,7 @@ Pastikan memasukkan kode OTP terbaru yang dikirimkan oleh Telegram.</blockquote>
 Perhatikan huruf besar/kecil pada password akun Anda.</blockquote>
 <hr/>
 <p>Silakan kirimkan password 2FA yang benar, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, passAttempt)
-							s.reply(ctx, chatID, passRetryMsg, "waiting_password")
+							s.reply(ctx, chatID, 0, passRetryMsg, "waiting_password")
 							continue
 						}
 					}
@@ -237,24 +237,24 @@ Perhatikan huruf besar/kecil pada password akun Anda.</blockquote>
 		if err := store.setPrefix(ctx, "!", true); err != nil {
 			return err
 		}
-		s.replyWithOwner(ctx, chatID, self.ID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")
+		s.replyWithOwner(ctx, chatID, 0, self.ID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")
 		s.activate(chatID, self.ID)
 		return nil
 	})
 }
 
-func (s *Service) reply(ctx context.Context, chatID int64, text, state string) {
+func (s *Service) reply(ctx context.Context, chatID int64, threadID int, text, state string) {
 	if chatID == 0 {
 		return
 	}
-	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, Text: text, State: state})
+	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, ThreadID: threadID, Text: text, State: state})
 }
 
-func (s *Service) replyWithOwner(ctx context.Context, chatID, ownerID int64, text, state string) {
+func (s *Service) replyWithOwner(ctx context.Context, chatID int64, threadID int, ownerID int64, text, state string) {
 	if chatID == 0 {
 		return
 	}
-	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, OwnerID: ownerID, Text: text, State: state})
+	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{ChatID: chatID, ThreadID: threadID, OwnerID: ownerID, Text: text, State: state})
 }
 
 func (s *Service) hasInstalledSession(ctx context.Context, chatID, ownerID int64) (bool, error) {

@@ -121,7 +121,7 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		s.mu.Unlock()
 	}
 	if client == nil {
-		s.reply(ctx, job.ChatID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")
+		s.reply(ctx, job.ChatID, job.ThreadID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")
 		return
 	}
 
@@ -216,15 +216,15 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pingCancel()
 	if err := client.Ping(pingCtx); err != nil {
-		s.reply(ctx, job.ChatID, "Ping gagal. Periksa koneksi dan status sesi userbot.", "failed")
+		s.reply(ctx, job.ChatID, job.ThreadID, "Ping gagal. Periksa koneksi dan status sesi userbot.", "failed")
 		return
 	}
-	s.reply(ctx, job.ChatID, fmt.Sprintf("<code>%.3f ms</code>", float64(time.Since(started).Microseconds())/1000), "ok")
+	s.reply(ctx, job.ChatID, job.ThreadID, fmt.Sprintf("<code>%.3f ms</code>", float64(time.Since(started).Microseconds())/1000), "ok")
 }
 
 func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
 	if client == nil {
-		s.reply(ctx, chatID, `<h1>❌ Gagal Mengambil Grup</h1>
+		s.reply(ctx, chatID, 0, `<h1>❌ Gagal Mengambil Grup</h1>
 <blockquote expandable>Sesi userbot belum aktif atau sedang terputus.</blockquote>
 <hr/>
 <p>Silakan hubungkan userbot melalui <b>/start</b>.</p>`, "panel_notice")
@@ -314,7 +314,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Clien
 </table>
 <hr/>
 <p>GotdBot • Group Target Manager</p>`, len(allGroups), len(allGroups))
-	s.reply(ctx, chatID, report, "panel_notice")
+	s.reply(ctx, chatID, 0, report, "panel_notice")
 }
 
 func (s *Service) syncAllNotesToRedis(ctx context.Context) {

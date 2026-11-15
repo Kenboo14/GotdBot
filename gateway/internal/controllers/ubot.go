@@ -95,7 +95,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	if data.State != "" {
 		h.setInstallState(data.ChatID, data.State)
 	}
-	params := &botgotd.SendMessageParams{ChatID: data.ChatID, Text: data.Text}
+	params := &botgotd.SendMessageParams{ChatID: data.ChatID, MessageThreadID: data.ThreadID, Text: data.Text}
 	if strings.Contains(data.Text, "<") && strings.Contains(data.Text, ">") {
 		params.ParseMode = "HTML"
 	}

@@ -87,6 +87,7 @@ type Message struct {
 	From            *User           `json:"from,omitempty"`
 	Chat            Chat            `json:"chat"`
 	Date            int             `json:"date"`
+	MessageThreadID int             `json:"message_thread_id,omitempty"`
 	Text            string          `json:"text,omitempty"`
 	Caption         string          `json:"caption,omitempty"`
 	Entities        []MessageEntity `json:"entities,omitempty"`
