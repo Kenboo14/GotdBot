@@ -149,7 +149,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		var releaseOnce sync.Once
 		defer releaseOnce.Do(func() { <-s.broadcastSem })
 
-		s.runBroadcast(jobCtx, client, ownerID, job, targets, text, textEntities, replyMessageID, target, monitorChatID, taskID)
+		s.runBroadcast(jobCtx, client, ownerID, job, targets, text, textEntities, replyMessageID, target, monitorChatID, taskID, threadID)
 	}()
 	return nil
 }
@@ -463,7 +463,7 @@ func dialogName(peer tg.InputPeerClass, entities tg.Entities, id int64) string {
 	return fmt.Sprintf("%d", id)
 }
 
-func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, ownerID int64, job *broadcastJob, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string) {
+func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, ownerID int64, job *broadcastJob, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string, threadID int) {
 	success, failed := 0, 0
 	lastBucket := 0
 	lastProgress := 0
@@ -548,7 +548,7 @@ func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, own
 		if ctx.Err() != nil {
 			final = fmt.Sprintf("Broadcast dibatalkan: %d berhasil, %d gagal.", success, failed)
 		}
-		_, _ = s.getSender(client).To(target).Text(context.Background(), final)
+		_ = sendUserText(context.Background(), client, target, final, threadID)
 	}
 	s.mu.Lock()
 	if s.broadcasts[ownerID] == job {

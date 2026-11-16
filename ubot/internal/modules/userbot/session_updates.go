@@ -237,6 +237,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	slog.Info("executing userbot command",
 		slog.String("command", name),
 		slog.Int64("chat_id", chatID),
+		slog.Int("thread_id", threadID),
 		slog.Bool("out", msg.Out),
 	)
 
@@ -246,7 +247,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "help" {
 		if err := s.sendInlineHelp(ctx, client, peerID, threadID); err != nil {
 			log.Printf("[userbot %d] !help inline gagal: %v", msg.ID, err)
-			_, sendErr := s.getSender(client).To(peerID).Text(ctx, "Help gagal. Periksa koneksi bot inline dan status sesi userbot.")
+			sendErr := sendUserText(ctx, client, peerID, "Help gagal. Periksa koneksi bot inline dan status sesi userbot.", threadID)
 			return sendErr
 		}
 		return nil
@@ -254,7 +255,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "server" {
 		if err := s.sendInlineQuery(ctx, client, peerID, "server", threadID); err != nil {
 			log.Printf("[userbot %d] !server inline gagal: %v", msg.ID, err)
-			_, sendErr := s.getSender(client).To(peerID).Text(ctx, "Status server tidak bisa dibuka. Pastikan inline mode bot aktif.")
+			sendErr := sendUserText(ctx, client, peerID, "Status server tidak bisa dibuka. Pastikan inline mode bot aktif.", threadID)
 			return sendErr
 		}
 		return nil

@@ -32,6 +32,9 @@ func sendUserText(ctx context.Context, client *telegram.Client, target tg.InputP
 		}
 		req.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
 		_, err := client.API().MessagesSendMessage(ctx, req)
+		if err != nil {
+			log.Printf("[sendUserText] MTProto send to topic %d failed: %v", threadID, err)
+		}
 		return err
 	}
 	_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, text)
