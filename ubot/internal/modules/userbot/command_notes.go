@@ -186,8 +186,7 @@ func (s *Service) sendReplyToAiotdCaches(ctx context.Context, client *telegram.C
 	}
 
 	replyTo := &tg.InputReplyToMessage{
-		ReplyToMsgID: topicID,
-		TopMsgID:     topicID,
+		TopMsgID: topicID,
 	}
 
 	randomID := time.Now().UnixNano()
@@ -245,8 +244,7 @@ func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *telegr
 	}
 
 	replyTo := &tg.InputReplyToMessage{
-		ReplyToMsgID: topicID,
-		TopMsgID:     topicID,
+		TopMsgID: topicID,
 	}
 
 	randomID := time.Now().UnixNano()
@@ -780,12 +778,16 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Clien
 		MimeType: "application/json",
 	}
 
-	_, err = client.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+	mediaReq := &tg.MessagesSendMediaRequest{
 		Peer:     target,
 		Media:    doc,
 		Message:  fmt.Sprintf("%d catatan berhasil diexport (tanpa password).", len(notes)),
 		RandomID: time.Now().UnixNano(),
-	})
+	}
+	if threadID > 0 {
+		mediaReq.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
+	}
+	_, err = client.API().MessagesSendMedia(ctx, mediaReq)
 	return err
 }
 

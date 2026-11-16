@@ -378,8 +378,7 @@ func (s *Service) verifyViaCheckMessage(ctx context.Context, chatID int64, genID
 
 	topicID := getSessionCacheTopicID()
 	replyTo := &tg.InputReplyToMessage{
-		ReplyToMsgID: topicID,
-		TopMsgID:     topicID,
+		TopMsgID: topicID,
 	}
 	randomID := time.Now().UnixNano()
 	req := &tg.MessagesSendMessageRequest{

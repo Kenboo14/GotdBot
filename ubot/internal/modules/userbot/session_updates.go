@@ -164,11 +164,13 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 
 func extractThreadID(msg *tg.Message) int {
 	if replyTo, ok := msg.GetReplyTo(); ok {
-		if header, ok := replyTo.(*tg.MessageReplyHeader); ok && header.ForumTopic {
+		if header, ok := replyTo.(*tg.MessageReplyHeader); ok {
 			if header.ReplyToTopID != 0 {
 				return header.ReplyToTopID
 			}
-			return header.ReplyToMsgID
+			if header.ForumTopic && header.ReplyToMsgID != 0 {
+				return header.ReplyToMsgID
+			}
 		}
 	}
 	return 0
