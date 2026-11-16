@@ -263,14 +263,22 @@ func (b *Bot) convertMessageToUpdate(msg *tg.Message, e tg.Entities) *Update {
 		m.Entities = entities
 	}
 
+	// Forum topic detection: pesan yang dikirim di dalam forum topic carries
+	// reply_to.header dengan reply_to_top_id = id topik. Gunakan ReplyToTopID
+	// (definitif topik) sebagai prioritas; fall back ke ReplyToMsgID hanya
+	// ketika sudah ditandai ForumTopic agar tidak salah tangkap reply biasa.
+	var topicID int
 	if replyTo, ok := msg.GetReplyTo(); ok {
-		if header, ok := replyTo.(*tg.MessageReplyHeader); ok && header.ForumTopic {
-			topicID := header.ReplyToTopID
-			if topicID == 0 {
+		if header, ok := replyTo.(*tg.MessageReplyHeader); ok {
+			if header.ReplyToTopID != 0 {
+				topicID = header.ReplyToTopID
+			} else if header.ForumTopic && header.ReplyToMsgID != 0 {
 				topicID = header.ReplyToMsgID
 			}
-			m.MessageThreadID = topicID
 		}
+	}
+	if topicID != 0 {
+		m.MessageThreadID = topicID
 	}
 
 	return &Update{
