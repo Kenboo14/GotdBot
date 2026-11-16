@@ -398,30 +398,48 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 	switch p := msg.PeerID.(type) {
 	case *tg.PeerUser:
 		peerType = "user"
-		if val, ok := s.userAccessHashes.Load(p.UserID); ok {
-			peerAccessHash = val.(int64)
+		if pm := s.getPeerManager(client); pm != nil {
+			if resolved, rErr := pm.ResolveUserID(ctx, p.UserID); rErr == nil {
+				if ip, ok := resolved.InputPeer().(*tg.InputPeerUser); ok {
+					peerAccessHash = ip.AccessHash
+				}
+			}
 		}
 		if peerAccessHash == 0 {
 			for _, u := range entities.Users {
-				if u.ID == p.UserID {
+				if u != nil && !u.Min && u.ID == p.UserID {
 					peerAccessHash = u.AccessHash
 					break
 				}
+			}
+		}
+		if peerAccessHash == 0 {
+			if val, ok := s.userAccessHashes.Load(p.UserID); ok {
+				peerAccessHash = val.(int64)
 			}
 		}
 	case *tg.PeerChat:
 		peerType = "chat"
 	case *tg.PeerChannel:
 		peerType = "channel"
-		if val, ok := s.channelAccessHashes.Load(p.ChannelID); ok {
-			peerAccessHash = val.(int64)
+		if pm := s.getPeerManager(client); pm != nil {
+			if resolved, rErr := pm.ResolveChannelID(ctx, p.ChannelID); rErr == nil {
+				if ip, ok := resolved.InputPeer().(*tg.InputPeerChannel); ok {
+					peerAccessHash = ip.AccessHash
+				}
+			}
 		}
 		if peerAccessHash == 0 {
 			for _, ch := range entities.Channels {
-				if ch.ID == p.ChannelID {
+				if ch != nil && !ch.Min && ch.ID == p.ChannelID {
 					peerAccessHash = ch.AccessHash
 					break
 				}
+			}
+		}
+		if peerAccessHash == 0 {
+			if val, ok := s.channelAccessHashes.Load(p.ChannelID); ok {
+				peerAccessHash = val.(int64)
 			}
 		}
 	}
@@ -646,11 +664,14 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 		}
 		if accessHash == 0 {
 			// Resolve channel via Dialogs jika belum ada di cache
-			dialogs, dErr := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{Limit: 100})
+			dialogs, dErr := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+				Limit:      100,
+				OffsetPeer: &tg.InputPeerEmpty{},
+			})
 			if dErr == nil {
 				if mod, ok := dialogs.AsModified(); ok {
 					for _, c := range mod.GetChats() {
-						if ch, ok := c.(*tg.Channel); ok {
+						if ch, ok := c.(*tg.Channel); ok && !ch.Min {
 							s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
 							if ch.ID == route.SourceChatID {
 								accessHash = ch.AccessHash
@@ -664,28 +685,17 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Cli
 	case "chat":
 		targetPeer = &tg.InputPeerChat{ChatID: route.SourceChatID}
 	default: // "user"
-		accessHash := route.AccessHash
-		if accessHash == 0 {
-			if val, ok := s.userAccessHashes.Load(route.SourceChatID); ok {
-				accessHash = val.(int64)
-			}
-		}
-		if accessHash == 0 {
-			// Coba resolve via API jika cache kosong
-			users, resolveErr := client.API().UsersGetUsers(ctx, []tg.InputUserClass{
-				&tg.InputUser{UserID: route.SourceChatID},
-			})
-			if resolveErr == nil {
-				for _, u := range users {
-					if user, ok := u.(*tg.User); ok && user.ID == route.SourceChatID {
-						accessHash = user.AccessHash
-						s.userAccessHashes.Store(user.ID, user.AccessHash)
-						break
-					}
+		if resolved, rErr := s.resolvePeer(ctx, client, ownerID, tg.Entities{}, &tg.PeerUser{UserID: route.SourceChatID}, &tg.Message{ID: route.SourceMessageID}); rErr == nil {
+			targetPeer = resolved
+		} else {
+			accessHash := route.AccessHash
+			if accessHash == 0 {
+				if val, ok := s.userAccessHashes.Load(route.SourceChatID); ok {
+					accessHash = val.(int64)
 				}
 			}
+			targetPeer = &tg.InputPeerUser{UserID: route.SourceChatID, AccessHash: accessHash}
 		}
-		targetPeer = &tg.InputPeerUser{UserID: route.SourceChatID, AccessHash: accessHash}
 	}
 
 	req := &tg.MessagesSendMessageRequest{

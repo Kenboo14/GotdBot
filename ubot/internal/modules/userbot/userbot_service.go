@@ -15,6 +15,7 @@ import (
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
+	"github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"go.mongodb.org/mongo-driver/bson"
@@ -133,6 +134,7 @@ type Service struct {
 	owners              map[int64]int64                      // chatID -> ownerID
 	clientOwners        map[*telegram.Client]int64           // client -> ownerID
 	senderCache         map[*telegram.Client]*message.Sender // cached message.Sender per client
+	peerManagers        map[*telegram.Client]*peers.Manager
 	prefixes            map[int64]string
 	broadcasts          map[int64]*broadcastJob
 	panelBroadcasts     map[int64]*panelBroadcastJob
@@ -233,6 +235,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		owners:          make(map[int64]int64),
 		clientOwners:    make(map[*telegram.Client]int64),
 		senderCache:     make(map[*telegram.Client]*message.Sender),
+		peerManagers:    make(map[*telegram.Client]*peers.Manager),
 		prefixes:        make(map[int64]string),
 		broadcasts:      make(map[int64]*broadcastJob),
 		panelBroadcasts: make(map[int64]*panelBroadcastJob),
@@ -241,6 +244,16 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		broadcastSem:    make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
 		cmdSem:          make(chan struct{}, 32), // batas concurrency perintah background
 	}
+}
+
+func (s *Service) getPeerManager(client *telegram.Client) *peers.Manager {
+	if client == nil {
+		return nil
+	}
+	s.mu.Lock()
+	pm := s.peerManagers[client]
+	s.mu.Unlock()
+	return pm
 }
 
 // getSender returns a cached message.Sender for the given client, avoiding
@@ -365,18 +378,6 @@ func (s *Service) Restore(ctx context.Context) {
 		return
 	}
 
-	if users, channels, err := s.sqlite.LoadAllPeers(ctx); err == nil {
-		for uID, uHash := range users {
-			s.userAccessHashes.Store(uID, uHash)
-		}
-		for cID, cHash := range channels {
-			s.channelAccessHashes.Store(cID, cHash)
-		}
-		if len(users) > 0 || len(channels) > 0 {
-			log.Printf("📥 Preloaded %d users and %d channels from SQLite peers cache", len(users), len(channels))
-		}
-	}
-
 	// Muat seluruh catatan dari SQLite ke Redis cache untuk navigasi inline instan
 	s.syncAllNotesToRedis(ctx)
 
@@ -483,6 +484,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			if client != nil {
 				delete(s.clientOwners, client)
 				delete(s.senderCache, client)
+				delete(s.peerManagers, client)
 			}
 			s.mu.Unlock()
 			s.inlineMu.Lock()
@@ -518,6 +520,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			}
 			return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
 		})
+		var h telegram.UpdateHandler
 		updateHandler := &userbotUpdateHandler{
 			dispatcher: dispatcher,
 			s:          s,
@@ -526,7 +529,12 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		}
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{
 			SessionStorage: store,
-			UpdateHandler:  updateHandler,
+			UpdateHandler: telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
+				if h != nil {
+					return h.Handle(ctx, u)
+				}
+				return updateHandler.Handle(ctx, u)
+			}),
 			Middlewares: []telegram.Middleware{
 				&rpcErrorMiddleware{chatID: chatID, genID: genID, service: s},
 			},
@@ -575,7 +583,13 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				s.mu.Unlock()
 			},
 		})
+		peerManager := peers.Options{
+			Storage: &peers.InmemoryStorage{},
+			Cache:   &peers.InmemoryCache{},
+		}.Build(client.API())
+		h = peerManager.UpdateHook(updateHandler)
 		s.mu.Lock()
+		s.peerManagers[client] = peerManager
 		if s.connecting[chatID] == genID {
 			delete(s.connecting, chatID)
 		}
@@ -588,6 +602,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		}
 		s.mu.Unlock()
 		err := client.Run(clientCtx, func(ctx context.Context) error {
+			if initErr := peerManager.Init(ctx); initErr != nil {
+				slog.Warn("peerManager.Init warning", slog.Int64("chat_id", chatID), slog.String("error", initErr.Error()))
+			}
 			self, err := client.Self(ctx)
 			if err != nil {
 				return err
@@ -651,35 +668,37 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client)
 	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	peerManager := s.getPeerManager(client)
+
 	if contacts, err := client.API().ContactsGetContacts(syncCtx, 0); err == nil {
 		if c, ok := contacts.(*tg.ContactsContacts); ok {
+			if peerManager != nil {
+				_ = peerManager.Apply(syncCtx, c.Users, nil)
+			}
 			for _, u := range c.Users {
-				if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+				if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.ID != 0 && user.AccessHash != 0 {
 					s.userAccessHashes.Store(user.ID, user.AccessHash)
-					if s.sqlite != nil {
-						_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
-					}
 				}
 			}
 		}
 	}
 
-	if dialogs, err := client.API().MessagesGetDialogs(syncCtx, &tg.MessagesGetDialogsRequest{Limit: 100}); err == nil {
+	if dialogs, err := client.API().MessagesGetDialogs(syncCtx, &tg.MessagesGetDialogsRequest{
+		Limit:      100,
+		OffsetPeer: &tg.InputPeerEmpty{},
+	}); err == nil {
 		if mod, ok := dialogs.AsModified(); ok {
+			if peerManager != nil {
+				_ = peerManager.Apply(syncCtx, mod.GetUsers(), mod.GetChats())
+			}
 			for _, u := range mod.GetUsers() {
-				if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+				if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.ID != 0 && user.AccessHash != 0 {
 					s.userAccessHashes.Store(user.ID, user.AccessHash)
-					if s.sqlite != nil {
-						_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
-					}
 				}
 			}
 			for _, ch := range mod.GetChats() {
-				if channel, ok := ch.(*tg.Channel); ok && channel != nil && channel.ID != 0 && channel.AccessHash != 0 {
+				if channel, ok := ch.(*tg.Channel); ok && channel != nil && !channel.Min && channel.ID != 0 && channel.AccessHash != 0 {
 					s.channelAccessHashes.Store(channel.ID, channel.AccessHash)
-					if s.sqlite != nil {
-						_ = s.sqlite.SavePeer(context.Background(), channel.ID, "channel", channel.AccessHash)
-					}
 				}
 			}
 		}
