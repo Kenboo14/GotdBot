@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	github.com/gotd/td v0.163.0
 	github.com/redis/go-redis/v9 v9.17.2
-	github.com/traefik/yaegi v0.16.1
 	go.mongodb.org/mongo-driver v1.17.6
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.61.1

@@ -365,6 +365,18 @@ func (s *Service) Restore(ctx context.Context) {
 		return
 	}
 
+	if users, channels, err := s.sqlite.LoadAllPeers(ctx); err == nil {
+		for uID, uHash := range users {
+			s.userAccessHashes.Store(uID, uHash)
+		}
+		for cID, cHash := range channels {
+			s.channelAccessHashes.Store(cID, cHash)
+		}
+		if len(users) > 0 || len(channels) > 0 {
+			log.Printf("📥 Preloaded %d users and %d channels from SQLite peers cache", len(users), len(channels))
+		}
+	}
+
 	// Muat seluruh catatan dari SQLite ke Redis cache untuk navigasi inline instan
 	s.syncAllNotesToRedis(ctx)
 
@@ -541,6 +553,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 					if wasSuspected {
 						s.triggerImmediateVerification(chatID)
 					}
+					go s.syncPeersOnReady(clientCtx, client)
 					return
 				case telegram.ConnectionStateDisconnected:
 					// Disconnect bukan bukti sesi dicabut. Tandai event sementara dan
@@ -630,3 +643,46 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		}
 	}()
 }
+
+func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client) {
+	if client == nil {
+		return
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	if contacts, err := client.API().ContactsGetContacts(syncCtx, 0); err == nil {
+		if c, ok := contacts.(*tg.ContactsContacts); ok {
+			for _, u := range c.Users {
+				if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+					s.userAccessHashes.Store(user.ID, user.AccessHash)
+					if s.sqlite != nil {
+						_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
+					}
+				}
+			}
+		}
+	}
+
+	if dialogs, err := client.API().MessagesGetDialogs(syncCtx, &tg.MessagesGetDialogsRequest{Limit: 100}); err == nil {
+		if mod, ok := dialogs.AsModified(); ok {
+			for _, u := range mod.GetUsers() {
+				if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+					s.userAccessHashes.Store(user.ID, user.AccessHash)
+					if s.sqlite != nil {
+						_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
+					}
+				}
+			}
+			for _, ch := range mod.GetChats() {
+				if channel, ok := ch.(*tg.Channel); ok && channel != nil && channel.ID != 0 && channel.AccessHash != 0 {
+					s.channelAccessHashes.Store(channel.ID, channel.AccessHash)
+					if s.sqlite != nil {
+						_ = s.sqlite.SavePeer(context.Background(), channel.ID, "channel", channel.AccessHash)
+					}
+				}
+			}
+		}
+	}
+}
+

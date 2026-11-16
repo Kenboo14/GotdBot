@@ -242,6 +242,13 @@ func (s *SQLiteClient) initTables() error {
 			all_ids TEXT NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_peers (
+			peer_id INTEGER PRIMARY KEY,
+			peer_type TEXT NOT NULL,
+			access_hash INTEGER NOT NULL,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, query := range queries {
@@ -607,3 +614,55 @@ func (s *SQLiteClient) GetLogRoute(ctx context.Context, logBotID int64, logMsgID
 	}
 	return &r, nil
 }
+
+func (s *SQLiteClient) SavePeer(ctx context.Context, peerID int64, peerType string, accessHash int64) error {
+	if peerID == 0 || accessHash == 0 {
+		return nil
+	}
+	if peerType == "" {
+		peerType = "user"
+	}
+	query := `INSERT INTO userbot_peers (peer_id, peer_type, access_hash, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(peer_id) DO UPDATE SET access_hash = excluded.access_hash, updated_at = CURRENT_TIMESTAMP;`
+	_, err := s.DB.ExecContext(ctx, query, peerID, peerType, accessHash)
+	return err
+}
+
+func (s *SQLiteClient) GetPeerAccessHash(ctx context.Context, peerID int64) (int64, string, error) {
+	if peerID == 0 {
+		return 0, "", sql.ErrNoRows
+	}
+	query := `SELECT access_hash, peer_type FROM userbot_peers WHERE peer_id = ? LIMIT 1;`
+	var hash int64
+	var pType string
+	err := s.DB.QueryRowContext(ctx, query, peerID).Scan(&hash, &pType)
+	if err != nil {
+		return 0, "", err
+	}
+	return hash, pType, nil
+}
+
+func (s *SQLiteClient) LoadAllPeers(ctx context.Context) (map[int64]int64, map[int64]int64, error) {
+	users := make(map[int64]int64)
+	channels := make(map[int64]int64)
+	query := `SELECT peer_id, peer_type, access_hash FROM userbot_peers;`
+	rows, err := s.DB.QueryContext(ctx, query)
+	if err != nil {
+		return users, channels, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, hash int64
+		var pType string
+		if err := rows.Scan(&id, &pType, &hash); err == nil && hash != 0 {
+			if pType == "channel" {
+				channels[id] = hash
+			} else {
+				users[id] = hash
+			}
+		}
+	}
+	return users, channels, rows.Err()
+}
+

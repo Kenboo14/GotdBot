@@ -107,7 +107,7 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 <p>Ketik atau tekan <b>/start</b> untuk menyambungkan kembali akun Anda.</p>`, "session_revoked")
 }
 
-func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chatID int64, entities tg.Entities, p tg.PeerClass) (tg.InputPeerClass, error) {
+func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chatID int64, entities tg.Entities, p tg.PeerClass, msg *tg.Message) (tg.InputPeerClass, error) {
 	if p == nil {
 		return nil, fmt.Errorf("peer is nil")
 	}
@@ -127,19 +127,35 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 		if u, ok := entities.Users[peerObj.UserID]; ok && u != nil {
 			if u.AccessHash != 0 {
 				s.userAccessHashes.Store(u.ID, u.AccessHash)
+				if s.sqlite != nil {
+					_ = s.sqlite.SavePeer(context.Background(), u.ID, "user", u.AccessHash)
+				}
 			}
 			return &tg.InputPeerUser{UserID: u.ID, AccessHash: u.AccessHash}, nil
 		}
 		if val, ok := s.userAccessHashes.Load(peerObj.UserID); ok {
-			if hash, ok := val.(int64); ok {
+			if hash, ok := val.(int64); ok && hash != 0 {
+				return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}, nil
+			}
+		}
+		if s.sqlite != nil {
+			if hash, _, err := s.sqlite.GetPeerAccessHash(ctx, peerObj.UserID); err == nil && hash != 0 {
+				s.userAccessHashes.Store(peerObj.UserID, hash)
 				return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}, nil
 			}
 		}
 		if ownerID == 0 {
 			return &tg.InputPeerSelf{}, nil
 		}
-		accessHash := s.resolveUserAccessHash(ctx, client, peerObj.UserID)
-		return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: accessHash}, nil
+		msgID := 0
+		if msg != nil {
+			msgID = msg.ID
+		}
+		accessHash := s.resolveUserAccessHash(ctx, client, peerObj.UserID, msgID)
+		if accessHash != 0 {
+			return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: accessHash}, nil
+		}
+		return nil, fmt.Errorf("access hash not found for user %d (peer invalid)", peerObj.UserID)
 
 	case *tg.PeerChat:
 		return &tg.InputPeerChat{ChatID: peerObj.ChatID}, nil
@@ -148,11 +164,20 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 		if ch, ok := entities.Channels[peerObj.ChannelID]; ok && ch != nil {
 			if ch.AccessHash != 0 {
 				s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+				if s.sqlite != nil {
+					_ = s.sqlite.SavePeer(context.Background(), ch.ID, "channel", ch.AccessHash)
+				}
 			}
 			return &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
 		}
 		if val, ok := s.channelAccessHashes.Load(peerObj.ChannelID); ok {
-			if hash, ok := val.(int64); ok {
+			if hash, ok := val.(int64); ok && hash != 0 {
+				return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: hash}, nil
+			}
+		}
+		if s.sqlite != nil {
+			if hash, _, err := s.sqlite.GetPeerAccessHash(ctx, peerObj.ChannelID); err == nil && hash != 0 {
+				s.channelAccessHashes.Store(peerObj.ChannelID, hash)
 				return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: hash}, nil
 			}
 		}
@@ -193,7 +218,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if strings.HasPrefix(msg.Message, "#") && len(msg.Message) > 1 && !strings.ContainsAny(msg.Message, " \t\r\n") {
 		hashName := strings.TrimPrefix(msg.Message, "#")
 		if isValidNoteName(hashName) && s.commandAllowed(ctx, client, msg) {
-			peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID)
+			peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID, msg)
 			if err == nil {
 				return s.showNote(ctx, client, peerID, hashName, false, threadID)
 			}
@@ -226,7 +251,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if !s.commandAllowed(ctx, client, msg) {
 		return nil
 	}
-	peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID)
+	peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID, msg)
 	if err != nil {
 		slog.Error("failed to resolve peer for userbot command",
 			slog.String("command", name),
@@ -385,48 +410,99 @@ func (s *Service) cacheEntities(entities tg.Entities) {
 	for _, u := range entities.Users {
 		if u != nil && u.ID != 0 && u.AccessHash != 0 {
 			s.userAccessHashes.Store(u.ID, u.AccessHash)
+			if s.sqlite != nil {
+				_ = s.sqlite.SavePeer(context.Background(), u.ID, "user", u.AccessHash)
+			}
 		}
 	}
 	for _, ch := range entities.Channels {
 		if ch != nil && ch.ID != 0 && ch.AccessHash != 0 {
 			s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+			if s.sqlite != nil {
+				_ = s.sqlite.SavePeer(context.Background(), ch.ID, "channel", ch.AccessHash)
+			}
 		}
 	}
 }
 
-func (s *Service) resolveUserAccessHash(ctx context.Context, client *telegram.Client, userID int64) int64 {
+func (s *Service) resolveUserAccessHash(ctx context.Context, client *telegram.Client, userID int64, msgID int) int64 {
 	var accessHash int64
 
-	// Try to get from cache first
 	if val, ok := s.userAccessHashes.Load(userID); ok {
-		if hash, ok := val.(int64); ok {
-			accessHash = hash
+		if hash, ok := val.(int64); ok && hash != 0 {
+			return hash
 		}
 	}
 
-	// If not in cache, try to resolve via API
-	if accessHash == 0 {
-		// Try UsersGetUsers first (fast, targeted)
-		users, err := client.API().UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUser{UserID: userID}})
+	if s.sqlite != nil {
+		if hash, _, err := s.sqlite.GetPeerAccessHash(ctx, userID); err == nil && hash != 0 {
+			s.userAccessHashes.Store(userID, hash)
+			return hash
+		}
+	}
+
+	if client == nil {
+		return 0
+	}
+
+	if msgID > 0 {
+		msgs, err := client.API().MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msgID}})
 		if err == nil {
-			for _, u := range users {
-				if user, ok := u.(*tg.User); ok && user.ID == userID {
-					accessHash = user.AccessHash
-					s.userAccessHashes.Store(user.ID, user.AccessHash)
-					return accessHash
+			if mod, ok := msgs.AsModified(); ok {
+				for _, u := range mod.GetUsers() {
+					if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+						s.userAccessHashes.Store(user.ID, user.AccessHash)
+						if s.sqlite != nil {
+							_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
+						}
+						if user.ID == userID {
+							return user.AccessHash
+						}
+					}
 				}
 			}
 		}
+	}
 
-		// Fall back to MessagesGetDialogs to find user's access hash
-		dialogs, dErr := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{Limit: 100})
-		if dErr == nil {
-			if mod, ok := dialogs.AsModified(); ok {
-				for _, u := range mod.GetUsers() {
-					if user, ok := u.(*tg.User); ok && user.ID == userID {
+	contacts, cErr := client.API().ContactsGetContacts(ctx, 0)
+	if cErr == nil {
+		if c, ok := contacts.(*tg.ContactsContacts); ok {
+			for _, u := range c.Users {
+				if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+					s.userAccessHashes.Store(user.ID, user.AccessHash)
+					if s.sqlite != nil {
+						_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
+					}
+					if user.ID == userID {
 						accessHash = user.AccessHash
-						s.userAccessHashes.Store(user.ID, user.AccessHash)
-						return accessHash
+					}
+				}
+			}
+			if accessHash != 0 {
+				return accessHash
+			}
+		}
+	}
+
+	dialogs, dErr := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{Limit: 100})
+	if dErr == nil {
+		if mod, ok := dialogs.AsModified(); ok {
+			for _, u := range mod.GetUsers() {
+				if user, ok := u.(*tg.User); ok && user != nil && user.ID != 0 && user.AccessHash != 0 {
+					s.userAccessHashes.Store(user.ID, user.AccessHash)
+					if s.sqlite != nil {
+						_ = s.sqlite.SavePeer(context.Background(), user.ID, "user", user.AccessHash)
+					}
+					if user.ID == userID {
+						accessHash = user.AccessHash
+					}
+				}
+			}
+			for _, ch := range mod.GetChats() {
+				if channel, ok := ch.(*tg.Channel); ok && channel != nil && channel.ID != 0 && channel.AccessHash != 0 {
+					s.channelAccessHashes.Store(channel.ID, channel.AccessHash)
+					if s.sqlite != nil {
+						_ = s.sqlite.SavePeer(context.Background(), channel.ID, "channel", channel.AccessHash)
 					}
 				}
 			}
