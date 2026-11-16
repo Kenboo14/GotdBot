@@ -41,12 +41,12 @@ func parseUserCommand(text, prefix string) (name, args string, ok bool) {
 	return name, args, true
 }
 
-func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, chatID int64, target tg.InputPeerClass, args string) error {
+func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, chatID int64, target tg.InputPeerClass, args string, threadID int) error {
 	value := strings.TrimSpace(strings.ToLower(args))
 	if value == "none" {
 		value = ""
 	} else if value == "" || strings.ContainsAny(value, " \t\r\n") || len([]rune(value)) > 8 {
-		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: !setp <prefix> atau !setp none")
+		err := sendUserText(ctx, client, target, "Gunakan: !setp <prefix> atau !setp none", threadID)
 		return err
 	}
 	store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, key: s.key}
@@ -60,6 +60,6 @@ func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, 
 	if label == "" {
 		label = "tanpa prefix"
 	}
-	_, err := s.getSender(client).To(target).Text(ctx, "Prefix disimpan: "+label)
+	err := sendUserText(ctx, client, target, "Prefix disimpan: "+label, threadID)
 	return err
 }

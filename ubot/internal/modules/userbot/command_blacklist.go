@@ -115,14 +115,14 @@ func (p peerEntities) ExtractPeer(value tg.PeerClass) (tg.InputPeerClass, error)
 	}
 }
 
-func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args, operation string) error {
+func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args, operation string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
 	}
 	chatID, kind, title, err := blacklistTarget(msg, entities, args)
 	if err != nil {
-		return sendUserText(ctx, client, target, "Format blacklist: !addbl [-pv|-gc|-ch] di chat target.")
+		return sendUserText(ctx, client, target, "Format blacklist: !addbl [-pv|-gc|-ch] di chat target.", threadID)
 	}
 	switch operation {
 	case "add":
@@ -140,7 +140,7 @@ func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client,
 		if err != nil {
 			return err
 		}
-		return sendUserText(ctx, client, target, fmt.Sprintf("Blacklist %s ditambahkan: %d", kind, displayChatID(kind, chatID)))
+		return sendUserText(ctx, client, target, fmt.Sprintf("Blacklist %s ditambahkan: %d", kind, displayChatID(kind, chatID)), threadID)
 	case "remove":
 		if s.sqlite != nil {
 			err = s.sqlite.RemoveBlacklist(ctx, ownerID, kind, chatID)
@@ -155,13 +155,13 @@ func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client,
 		if err != nil {
 			return err
 		}
-		return sendUserText(ctx, client, target, fmt.Sprintf("Blacklist %s dihapus: %d", kind, displayChatID(kind, chatID)))
+		return sendUserText(ctx, client, target, fmt.Sprintf("Blacklist %s dihapus: %d", kind, displayChatID(kind, chatID)), threadID)
 	default:
 		return fmt.Errorf("operasi blacklist tidak dikenal")
 	}
 }
 
-func (s *Service) listBlacklist(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
+func (s *Service) listBlacklist(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -187,13 +187,13 @@ func (s *Service) listBlacklist(ctx context.Context, client *telegram.Client, ta
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ChatID < entries[j].ChatID })
 	if len(entries) == 0 {
-		return sendUserText(ctx, client, target, "Blacklist masih kosong.")
+		return sendUserText(ctx, client, target, "Blacklist masih kosong.", threadID)
 	}
 	lines := []string{"Blacklist broadcast:"}
 	for _, entry := range entries {
 		lines = append(lines, fmt.Sprintf("- %s: %d | %s", strings.ToUpper(entry.Type), displayChatID(entry.Type, entry.ChatID), html.EscapeString(entry.Title)))
 	}
-	return sendUserText(ctx, client, target, strings.Join(lines, "\n"))
+	return sendUserText(ctx, client, target, strings.Join(lines, "\n"), threadID)
 }
 
 // Chat IDs in Mongo stay in MTProto form (positive channel/chat IDs) so they
@@ -210,7 +210,7 @@ func displayChatID(kind string, id int64) int64 {
 	}
 }
 
-func (s *Service) clearBlacklist(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
+func (s *Service) clearBlacklist(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -228,5 +228,5 @@ func (s *Service) clearBlacklist(ctx context.Context, client *telegram.Client, t
 	if err != nil {
 		return err
 	}
-	return sendUserText(ctx, client, target, "Semua blacklist broadcast dihapus.")
+	return sendUserText(ctx, client, target, "Semua blacklist broadcast dihapus.", threadID)
 }

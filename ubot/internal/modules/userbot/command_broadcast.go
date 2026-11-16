@@ -26,7 +26,7 @@ type broadcastTarget struct {
 	Name string
 }
 
-func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string) error {
+func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	parts := strings.Fields(args)
 	if len(parts) > 0 && (strings.EqualFold(parts[0], "cancel") || strings.EqualFold(parts[0], "stop")) {
 		ownerID, err := s.userbotOwner(ctx, client)
@@ -37,13 +37,13 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		job := s.broadcasts[ownerID]
 		s.mu.Unlock()
 		if job == nil {
-			return sendUserText(ctx, client, target, "Tidak ada broadcast yang berjalan.")
+			return sendUserText(ctx, client, target, "Tidak ada broadcast yang berjalan.", threadID)
 		}
 		job.cancel()
-		return sendUserText(ctx, client, target, "Permintaan pembatalan broadcast diterima.")
+		return sendUserText(ctx, client, target, "Permintaan pembatalan broadcast diterima.", threadID)
 	}
 	if len(parts) == 0 {
-		return sendUserText(ctx, client, target, "Gunakan: !gcast -gc|-pc|-ch [-bl] <pesan>")
+		return sendUserText(ctx, client, target, "Gunakan: !gcast -gc|-pc|-ch [-bl] <pesan>", threadID)
 	}
 	types := map[string]bool{}
 	excludeBlacklist := false
@@ -63,7 +63,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		}
 	}
 	if len(types) == 0 {
-		return sendUserText(ctx, client, target, "Flag target wajib diisi. Contoh: !gcast -gc -bl Halo grup.")
+		return sendUserText(ctx, client, target, "Flag target wajib diisi. Contoh: !gcast -gc -bl Halo grup.", threadID)
 	}
 	text := strings.Join(textParts, " ")
 	var textEntities []tg.MessageEntityClass
@@ -72,7 +72,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		var replyErr error
 		text, textEntities, replyErr = repliedText(ctx, client, target, msg)
 		if replyErr != nil {
-			return sendUserText(ctx, client, target, "Reply pesan teks atau tulis pesan setelah flag.")
+			return sendUserText(ctx, client, target, "Reply pesan teks atau tulis pesan setelah flag.", threadID)
 		}
 		replyMessageID = broadcastReplyMessageID(msg)
 	} else if manualText, manualEntities, ok := manualBroadcastText(msg); ok {
@@ -81,7 +81,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		text, textEntities = manualText, manualEntities
 	}
 	if len([]rune(text)) > 4096 {
-		return sendUserText(ctx, client, target, "Pesan broadcast maksimal 4096 karakter.")
+		return sendUserText(ctx, client, target, "Pesan broadcast maksimal 4096 karakter.", threadID)
 	}
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
@@ -92,7 +92,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 		return err
 	}
 	if len(targets) == 0 {
-		return sendUserText(ctx, client, target, "Tidak ada target yang sesuai.")
+		return sendUserText(ctx, client, target, "Tidak ada target yang sesuai.", threadID)
 	}
 	taskID := fmt.Sprintf("%d-%d", ownerID, time.Now().UnixNano())
 	// The inline acknowledgement stays in the originating chat. Detailed
@@ -119,18 +119,18 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 	if s.broadcasts[ownerID] != nil {
 		s.mu.Unlock()
 		cancel()
-		return sendUserText(ctx, client, target, "Broadcast akun ini sedang berjalan. Gunakan !gcast cancel.")
+		return sendUserText(ctx, client, target, "Broadcast akun ini sedang berjalan. Gunakan !gcast cancel.", threadID)
 	}
 	s.broadcasts[ownerID] = job
 	s.mu.Unlock()
 	// Put an inline message into the originating chat so Telegram displays
 	// the `via @bot` attribution. The Bot API monitor below remains active as
 	// a second, editable status message.
-	if err := s.sendInlineQuery(ctx, client, target, fmt.Sprintf("broadcast %d %s %d", ownerID, taskID, len(targets))); err != nil {
+	if err := s.sendInlineQuery(ctx, client, target, fmt.Sprintf("broadcast %d %s %d", ownerID, taskID, len(targets)), threadID); err != nil {
 		log.Printf("[userbot %d] broadcast inline monitor unavailable: %v", ownerID, err)
 		// Some groups disallow inline bots. Keep the acknowledgement visible
 		// as a normal userbot message, without a button or via attribution.
-		if sendErr := sendUserText(ctx, client, target, fmt.Sprintf("Proses Pengiriman\nCek bot untuk detail broadcast anda\n#AIO:%s", taskID)); sendErr != nil {
+		if sendErr := sendUserText(ctx, client, target, fmt.Sprintf("Proses Pengiriman\nCek bot untuk detail broadcast anda\n#AIO:%s", taskID), threadID); sendErr != nil {
 			log.Printf("[userbot %d] broadcast fallback acknowledgement failed: %v", ownerID, sendErr)
 		}
 	}
@@ -139,7 +139,7 @@ func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client,
 			cancel()
 			return err
 		}
-	} else if _, err = s.getSender(client).To(target).Text(ctx, fmt.Sprintf("Broadcast dimulai ke %d target.", len(targets))); err != nil {
+	} else if err = sendUserText(ctx, client, target, fmt.Sprintf("Broadcast dimulai ke %d target.", len(targets)), threadID); err != nil {
 		cancel()
 		return err
 	}

@@ -40,8 +40,8 @@ func inlineRandomID() int64 {
 // sendInlineHelp — shortcut for !help via inline bot
 // ──────────────────────────────────────────────────────
 
-func (s *Service) sendInlineHelp(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
-	return s.sendInlineQuery(ctx, client, target, "assist_help")
+func (s *Service) sendInlineHelp(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+	return s.sendInlineQuery(ctx, client, target, "assist_help", threadID)
 }
 
 // ──────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ func (s *Service) sendInlineHelp(ctx context.Context, client *telegram.Client, t
 //  5. RWMutex cached reads for bot InputUser (zero lock contention).
 // ──────────────────────────────────────────────────────
 
-func (s *Service) sendInlineQuery(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, query string) error {
+func (s *Service) sendInlineQuery(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, query string, threadID int) error {
 	cmdStart := time.Now()
 
 	// Step 1: Resolve inline bot InputUser (cached after first call per client)
@@ -85,7 +85,7 @@ func (s *Service) sendInlineQuery(ctx context.Context, client *telegram.Client, 
 	// Step 4: SendInlineBotResult RPC
 	sendStart := time.Now()
 	randomID := inlineRandomID()
-	_, err = s.sendInlineBotResultWithRetry(ctx, client, target, results.QueryID, resultID, randomID)
+	_, err = s.sendInlineBotResultWithRetry(ctx, client, target, results.QueryID, resultID, randomID, threadID)
 	sendDur := time.Since(sendStart)
 
 	totalDur := time.Since(cmdStart)
@@ -158,6 +158,7 @@ func (s *Service) sendInlineBotResultWithRetry(
 	queryID int64,
 	resultID string,
 	randomID int64,
+	threadID int,
 ) (tg.UpdatesClass, error) {
 	raw := client.API()
 	req := &tg.MessagesSendInlineBotResultRequest{
@@ -165,6 +166,9 @@ func (s *Service) sendInlineBotResultWithRetry(
 		QueryID:  queryID,
 		ID:       resultID,
 		RandomID: randomID,
+	}
+	if threadID > 0 {
+		req.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
 	}
 
 	result, err := raw.MessagesSendInlineBotResult(ctx, req)

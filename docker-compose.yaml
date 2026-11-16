@@ -34,8 +34,8 @@ services:
       GROUP_DEV: ${GROUP_DEV:-}
       MONITOR_TOPIC: ${MONITOR_TOPIC:-}
       GROUP_CACHE: ${GROUP_CACHE:-AiotdCaches}
-      GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-65MiB}
-      GOGC: ${GATEWAY_GOGC:-50}
+      GOMEMLIMIT: ${GOMEMLIMIT:-700MiB}
+      GOGC: ${GOGC:-30}
     volumes:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro

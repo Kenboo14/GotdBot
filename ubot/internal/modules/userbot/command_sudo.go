@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
@@ -22,9 +23,27 @@ type sudoRecord struct {
 	UserID  int64 `bson:"user_id"`
 }
 
-func sendUserText(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, text string) error {
+func sendUserText(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, text string, threadID int) error {
+	if threadID > 0 {
+		req := &tg.MessagesSendMessageRequest{
+			Peer:     target,
+			Message:  text,
+			RandomID: randInt64(),
+		}
+		req.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
+		_, err := client.API().MessagesSendMessage(ctx, req)
+		return err
+	}
 	_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, text)
 	return err
+}
+
+func randInt64() int64 {
+	id, err := crypto.RandInt64(crypto.DefaultRand())
+	if err == nil && id != 0 {
+		return id
+	}
+	return time.Now().UnixNano()
 }
 
 func (s *Service) userbotOwner(ctx context.Context, client *telegram.Client) (int64, error) {
@@ -127,21 +146,21 @@ func (s *Service) commandAllowed(ctx context.Context, client *telegram.Client, m
 	return actorID == ownerID || s.isSudo(ctx, ownerID, actorID)
 }
 
-func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, add bool) error {
+func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, add bool, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
 	}
 	if !msg.Out {
-		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat mengubah sudo.")
+		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat mengubah sudo.", threadID)
 	}
 	value := strings.TrimSpace(args)
 	if value == "" {
-		return sendUserText(ctx, client, target, "Gunakan: !addsudo <user_id> atau !rmsudo <user_id>")
+		return sendUserText(ctx, client, target, "Gunakan: !addsudo <user_id> atau !rmsudo <user_id>", threadID)
 	}
 	userID, err := strconv.ParseInt(strings.TrimPrefix(value, "@"), 10, 64)
 	if err != nil || userID <= 0 {
-		return sendUserText(ctx, client, target, "User ID tidak valid. Gunakan ID numerik Telegram.")
+		return sendUserText(ctx, client, target, "User ID tidak valid. Gunakan ID numerik Telegram.", threadID)
 	}
 	cacheKey := fmt.Sprintf("%d:%d", ownerID, userID)
 	if add {
@@ -159,7 +178,7 @@ func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, targ
 			s.sudoMu.Lock()
 			s.sudoCache[cacheKey] = sudoCacheEntry{allowed: true, expiresAt: time.Now().Add(30 * time.Minute)}
 			s.sudoMu.Unlock()
-			err = sendUserText(ctx, client, target, fmt.Sprintf("Sudo ditambahkan: %d", userID))
+			err = sendUserText(ctx, client, target, fmt.Sprintf("Sudo ditambahkan: %d", userID), threadID)
 		}
 		return err
 	}
@@ -179,5 +198,5 @@ func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, targ
 	s.sudoMu.Lock()
 	s.sudoCache[cacheKey] = sudoCacheEntry{allowed: false, expiresAt: time.Now().Add(30 * time.Minute)}
 	s.sudoMu.Unlock()
-	return sendUserText(ctx, client, target, fmt.Sprintf("Sudo dihapus: %d", userID))
+	return sendUserText(ctx, client, target, fmt.Sprintf("Sudo dihapus: %d", userID), threadID)
 }

@@ -24,8 +24,8 @@ const (
 
 // evaluatorCommand evaluates Go code. Shell commands remain exclusively in
 // command_shell.go.
-func (s *Service) evaluatorCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, prefix, args string) error {
-	_, err := s.getSender(client).To(target).Text(ctx, "Fitur !eval dinonaktifkan untuk menghemat RAM.")
+func (s *Service) evaluatorCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, prefix, args string, threadID int) error {
+	err := sendUserText(ctx, client, target, "Fitur !eval dinonaktifkan untuk menghemat RAM.", threadID)
 	return err
 }
 

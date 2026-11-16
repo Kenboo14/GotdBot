@@ -15,21 +15,21 @@ import (
 )
 
 // shellCommand handles the userbot !sh command.
-func (s *Service) shellCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, args string) error {
-	_, err := s.getSender(client).To(target).Text(ctx, "Fitur !sh dinonaktifkan untuk menghemat RAM.")
+func (s *Service) shellCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, args string, threadID int) error {
+	err := sendUserText(ctx, client, target, "Fitur !sh dinonaktifkan untuk menghemat RAM.", threadID)
 	return err
 }
 
-func (s *Service) runCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, name, args string) error {
+func (s *Service) runCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, name, args string, threadID int) error {
 	if strings.TrimSpace(args) == "" {
-		_, err := s.getSender(client).To(target).Text(ctx, "Gunakan: "+prefix+name+" <perintah>")
+		err := sendUserText(ctx, client, target, "Gunakan: "+prefix+name+" <perintah>", threadID)
 		return err
 	}
 	output, runErr := processCommand(ctx, args)
 	if runErr != nil {
 		output = runErr.Error() + "\n" + output
 	}
-	return s.sendCommandOutput(ctx, client, target, output)
+	return s.sendCommandOutput(ctx, client, target, output, threadID)
 }
 
 // processCommand is the common executor used by both !eval and !sh.
@@ -49,9 +49,13 @@ func processCommand(ctx context.Context, command string) (string, error) {
 	return string(out), err
 }
 
-func (s *Service) sendCommandOutput(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, output string) error {
+func (s *Service) sendCommandOutput(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, output string, threadID int) error {
 	if strings.TrimSpace(output) == "" {
 		output = "(tidak ada output)"
+	}
+	if threadID > 0 {
+		err := sendUserText(ctx, client, target, output, threadID)
+		return err
 	}
 	sender := s.getSender(client)
 	if len(output) > 3900 {

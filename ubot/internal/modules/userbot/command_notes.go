@@ -20,7 +20,6 @@ import (
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
-	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
@@ -329,18 +328,18 @@ func extractNoteButtons(rawText string) (string, []NoteButton) {
 }
 
 // saveNoteCommand implements !save <nama> [-cb|-pop]
-func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string) error {
+func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
 	}
 	fields := strings.Fields(args)
 	if len(fields) == 0 {
-		return sendUserText(ctx, client, target, "Balas pesan yang ingin disimpan dengan: !save <nama> [-cb|-pop]")
+		return sendUserText(ctx, client, target, "Balas pesan yang ingin disimpan dengan: !save <nama> [-cb|-pop]", threadID)
 	}
 	name := strings.ToLower(fields[0])
 	if !isValidNoteName(name) {
-		return sendUserText(ctx, client, target, "Nama catatan harus 1–32 karakter alfanumerik, underscore (_), atau minus (-).")
+		return sendUserText(ctx, client, target, "Nama catatan harus 1–32 karakter alfanumerik, underscore (_), atau minus (-).", threadID)
 	}
 
 	mode := "text"
@@ -355,7 +354,7 @@ func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, 
 
 	reply, err := s.replyMessage(ctx, client, msg, target)
 	if err != nil || reply == nil {
-		return sendUserText(ctx, client, target, "Balas pesan (teks atau media) yang ingin disimpan.")
+		return sendUserText(ctx, client, target, "Balas pesan (teks atau media) yang ingin disimpan.", threadID)
 	}
 
 	rawText := reply.Message
@@ -378,7 +377,7 @@ func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, 
 	}
 
 	if rawText == "" && mediaType == "" {
-		return sendUserText(ctx, client, target, "Pesan yang dibalas tidak berisi teks atau media yang dapat disimpan.")
+		return sendUserText(ctx, client, target, "Pesan yang dibalas tidak berisi teks atau media yang dapat disimpan.", threadID)
 	}
 
 	cleanedText, buttons := extractNoteButtons(rawText)
@@ -394,7 +393,7 @@ func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, 
 	cacheMsgID, cacheErr := s.sendReplyToAiotdCaches(ctx, client, target, reply)
 	if cacheErr != nil {
 		log.Printf("[NOTES CACHE] gagal membalas ke @%s/%d: %v", groupCache, topicID, cacheErr)
-		return sendUserText(ctx, client, target, fmt.Sprintf("Gagal membalas pesan ke @%s/%d: %v. Pastikan akun userbot dapat mengakses channel dan pesan %d valid.", groupCache, topicID, cacheErr, topicID))
+		return sendUserText(ctx, client, target, fmt.Sprintf("Gagal membalas pesan ke @%s/%d: %v. Pastikan akun userbot dapat mengakses channel dan pesan %d valid.", groupCache, topicID, cacheErr, topicID), threadID)
 	}
 
 	noteRecord := databases.NoteRecord{
@@ -411,7 +410,7 @@ func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, 
 
 	if s.sqlite != nil {
 		if err := s.sqlite.SaveNote(ctx, noteRecord); err != nil {
-			return sendUserText(ctx, client, target, "Gagal menyimpan catatan: "+err.Error())
+			return sendUserText(ctx, client, target, "Gagal menyimpan catatan: "+err.Error(), threadID)
 		}
 	}
 
@@ -455,7 +454,7 @@ func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, 
 		_ = s.redis.Client.Set(ctx, fmt.Sprintf("note:text:%d:%s", ownerID, name), cleanedText, 7*24*time.Hour).Err()
 	}
 
-	return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> berhasil disimpan (ID Cache: %d).", html.EscapeString(name), cacheMsgID))
+	return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> berhasil disimpan (ID Cache: %d).", html.EscapeString(name), cacheMsgID), threadID)
 }
 
 // NoteInlinePayload defines the data stored in Redis for inline notes
@@ -467,7 +466,7 @@ type NoteInlinePayload struct {
 	Mode    string       `json:"mode"`
 }
 
-func (s *Service) sendInlineNote(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, ownerID int64, note *databases.NoteRecord, buttons []NoteButton) error {
+func (s *Service) sendInlineNote(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, ownerID int64, note *databases.NoteRecord, buttons []NoteButton, threadID int) error {
 	if s.redis == nil {
 		return fmt.Errorf("redis client tidak tersedia")
 	}
@@ -526,18 +525,18 @@ func (s *Service) sendInlineNote(ctx context.Context, client *telegram.Client, t
 	}
 
 	query := "note_show ref:" + ref
-	return s.sendInlineQuery(ctx, client, target, query)
+	return s.sendInlineQuery(ctx, client, target, query, threadID)
 }
 
 // showNote sends the stored note to the current chat
-func (s *Service) showNote(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, name string, noFormat bool) error {
+func (s *Service) showNote(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, name string, noFormat bool, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
 	}
 	name = strings.ToLower(name)
 	if !isValidNoteName(name) {
-		return sendUserText(ctx, client, target, "Gunakan: !get <nama> atau #<nama>")
+		return sendUserText(ctx, client, target, "Gunakan: !get <nama> atau #<nama>", threadID)
 	}
 
 	var note *databases.NoteRecord
@@ -545,7 +544,7 @@ func (s *Service) showNote(ctx context.Context, client *telegram.Client, target 
 		note, _ = s.sqlite.GetNote(ctx, ownerID, name)
 	}
 	if note == nil {
-		return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> tidak ditemukan.", html.EscapeString(name)))
+		return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> tidak ditemukan.", html.EscapeString(name)), threadID)
 	}
 
 	var buttons []NoteButton
@@ -555,7 +554,7 @@ func (s *Service) showNote(ctx context.Context, client *telegram.Client, target 
 
 	outText := note.Text
 	if noFormat {
-		return sendUserText(ctx, client, target, outText)
+		return sendUserText(ctx, client, target, outText, threadID)
 	}
 
 	// Jika note memiliki mode callback/popup tetapi buttons kosong, buat tombol default
@@ -570,7 +569,7 @@ func (s *Service) showNote(ctx context.Context, client *telegram.Client, target 
 	// 1. Jika catatan memiliki tombol ATAU disimpan dengan -cb / -pop:
 	// Tampilkan via Inline Query bot resmi agar tombol inline muncul (seperti menu !help)
 	if len(buttons) > 0 || note.Mode == "callback" || note.Mode == "popup" {
-		if inlineErr := s.sendInlineNote(ctx, client, target, ownerID, note, buttons); inlineErr == nil {
+		if inlineErr := s.sendInlineNote(ctx, client, target, ownerID, note, buttons, threadID); inlineErr == nil {
 			return nil
 		} else {
 			log.Printf("[NOTES INLINE] gagal kirim note inline: %v, beralih ke fallback pengiriman langsung", inlineErr)
@@ -608,11 +607,11 @@ func (s *Service) showNote(ctx context.Context, client *telegram.Client, target 
 		}
 	}
 
-	return sendUserText(ctx, client, target, outText)
+	return sendUserText(ctx, client, target, outText, threadID)
 }
 
 // listNotesCommand implements !lsnote or !notes
-func (s *Service) listNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
+func (s *Service) listNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -622,12 +621,12 @@ func (s *Service) listNotesCommand(ctx context.Context, client *telegram.Client,
 	if s.sqlite != nil {
 		notes, err = s.sqlite.ListNotes(ctx, ownerID)
 		if err != nil {
-			return sendUserText(ctx, client, target, "Gagal membaca catatan: "+err.Error())
+			return sendUserText(ctx, client, target, "Gagal membaca catatan: "+err.Error(), threadID)
 		}
 	}
 
 	if len(notes) == 0 {
-		return sendUserText(ctx, client, target, "Belum ada catatan. Balas pesan dengan <code>!save <nama></code>.")
+		return sendUserText(ctx, client, target, "Belum ada catatan. Balas pesan dengan <code>!save <nama></code>.", threadID)
 	}
 
 	var sb strings.Builder
@@ -636,18 +635,18 @@ func (s *Service) listNotesCommand(ctx context.Context, client *telegram.Client,
 		sb.WriteString(fmt.Sprintf("%d. <code>%s</code>\n", i+1, html.EscapeString(n.Name)))
 	}
 
-	return sendUserText(ctx, client, target, sb.String())
+	return sendUserText(ctx, client, target, sb.String(), threadID)
 }
 
 // deleteNoteCommand implements !delnote <nama|nomor>
-func (s *Service) deleteNoteCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string) error {
+func (s *Service) deleteNoteCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
 	}
 	fields := strings.Fields(args)
 	if len(fields) == 0 {
-		return sendUserText(ctx, client, target, "Format: <code>!delnote <nama></code> atau <code>!delnote <nomor></code>.")
+		return sendUserText(ctx, client, target, "Format: <code>!delnote <nama></code> atau <code>!delnote <nomor></code>.", threadID)
 	}
 	val := fields[0]
 
@@ -656,14 +655,14 @@ func (s *Service) deleteNoteCommand(ctx context.Context, client *telegram.Client
 		if s.sqlite != nil {
 			notes, _ := s.sqlite.ListNotes(ctx, ownerID)
 			if idx > len(notes) {
-				return sendUserText(ctx, client, target, fmt.Sprintf("Nomor catatan harus antara 1 dan %d.", len(notes)))
+				return sendUserText(ctx, client, target, fmt.Sprintf("Nomor catatan harus antara 1 dan %d.", len(notes)), threadID)
 			}
 			targetName = notes[idx-1].Name
 		}
 	}
 
 	if !isValidNoteName(targetName) {
-		return sendUserText(ctx, client, target, "Nama catatan tidak valid.")
+		return sendUserText(ctx, client, target, "Nama catatan tidak valid.", threadID)
 	}
 
 	deleted := false
@@ -681,14 +680,14 @@ func (s *Service) deleteNoteCommand(ctx context.Context, client *telegram.Client
 	}
 
 	if !deleted {
-		return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> tidak ditemukan.", html.EscapeString(targetName)))
+		return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> tidak ditemukan.", html.EscapeString(targetName)), threadID)
 	}
 
-	return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> berhasil dihapus.", html.EscapeString(targetName)))
+	return sendUserText(ctx, client, target, fmt.Sprintf("Catatan <code>%s</code> berhasil dihapus.", html.EscapeString(targetName)), threadID)
 }
 
 // clearNotesCommand implements !clearnote
-func (s *Service) clearNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
+func (s *Service) clearNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -708,19 +707,19 @@ func (s *Service) clearNotesCommand(ctx context.Context, client *telegram.Client
 		}(ownerID)
 	}
 
-	return sendUserText(ctx, client, target, fmt.Sprintf("%d catatan berhasil dihapus.", count))
+	return sendUserText(ctx, client, target, fmt.Sprintf("%d catatan berhasil dihapus.", count), threadID)
 }
 
 // nofmCommand implements !nofm [-html|-md]
-func (s *Service) nofmCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string) error {
+func (s *Service) nofmCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	reply, err := s.replyMessage(ctx, client, msg, target)
 	if err != nil || reply == nil {
-		return sendUserText(ctx, client, target, "Balas pesan berformat dengan <code>!nofm</code> atau <code>!nofm -md</code>.")
+		return sendUserText(ctx, client, target, "Balas pesan berformat dengan <code>!nofm</code> atau <code>!nofm -md</code>.", threadID)
 	}
 
 	text := reply.Message
 	if text == "" {
-		return sendUserText(ctx, client, target, "Pesan yang dibalas tidak memiliki teks.")
+		return sendUserText(ctx, client, target, "Pesan yang dibalas tidak memiliki teks.", threadID)
 	}
 
 	mode := "html"
@@ -736,13 +735,12 @@ func (s *Service) nofmCommand(ctx context.Context, client *telegram.Client, targ
 	}
 
 	// Kirim sebagai block code agar terlihat mentah tanpa di-parse
-	sender := s.getSender(client)
-	_, sendErr := sender.To(target).StyledText(ctx, styling.Pre(formatted, mode))
+	sendErr := sendUserText(ctx, client, target, "```"+mode+"\n"+formatted+"\n```", threadID)
 	return sendErr
 }
 
 // exportNotesCommand implements !exportnote (Tanpa Password)
-func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
+func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -752,12 +750,12 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Clien
 	if s.sqlite != nil {
 		notes, err = s.sqlite.ListNotes(ctx, ownerID)
 		if err != nil {
-			return sendUserText(ctx, client, target, "Gagal mengekspor catatan: "+err.Error())
+			return sendUserText(ctx, client, target, "Gagal mengekspor catatan: "+err.Error(), threadID)
 		}
 	}
 
 	if len(notes) == 0 {
-		return sendUserText(ctx, client, target, "Tidak ada catatan untuk diexport.")
+		return sendUserText(ctx, client, target, "Tidak ada catatan untuk diexport.", threadID)
 	}
 
 	payload := NoteExportPayload{
@@ -768,13 +766,13 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Clien
 
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return sendUserText(ctx, client, target, "Gagal membuat format file JSON export.")
+		return sendUserText(ctx, client, target, "Gagal membuat format file JSON export.", threadID)
 	}
 
 	u := uploader.NewUploader(client.API())
 	f, err := u.FromBytes(ctx, "gotdbot-notes.json", data)
 	if err != nil {
-		return sendUserText(ctx, client, target, "Gagal mengunggah file export: "+err.Error())
+		return sendUserText(ctx, client, target, "Gagal mengunggah file export: "+err.Error(), threadID)
 	}
 
 	doc := &tg.InputMediaUploadedDocument{
@@ -792,7 +790,7 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Clien
 }
 
 // importNotesCommand implements !importnote (Tanpa Password)
-func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message) error {
+func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -800,21 +798,21 @@ func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Clien
 
 	reply, err := s.replyMessage(ctx, client, msg, target)
 	if err != nil || reply == nil || reply.Media == nil {
-		return sendUserText(ctx, client, target, "Balas file <code>gotdbot-notes.json</code> dengan <code>!importnote</code>.")
+		return sendUserText(ctx, client, target, "Balas file <code>gotdbot-notes.json</code> dengan <code>!importnote</code>.", threadID)
 	}
 
 	docMedia, ok := reply.Media.(*tg.MessageMediaDocument)
 	if !ok {
-		return sendUserText(ctx, client, target, "Lampiran pesan yang dibalas bukan file dokumen.")
+		return sendUserText(ctx, client, target, "Lampiran pesan yang dibalas bukan file dokumen.", threadID)
 	}
 
 	doc, ok := docMedia.Document.(*tg.Document)
 	if !ok {
-		return sendUserText(ctx, client, target, "Dokumen tidak valid.")
+		return sendUserText(ctx, client, target, "Dokumen tidak valid.", threadID)
 	}
 
 	if doc.Size > 2*1024*1024 {
-		return sendUserText(ctx, client, target, "Ukuran file import maksimal 2 MB.")
+		return sendUserText(ctx, client, target, "Ukuran file import maksimal 2 MB.", threadID)
 	}
 
 	var buf bytes.Buffer
@@ -836,7 +834,7 @@ func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Clien
 		}
 		res, err := client.API().UploadGetFile(ctx, req)
 		if err != nil {
-			return sendUserText(ctx, client, target, "Gagal mengunduh file dokumen: "+err.Error())
+			return sendUserText(ctx, client, target, "Gagal mengunduh file dokumen: "+err.Error(), threadID)
 		}
 		switch f := res.(type) {
 		case *tg.UploadFile:
@@ -846,7 +844,7 @@ func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Clien
 				goto DownloadDone
 			}
 		case *tg.UploadFileCDNRedirect:
-			return sendUserText(ctx, client, target, "File CDN tidak didukung.")
+			return sendUserText(ctx, client, target, "File CDN tidak didukung.", threadID)
 		default:
 			goto DownloadDone
 		}
@@ -855,11 +853,11 @@ func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Clien
 DownloadDone:
 	var payload NoteExportPayload
 	if err := json.Unmarshal(buf.Bytes(), &payload); err != nil {
-		return sendUserText(ctx, client, target, "File catatan tidak valid atau format JSON salah.")
+		return sendUserText(ctx, client, target, "File catatan tidak valid atau format JSON salah.", threadID)
 	}
 
 	if len(payload.Notes) == 0 {
-		return sendUserText(ctx, client, target, "File tidak berisi catatan.")
+		return sendUserText(ctx, client, target, "File tidak berisi catatan.", threadID)
 	}
 
 	imported := 0
@@ -923,7 +921,7 @@ DownloadDone:
 		}
 	}
 
-	return sendUserText(ctx, client, target, fmt.Sprintf("%d catatan berhasil diimport.", imported))
+	return sendUserText(ctx, client, target, fmt.Sprintf("%d catatan berhasil diimport.", imported), threadID)
 }
 
 // convertEntitiesToHTML converts text with Telegram message entities to HTML syntax

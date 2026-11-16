@@ -12,14 +12,14 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string) error {
+func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	language := "go"
 	if fields := strings.Fields(args); len(fields) > 0 {
 		language = fields[0]
 	}
 	source, err := s.replySource(ctx, client, msg, target)
 	if err != nil || strings.TrimSpace(source) == "" {
-		_, sendErr := s.getSender(client).To(target).Text(ctx, "Reply pesan yang mau di-code terlebih dahulu.")
+		sendErr := sendUserText(ctx, client, target, "Reply pesan yang mau di-code terlebih dahulu.", threadID)
 		return sendErr
 	}
 	refBytes := make([]byte, 12)
@@ -31,9 +31,9 @@ func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client
 		return err
 	}
 	query := "code " + language + " ref:" + ref
-	if err := s.sendInlineQuery(ctx, client, target, query); err != nil {
+	if err := s.sendInlineQuery(ctx, client, target, query, threadID); err != nil {
 		log.Printf("[userbot %d] !code inline gagal: %v", msg.ID, err)
-		_, sendErr := s.getSender(client).To(target).Text(ctx, "Code formatter tidak bisa dibuka. Pastikan inline mode bot aktif.")
+		sendErr := sendUserText(ctx, client, target, "Code formatter tidak bisa dibuka. Pastikan inline mode bot aktif.", threadID)
 		return sendErr
 	}
 	return nil

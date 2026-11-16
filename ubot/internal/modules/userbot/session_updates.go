@@ -10,7 +10,6 @@ import (
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
-	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -163,11 +162,24 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 	}
 }
 
+func extractThreadID(msg *tg.Message) int {
+	if replyTo, ok := msg.GetReplyTo(); ok {
+		if header, ok := replyTo.(*tg.MessageReplyHeader); ok && header.ForumTopic {
+			if header.ReplyToTopID != 0 {
+				return header.ReplyToTopID
+			}
+			return header.ReplyToMsgID
+		}
+	}
+	return 0
+}
+
 func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
 	msg, ok := update.Message.(*tg.Message)
 	if !ok {
 		return nil
 	}
+	threadID := extractThreadID(msg)
 	prefix := "!"
 	s.mu.Lock()
 	if p, ok := s.prefixes[chatID]; ok {
@@ -180,7 +192,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		if isValidNoteName(hashName) && s.commandAllowed(ctx, client, msg) {
 			peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID)
 			if err == nil {
-				return s.showNote(ctx, client, peerID, hashName, false)
+				return s.showNote(ctx, client, peerID, hashName, false, threadID)
 			}
 		}
 	}
@@ -227,10 +239,10 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	)
 
 	if name == "setp" {
-		return s.handleSetPrefix(ctx, client, chatID, peerID, args)
+		return s.handleSetPrefix(ctx, client, chatID, peerID, args, threadID)
 	}
 	if name == "help" {
-		if err := s.sendInlineHelp(ctx, client, peerID); err != nil {
+		if err := s.sendInlineHelp(ctx, client, peerID, threadID); err != nil {
 			log.Printf("[userbot %d] !help inline gagal: %v", msg.ID, err)
 			_, sendErr := s.getSender(client).To(peerID).Text(ctx, "Help gagal. Periksa koneksi bot inline dan status sesi userbot.")
 			return sendErr
@@ -238,7 +250,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		return nil
 	}
 	if name == "server" {
-		if err := s.sendInlineQuery(ctx, client, peerID, "server"); err != nil {
+		if err := s.sendInlineQuery(ctx, client, peerID, "server", threadID); err != nil {
 			log.Printf("[userbot %d] !server inline gagal: %v", msg.ID, err)
 			_, sendErr := s.getSender(client).To(peerID).Text(ctx, "Status server tidak bisa dibuka. Pastikan inline mode bot aktif.")
 			return sendErr
@@ -246,45 +258,45 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		return nil
 	}
 	if name == "code" {
-		return s.handleCodeCommand(ctx, client, peerID, msg, args)
+		return s.handleCodeCommand(ctx, client, peerID, msg, args, threadID)
 	}
 	if name == "gcast" || name == "broadcast" || name == "cancel" {
 		if name == "cancel" {
 			args = "cancel"
 		}
-		if err := s.broadcastCommand(ctx, client, peerID, msg, args); err != nil {
+		if err := s.broadcastCommand(ctx, client, peerID, msg, args, threadID); err != nil {
 			log.Printf("[userbot %d] broadcast gagal: %v", msg.ID, err)
-			return sendUserText(ctx, client, peerID, "Broadcast gagal: "+err.Error())
+			return sendUserText(ctx, client, peerID, "Broadcast gagal: "+err.Error(), threadID)
 		}
 		return nil
 	}
 	if name == "addbl" || name == "rmbl" {
-		return s.blacklistCommand(ctx, client, peerID, msg, entities, args, map[string]string{"addbl": "add", "rmbl": "remove"}[name])
+		return s.blacklistCommand(ctx, client, peerID, msg, entities, args, map[string]string{"addbl": "add", "rmbl": "remove"}[name], threadID)
 	}
 	if name == "rmallbl" {
-		return s.clearBlacklist(ctx, client, peerID)
+		return s.clearBlacklist(ctx, client, peerID, threadID)
 	}
 	if name == "lsbl" {
-		return s.listBlacklist(ctx, client, peerID)
+		return s.listBlacklist(ctx, client, peerID, threadID)
 	}
 	if name == "addsudo" || name == "rmsudo" {
-		return s.sudoCommand(ctx, client, peerID, msg, args, name == "addsudo")
+		return s.sudoCommand(ctx, client, peerID, msg, args, name == "addsudo", threadID)
 	}
 	if name == "save" {
-		return s.saveNoteCommand(ctx, client, peerID, msg, args)
+		return s.saveNoteCommand(ctx, client, peerID, msg, args, threadID)
 	}
 	if name == "log" {
-		return s.handleLogCommand(ctx, client, peerID, args)
+		return s.handleLogCommand(ctx, client, peerID, args, threadID)
 	}
 	if name == "statuslog" {
-		return s.handleStatusLogCommand(ctx, client, peerID)
+		return s.handleStatusLogCommand(ctx, client, peerID, threadID)
 	}
 	if name == "get" {
 		fields := strings.Fields(args)
 		if len(fields) == 0 {
-			return sendUserText(ctx, client, peerID, "Gunakan: !get <nama>")
+			return sendUserText(ctx, client, peerID, "Gunakan: !get <nama>", threadID)
 		}
-		return s.showNote(ctx, client, peerID, fields[0], false)
+		return s.showNote(ctx, client, peerID, fields[0], false, threadID)
 	}
 	if name == "cat" {
 		noFm := false
@@ -299,33 +311,33 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 			}
 		}
 		if catName == "" {
-			return sendUserText(ctx, client, peerID, "Gunakan: !cat <nama> [-nofm]")
+			return sendUserText(ctx, client, peerID, "Gunakan: !cat <nama> [-nofm]", threadID)
 		}
-		return s.showNote(ctx, client, peerID, catName, noFm)
+		return s.showNote(ctx, client, peerID, catName, noFm, threadID)
 	}
 	if name == "lsnote" || name == "notes" {
-		return s.listNotesCommand(ctx, client, peerID)
+		return s.listNotesCommand(ctx, client, peerID, threadID)
 	}
 	if name == "delnote" {
-		return s.deleteNoteCommand(ctx, client, peerID, args)
+		return s.deleteNoteCommand(ctx, client, peerID, args, threadID)
 	}
 	if name == "clearnote" {
-		return s.clearNotesCommand(ctx, client, peerID)
+		return s.clearNotesCommand(ctx, client, peerID, threadID)
 	}
 	if name == "nofm" {
-		return s.nofmCommand(ctx, client, peerID, msg, args)
+		return s.nofmCommand(ctx, client, peerID, msg, args, threadID)
 	}
 	if name == "exportnote" {
-		return s.exportNotesCommand(ctx, client, peerID)
+		return s.exportNotesCommand(ctx, client, peerID, threadID)
 	}
 	if name == "importnote" {
-		return s.importNotesCommand(ctx, client, peerID, msg)
+		return s.importNotesCommand(ctx, client, peerID, msg, threadID)
 	}
 	if name == "eval" || name == "sh" {
 		if name == "eval" {
-			return s.evaluatorCommand(ctx, client, peerID, msg, entities, prefix, args)
+			return s.evaluatorCommand(ctx, client, peerID, msg, entities, prefix, args, threadID)
 		}
-		return s.shellCommand(ctx, client, peerID, prefix, args)
+		return s.shellCommand(ctx, client, peerID, prefix, args, threadID)
 	}
 	if name != "ping" && name != "p" {
 		return nil
@@ -344,13 +356,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	sendCtx, sendCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer sendCancel()
-	sender := s.getSender(client)
-	if strings.HasPrefix(text, "<code>") {
-		text = strings.TrimSuffix(strings.TrimPrefix(text, "<code>"), "</code>")
-		_, err = sender.To(peerID).StyledText(sendCtx, styling.Code(text))
-	} else {
-		_, err = sender.To(peerID).Text(sendCtx, text)
-	}
+	err = sendUserText(sendCtx, client, peerID, text, threadID)
 	return err
 }
 

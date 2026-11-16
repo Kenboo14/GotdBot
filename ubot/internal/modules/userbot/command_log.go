@@ -26,20 +26,20 @@ const maxLogMediaSize = 20 * 1024 * 1024 // 20 MB
 // ─── Command Handlers ────────────────────────────────────────────────
 
 // handleLogCommand menangani !log on / !log off
-func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string) error {
+func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil || ownerID == 0 {
-		return sendUserText(ctx, client, target, "Gagal mendapatkan ID pemilik userbot.")
+		return sendUserText(ctx, client, target, "Gagal mendapatkan ID pemilik userbot.", threadID)
 	}
 
 	val := strings.ToLower(strings.TrimSpace(args))
 	if val != "on" && val != "off" {
-		return sendUserText(ctx, client, target, "Gunakan: <code>!log on</code> atau <code>!log off</code>")
+		return sendUserText(ctx, client, target, "Gunakan: <code>!log on</code> atau <code>!log off</code>", threadID)
 	}
 
 	enabled := val == "on"
 	if err := s.sqlite.SetLogStatus(ctx, ownerID, enabled); err != nil {
-		return sendUserText(ctx, client, target, "Gagal memperbarui status log: "+err.Error())
+		return sendUserText(ctx, client, target, "Gagal memperbarui status log: "+err.Error(), threadID)
 	}
 	s.logStatusCache.Store(ownerID, enabled)
 	go s.logSaveStatusMongo(context.Background(), ownerID, enabled)
@@ -51,16 +51,16 @@ func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client,
 			defer cancel()
 			_ = s.ensureLogBotStarted(bgCtx, client, ownerID)
 		}()
-		return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Aktif</code>\nPesan masuk pribadi dan mention/reply di grup akan diteruskan ke Log Bot.")
+		return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Aktif</code>\nPesan masuk pribadi dan mention/reply di grup akan diteruskan ke Log Bot.", threadID)
 	}
-	return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Nonaktif</code>")
+	return sendUserText(ctx, client, target, "<b>Log Bot:</b> <code>Nonaktif</code>", threadID)
 }
 
 // handleStatusLogCommand menangani !statuslog
-func (s *Service) handleStatusLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass) error {
+func (s *Service) handleStatusLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil || ownerID == 0 {
-		return sendUserText(ctx, client, target, "Gagal mendapatkan ID pemilik userbot.")
+		return sendUserText(ctx, client, target, "Gagal mendapatkan ID pemilik userbot.", threadID)
 	}
 
 	enabled := s.isLogEnabled(ctx, ownerID)
@@ -68,7 +68,7 @@ func (s *Service) handleStatusLogCommand(ctx context.Context, client *telegram.C
 	if enabled {
 		statusText = "Aktif"
 	}
-	return sendUserText(ctx, client, target, fmt.Sprintf("<b>Status Log Bot:</b> <code>%s</code>", statusText))
+	return sendUserText(ctx, client, target, fmt.Sprintf("<b>Status Log Bot:</b> <code>%s</code>", statusText), threadID)
 }
 
 // isLogEnabled mengecek apakah log aktif untuk ownerID (cache via sync.Map)
