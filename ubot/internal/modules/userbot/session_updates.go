@@ -138,7 +138,8 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 		if ownerID == 0 {
 			return &tg.InputPeerSelf{}, nil
 		}
-		return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: 0}, nil
+		accessHash := s.resolveUserAccessHash(ctx, client, peerObj.UserID)
+		return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: accessHash}, nil
 
 	case *tg.PeerChat:
 		return &tg.InputPeerChat{ChatID: peerObj.ChatID}, nil
@@ -391,4 +392,46 @@ func (s *Service) cacheEntities(entities tg.Entities) {
 			s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
 		}
 	}
+}
+
+func (s *Service) resolveUserAccessHash(ctx context.Context, client *telegram.Client, userID int64) int64 {
+	var accessHash int64
+
+	// Try to get from cache first
+	if val, ok := s.userAccessHashes.Load(userID); ok {
+		if hash, ok := val.(int64); ok {
+			accessHash = hash
+		}
+	}
+
+	// If not in cache, try to resolve via API
+	if accessHash == 0 {
+		// Try UsersGetUsers first (fast, targeted)
+		users, err := client.API().UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUser{UserID: userID}})
+		if err == nil {
+			for _, u := range users {
+				if user, ok := u.(*tg.User); ok && user.ID == userID {
+					accessHash = user.AccessHash
+					s.userAccessHashes.Store(user.ID, user.AccessHash)
+					return accessHash
+				}
+			}
+		}
+
+		// Fall back to MessagesGetDialogs to find user's access hash
+		dialogs, dErr := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{Limit: 100})
+		if dErr == nil {
+			if mod, ok := dialogs.AsModified(); ok {
+				for _, u := range mod.GetUsers() {
+					if user, ok := u.(*tg.User); ok && user.ID == userID {
+						accessHash = user.AccessHash
+						s.userAccessHashes.Store(user.ID, user.AccessHash)
+						return accessHash
+					}
+				}
+			}
+		}
+	}
+
+	return accessHash
 }
