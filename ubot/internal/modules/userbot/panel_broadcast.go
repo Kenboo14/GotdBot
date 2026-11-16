@@ -677,7 +677,10 @@ func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.C
 	}
 	updates, err := client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
 		FromPeer: botPeer, ToPeer: cachePeer, ID: sourceIDs, RandomID: randomIDs,
-		DropAuthor: true, ReplyTo: &tg.InputReplyToMessage{TopMsgID: topicID},
+		DropAuthor: true, ReplyTo: &tg.InputReplyToMessage{
+			ReplyToMsgID: topicID,
+			TopMsgID:     topicID,
+		},
 	})
 	if err != nil {
 		return nil, err

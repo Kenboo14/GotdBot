@@ -168,7 +168,13 @@ func (s *Service) sendInlineBotResultWithRetry(
 		RandomID: randomID,
 	}
 	if threadID > 0 {
-		req.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
+		// Set both ReplyToMsgID and TopMsgID for proper topic routing.
+		// TopMsgID = topic ID, ReplyToMsgID = message ID to reply to.
+		// For topic replies, both must be set to the same value (the topic's first message ID).
+		req.SetReplyTo(&tg.InputReplyToMessage{
+			ReplyToMsgID: threadID,
+			TopMsgID:     threadID,
+		})
 	}
 
 	result, err := raw.MessagesSendInlineBotResult(ctx, req)

@@ -785,7 +785,10 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Clien
 		RandomID: time.Now().UnixNano(),
 	}
 	if threadID > 0 {
-		mediaReq.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
+		mediaReq.SetReplyTo(&tg.InputReplyToMessage{
+			ReplyToMsgID: threadID,
+			TopMsgID:     threadID,
+		})
 	}
 	_, err = client.API().MessagesSendMedia(ctx, mediaReq)
 	return err

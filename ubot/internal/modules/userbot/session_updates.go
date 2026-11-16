@@ -217,6 +217,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 			}
 		}
 	}
+
 	name, args, ok := parseUserCommand(msg.Message, prefix)
 	if !ok {
 		return nil

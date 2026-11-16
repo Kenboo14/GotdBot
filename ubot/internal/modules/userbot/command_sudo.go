@@ -25,12 +25,22 @@ type sudoRecord struct {
 
 func sendUserText(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, text string, threadID int) error {
 	if threadID > 0 {
+		// Use MessagesSendMessage with proper reply_to for topic support.
+		// TopMsgID is the topic ID (first message in topic).
+		// ReplyToMsgID is the message ID to reply to.
+		// For topic replies, both must be set: ReplyToMsgID=threadID (as message ID to reply to)
+		// and TopMsgID=threadID (as topic ID). This tells Telegram to send the message
+		// to the correct topic thread.
 		req := &tg.MessagesSendMessageRequest{
 			Peer:     target,
 			Message:  text,
 			RandomID: randInt64(),
 		}
-		req.SetReplyTo(&tg.InputReplyToMessage{TopMsgID: threadID})
+		// Set reply_to with both fields for topic routing
+		req.SetReplyTo(&tg.InputReplyToMessage{
+			ReplyToMsgID: threadID,
+			TopMsgID:     threadID,
+		})
 		_, err := client.API().MessagesSendMessage(ctx, req)
 		if err != nil {
 			log.Printf("[sendUserText] MTProto send to topic %d failed: %v", threadID, err)

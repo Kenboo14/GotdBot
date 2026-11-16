@@ -421,7 +421,8 @@ func (b *Bot) SendMessage(ctx context.Context, params *SendMessageParams) (*Mess
 			}
 			if params.MessageThreadID > 0 {
 				req.SetReplyTo(&tg.InputReplyToMessage{
-					TopMsgID: params.MessageThreadID,
+					ReplyToMsgID: params.MessageThreadID,
+					TopMsgID:     params.MessageThreadID,
 				})
 			} else if params.ReplyParameters != nil && params.ReplyParameters.MessageID > 0 {
 				req.SetReplyTo(&tg.InputReplyToMessage{
