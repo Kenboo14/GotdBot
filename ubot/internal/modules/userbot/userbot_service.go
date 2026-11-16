@@ -113,6 +113,7 @@ type Service struct {
 	floodCooldowns      sync.Map // key: int64 (chatID) -> time.Time (cooldownUntil)
 	albumCache          sync.Map // key: int (firstMsgID) -> []int (semua album msgIDs)
 	cmdSem              chan struct{} // semaphore pembatas concurrent Redis command jobs (max 32)
+	peerSyncSem         chan struct{} // semaphore pembatas concurrent syncPeersOnReady (max 4)
 	inlineMu            sync.RWMutex
 	botUsernameCache    string
 	inlineBots          map[*telegram.Client]*tg.InputUser
@@ -125,6 +126,9 @@ type Service struct {
 	accountGens         map[int64]uint64                     // chatID -> token kepemilikan generasi lifecycle
 	nextGen             uint64                               // counter generasi unik untuk lifecycle
 	accountStates       map[int64]AccountSessionState        // chatID -> status lifecycle event-driven
+	lastPublishedStates map[int64]AccountSessionState        // chatID -> status terakhir yang di-publish
+	lastPublishedAt     map[int64]time.Time                  // chatID -> timestamp publish terakhir
+	reconnectAttempts   map[int64]int                        // chatID -> counter percobaan reconnect berturut-turut
 	lastActive          map[int64]time.Time                  // chatID -> waktu aktivitas terakhir
 	lastUpdate          map[int64]time.Time                  // chatID -> waktu terakhir incoming update diterima
 	lastVerified        map[int64]time.Time                  // chatID -> waktu terakhir verifikasi pesan 'Check'
@@ -168,6 +172,17 @@ func (s *Service) publishSessionState(chatID, ownerID int64, state AccountSessio
 			slog.String("state", string(state)),
 			slog.String("error", err.Error()),
 		)
+	} else {
+		s.mu.Lock()
+		if s.lastPublishedStates == nil {
+			s.lastPublishedStates = make(map[int64]AccountSessionState)
+		}
+		if s.lastPublishedAt == nil {
+			s.lastPublishedAt = make(map[int64]time.Time)
+		}
+		s.lastPublishedStates[chatID] = state
+		s.lastPublishedAt[chatID] = time.Now()
+		s.mu.Unlock()
 	}
 }
 
@@ -225,13 +240,17 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		activeCancels:   make(map[int64]context.CancelFunc),
 		accountCtxs:     make(map[int64]context.Context),
 		accountGens:     make(map[int64]uint64),
-		accountStates:   make(map[int64]AccountSessionState),
-		lastActive:      make(map[int64]time.Time),
-		lastUpdate:      make(map[int64]time.Time),
-		lastVerified:    make(map[int64]time.Time),
-		verifying:       make(map[int64]bool),
-		verifSem:        make(chan struct{}, 2), // hemat resource, max 2 concurrent Check ke AiotdCaches
-		heartbeatSem:    make(chan struct{}, 16),
+		accountStates:       make(map[int64]AccountSessionState),
+		lastPublishedStates: make(map[int64]AccountSessionState),
+		lastPublishedAt:     make(map[int64]time.Time),
+		reconnectAttempts:   make(map[int64]int),
+		lastActive:          make(map[int64]time.Time),
+		lastUpdate:          make(map[int64]time.Time),
+		lastVerified:        make(map[int64]time.Time),
+		verifying:           make(map[int64]bool),
+		verifSem:            make(chan struct{}, 2), // hemat resource, max 2 concurrent Check ke AiotdCaches
+		heartbeatSem:        make(chan struct{}, 16),
+		peerSyncSem:         make(chan struct{}, 4),
 		owners:          make(map[int64]int64),
 		clientOwners:    make(map[*telegram.Client]int64),
 		senderCache:     make(map[*telegram.Client]*message.Sender),
@@ -409,10 +428,27 @@ func (s *Service) Restore(ctx context.Context) {
 		s.accountStates[row.ChatID] = StateStopped
 		s.mu.Unlock()
 		log.Printf("📋 Metadata sesi dimuat (lazy): chat_id=%d owner_id=%d", row.ChatID, accID)
+	}
 
-		// Aktifkan session MTProto secara bertahap (batasi oleh maxActiveSession di activate()).
-		// Ini memastikan session yang sudah ada tetap dapat menerima pesan langsung dari Telegram
-		// setelah restart, sambil masih mencegah overload saat jumlah session sangat banyak.
+	// Aktifkan session MTProto secara bertahap (batasi oleh maxActiveSession di activate()).
+	// Jeda waktu antar sesi mencegah lonjakan koneksi/CPU serentak (staggered startup).
+	for i, row := range sessions {
+		if i > 0 && len(sessions) > 1 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(40*time.Millisecond + randJitterMs(40)):
+			}
+		}
+
+		accID := row.AccountID
+		if accID == 0 {
+			accID = row.OwnerID
+		}
+		if accID == 0 {
+			accID = row.ChatID
+		}
+
 		s.activate(row.ChatID, accID)
 	}
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
@@ -610,6 +646,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				return err
 			}
 			s.mu.Lock()
+			if s.reconnectAttempts != nil {
+				delete(s.reconnectAttempts, chatID)
+			}
 			if s.accountGens[chatID] == genID {
 				s.owners[chatID] = self.ID
 				s.clientOwners[client] = self.ID
@@ -649,12 +688,40 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.mu.Lock()
 			isStillCurrent := (s.accountGens[chatID] == genID)
 			delete(s.active, chatID)
+			if s.reconnectAttempts == nil {
+				s.reconnectAttempts = make(map[int64]int)
+			}
+			s.reconnectAttempts[chatID]++
+			attempts := s.reconnectAttempts[chatID]
 			s.mu.Unlock()
 
 			if isStillCurrent && clientCtx.Err() == nil {
-				slog.Warn("mtproto disconnected temporarily, scheduling auto-reconnect", slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
+				slog.Warn("mtproto disconnected temporarily, scheduling auto-reconnect",
+					slog.Int64("chat_id", chatID),
+					slog.Int("attempt", attempts),
+					slog.String("error", err.Error()),
+				)
 				s.publishSessionState(chatID, ownerID, StateReconnecting, err.Error())
-				time.Sleep(3 * time.Second)
+
+				shift := attempts - 1
+				if shift < 0 {
+					shift = 0
+				}
+				if shift > 4 {
+					shift = 4
+				}
+				delay := time.Duration(3*(1<<shift))*time.Second + randJitterMs(1000)
+				if floodWait, ok := tgerr.AsFloodWait(err); ok && floodWait > delay {
+					delay = floodWait + randJitterMs(1000)
+				}
+
+				select {
+				case <-clientCtx.Done():
+					return
+				case <-s.root.Done():
+					return
+				case <-time.After(delay):
+				}
 				s.activate(chatID, ownerID)
 			}
 		}
@@ -665,6 +732,15 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client)
 	if client == nil {
 		return
 	}
+	if s.peerSyncSem != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case s.peerSyncSem <- struct{}{}:
+			defer func() { <-s.peerSyncSem }()
+		}
+	}
+
 	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 

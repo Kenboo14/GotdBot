@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tg"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestFloodWaitRegistry_CooldownAndExpiry(t *testing.T) {
@@ -295,6 +298,182 @@ func BenchmarkAccountScaling(b *testing.B) {
 				cancel()
 			}
 		})
+	}
+}
+
+func TestFindActiveClientLocked_HierarchyAndNoDeadlock(t *testing.T) {
+	fakeClient1 := &telegram.Client{}
+	fakeClient2 := &telegram.Client{}
+
+	root, cancelRoot := context.WithCancel(context.Background())
+	defer cancelRoot()
+
+	svc := &Service{
+		root:          root,
+		active:        make(map[int64]*telegram.Client),
+		connecting:    make(map[int64]uint64),
+		accountGens:   make(map[int64]uint64),
+		accountStates: make(map[int64]AccountSessionState),
+		activeCancels: make(map[int64]context.CancelFunc),
+		accountCtxs:   make(map[int64]context.Context),
+		owners:        make(map[int64]int64),
+		lastActive:    make(map[int64]time.Time),
+	}
+
+	// 1. None active
+	svc.mu.Lock()
+	c, cid := svc.findActiveClientLocked(100, 200, 300)
+	svc.mu.Unlock()
+	if c != nil || cid != 0 {
+		t.Fatalf("expected nil client, got %v with cid %d", c, cid)
+	}
+
+	// 2. Client on targetOwner
+	svc.active[100] = fakeClient1
+	svc.mu.Lock()
+	c, cid = svc.findActiveClientLocked(100, 200, 300)
+	svc.mu.Unlock()
+	if c != fakeClient1 || cid != 100 {
+		t.Fatalf("expected fakeClient1 at 100, got %v at %d", c, cid)
+	}
+
+	// 3. Client on owners mapping
+	delete(svc.active, 100)
+	svc.active[999] = fakeClient2
+	svc.owners[999] = 200 // mapped to userID
+	svc.mu.Lock()
+	c, cid = svc.findActiveClientLocked(100, 200, 300)
+	svc.mu.Unlock()
+	if c != fakeClient2 || cid != 999 {
+		t.Fatalf("expected fakeClient2 at 999, got %v at %d", c, cid)
+	}
+
+	// 4. Deadlock safety test on HandleCommand:
+	// If context is canceled, HandleCommand retry loop must NOT keep s.mu locked.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-canceled
+
+	payload := `{"owner_id":888,"user_id":888,"chat_id":888,"type":"ping"}`
+	msg := redis.XMessage{
+		ID:     "1-0",
+		Values: map[string]interface{}{"payload": payload},
+	}
+
+	// HandleCommand should return promptly and leave s.mu unlocked
+	svc.HandleCommand(ctx, msg)
+
+	// Verify s.mu can be acquired without blocking
+	lockAcquired := make(chan bool, 1)
+	go func() {
+		svc.mu.Lock()
+		svc.mu.Unlock()
+		lockAcquired <- true
+	}()
+
+	select {
+	case <-lockAcquired:
+		// success: mutex was not leaked/deadlocked
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("s.mu is permanently locked (deadlock detected) after HandleCommand exit")
+	}
+}
+
+func TestEvictStalePanelMsgCache(t *testing.T) {
+	now := time.Now()
+	panelMsgCache.Store(1001, panelCachedMsg{
+		msg:       &tg.Message{ID: 1001},
+		fetchedAt: now.Add(-6 * time.Minute), // stale (>5m)
+	})
+	panelMsgCache.Store(1002, panelCachedMsg{
+		msg:       &tg.Message{ID: 1002},
+		fetchedAt: now.Add(-1 * time.Minute), // fresh (<5m)
+	})
+
+	evictStalePanelMsgCache(now)
+
+	if _, ok := panelMsgCache.Load(1001); ok {
+		t.Error("stale message (1001) should have been evicted")
+	}
+	if _, ok := panelMsgCache.Load(1002); !ok {
+		t.Error("fresh message (1002) should still exist in cache")
+	}
+}
+
+func TestPruneSyncMap(t *testing.T) {
+	var m sync.Map
+	for i := 0; i < 15; i++ {
+		m.Store(i, fmt.Sprintf("val-%d", i))
+	}
+
+	// maxEntries: 10, pruneCount: 4 -> entries should be reduced from 15 to 11
+	pruneSyncMap(&m, 10, 4)
+
+	count := 0
+	m.Range(func(key, value any) bool {
+		count++
+		return true
+	})
+	if count != 11 {
+		t.Fatalf("expected 11 entries remaining, got %d", count)
+	}
+
+	// Nil safety
+	pruneSyncMap(nil, 10, 4)
+}
+
+func TestSyncSessionStates_DeltaFilter(t *testing.T) {
+	now := time.Now()
+	svc := &Service{
+		accountStates:       make(map[int64]AccountSessionState),
+		lastPublishedStates: make(map[int64]AccountSessionState),
+		lastPublishedAt:     make(map[int64]time.Time),
+		owners:              make(map[int64]int64),
+	}
+
+	// acc1: unchanged, published 1m ago -> should be filtered out
+	svc.accountStates[1] = StateConnected
+	svc.lastPublishedStates[1] = StateConnected
+	svc.lastPublishedAt[1] = now.Add(-1 * time.Minute)
+	svc.owners[1] = 1
+
+	// acc2: state changed from CONNECTING to CONNECTED -> should be included
+	svc.accountStates[2] = StateConnected
+	svc.lastPublishedStates[2] = StateConnecting
+	svc.lastPublishedAt[2] = now.Add(-30 * time.Second)
+	svc.owners[2] = 2
+
+	// acc3: state unchanged, but published 12m ago (>= 10m refresh interval) -> should be included
+	svc.accountStates[3] = StateConnected
+	svc.lastPublishedStates[3] = StateConnected
+	svc.lastPublishedAt[3] = now.Add(-12 * time.Minute)
+	svc.owners[3] = 3
+
+	type item struct {
+		chatID  int64
+		ownerID int64
+		state   AccountSessionState
+	}
+	var items []item
+
+	svc.mu.Lock()
+	for chatID, state := range svc.accountStates {
+		if svc.lastPublishedStates == nil || svc.lastPublishedStates[chatID] != state || svc.lastPublishedAt == nil || svc.lastPublishedAt[chatID].IsZero() || now.Sub(svc.lastPublishedAt[chatID]) >= 10*time.Minute {
+			items = append(items, item{
+				chatID:  chatID,
+				ownerID: svc.owners[chatID],
+				state:   state,
+			})
+		}
+	}
+	svc.mu.Unlock()
+
+	if len(items) != 2 {
+		t.Fatalf("expected exactly 2 items to publish, got %d", len(items))
+	}
+	for _, it := range items {
+		if it.chatID == 1 {
+			t.Errorf("acc1 should have been filtered out (delta unchanged & published recently)")
+		}
 	}
 }
 

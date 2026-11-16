@@ -16,6 +16,34 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// findActiveClientLocked mencari client aktif secara berurutan pada targetOwner, userID, chatID,
+// dan s.owners. s.mu HARUS sedang dikunci oleh pemanggil.
+func (s *Service) findActiveClientLocked(targetOwner, userID, chatID int64) (*telegram.Client, int64) {
+	if targetOwner != 0 {
+		if c := s.active[targetOwner]; c != nil {
+			return c, targetOwner
+		}
+	}
+	if userID != 0 {
+		if c := s.active[userID]; c != nil {
+			return c, userID
+		}
+	}
+	if chatID != 0 {
+		if c := s.active[chatID]; c != nil {
+			return c, chatID
+		}
+	}
+	for cid, oid := range s.owners {
+		if (targetOwner != 0 && oid == targetOwner) || (userID != 0 && oid == userID) || (chatID != 0 && oid == chatID) {
+			if c := s.active[cid]; c != nil {
+				return c, cid
+			}
+		}
+	}
+	return nil, 0
+}
+
 // HandleCommand dispatches incoming command requests from Gateway via Redis Stream
 func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	payload, ok := msg.Values["payload"].(string)
@@ -64,61 +92,31 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 
 	s.mu.Lock()
-	client := s.active[targetOwner]
-	sessionChatID := targetOwner
-	if client == nil {
-		client = s.active[job.UserID]
-		sessionChatID = job.UserID
-	}
-	if client == nil {
-		client = s.active[job.ChatID]
-		sessionChatID = job.ChatID
-	}
-	if client == nil {
-		for cid, oid := range s.owners {
-			if oid == targetOwner || oid == job.UserID || oid == job.ChatID {
-				if c := s.active[cid]; c != nil {
-					client = c
-					sessionChatID = cid
-					break
-				}
-			}
-		}
-	}
-	if client == nil {
+	client, sessionChatID := s.findActiveClientLocked(targetOwner, job.UserID, job.ChatID)
+	if client != nil {
+		s.lastActive[sessionChatID] = time.Now()
+		s.mu.Unlock()
+	} else {
 		// On-demand wake up: jika sesi ada di database tapi belum aktif
 		s.mu.Unlock()
 		s.activate(targetOwner, targetOwner)
 		// Tunggu sejenak hingga client siap
 		for i := 0; i < 15; i++ {
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(200 * time.Millisecond):
+			}
+
 			s.mu.Lock()
-			client = s.active[targetOwner]
-			if client == nil {
-				client = s.active[job.UserID]
-			}
-			if client == nil {
-				client = s.active[job.ChatID]
-			}
-			if client == nil {
-				for cid, oid := range s.owners {
-					if oid == targetOwner || oid == job.UserID || oid == job.ChatID {
-						if c := s.active[cid]; c != nil {
-							client = c
-							sessionChatID = cid
-							break
-						}
-					}
-				}
-			}
+			client, sessionChatID = s.findActiveClientLocked(targetOwner, job.UserID, job.ChatID)
 			if client != nil {
+				s.lastActive[sessionChatID] = time.Now()
+				s.mu.Unlock()
 				break
 			}
 			s.mu.Unlock()
 		}
-	} else {
-		s.lastActive[sessionChatID] = time.Now()
-		s.mu.Unlock()
 	}
 	if client == nil {
 		s.reply(ctx, job.ChatID, job.ThreadID, "Ping gagal. Tidak ada sesi userbot aktif.", "failed")

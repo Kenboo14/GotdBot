@@ -74,20 +74,42 @@ func (s *Service) startIdleReaper(ctx context.Context) {
 	}
 }
 
+// pruneSyncMap membatasi kapasitas sync.Map agar tidak mengalami memory retention tak terbatas.
+// Jika jumlah entri melebihi maxEntries, hapus sebanyak pruneCount entri.
+func pruneSyncMap(m *sync.Map, maxEntries, pruneCount int) {
+	if m == nil || maxEntries <= 0 || pruneCount <= 0 {
+		return
+	}
+	count := 0
+	m.Range(func(key, value any) bool {
+		count++
+		return true
+	})
+	if count > maxEntries {
+		deleted := 0
+		m.Range(func(key, value any) bool {
+			m.Delete(key)
+			deleted++
+			return deleted < pruneCount
+		})
+	}
+}
+
 // reapStaleResources bertugas membersihkan resource sementara yang sudah tidak digunakan,
 // TANPA memutus koneksi MTProto client aktif (Persistent MTProto 24/7).
 func (s *Service) reapStaleResources() {
 	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	// 1. Membersihkan proses login OTP (/create) yang ditinggalkan user > 5 menit
+	// 1. Membersihkan proses login OTP (/create) yang ditinggalkan user > 5 menit.
+	// s.mu dikunci HANYA saat membersihkan s.logins, lalu segera dilepas sebelum s.sudoMu.
+	s.mu.Lock()
 	for chatID, l := range s.logins {
 		if l != nil && !l.createdAt.IsZero() && now.Sub(l.createdAt) > 5*time.Minute {
 			l.cancel()
 			delete(s.logins, chatID)
 		}
 	}
+	s.mu.Unlock()
 
 	// 2. Bounded Cache: Eviction bertahap berbasis TTL dan batas awal kapasitas (2.000)
 	s.sudoMu.Lock()
@@ -118,6 +140,14 @@ func (s *Service) reapStaleResources() {
 		}
 		return true
 	})
+
+	// 4. Eviction stale messages pada panel broadcast cache
+	evictStalePanelMsgCache(now)
+
+	// 5. Pruning sync.Map untuk mencegah unbounded memory retention
+	pruneSyncMap(&s.userAccessHashes, 10000, 2000)
+	pruneSyncMap(&s.channelAccessHashes, 10000, 2000)
+	pruneSyncMap(&s.albumCache, 2000, 400)
 }
 
 func (s *Service) recordIncomingUpdate(chatID int64) {
@@ -167,6 +197,7 @@ func (s *Service) startSessionHeartbeatWorker(ctx context.Context) {
 }
 
 func (s *Service) syncSessionStates(ctx context.Context) {
+	now := time.Now()
 	s.mu.Lock()
 	type item struct {
 		chatID  int64
@@ -175,11 +206,13 @@ func (s *Service) syncSessionStates(ctx context.Context) {
 	}
 	items := make([]item, 0, len(s.accountStates))
 	for chatID, state := range s.accountStates {
-		items = append(items, item{
-			chatID:  chatID,
-			ownerID: s.owners[chatID],
-			state:   state,
-		})
+		if s.lastPublishedStates == nil || s.lastPublishedStates[chatID] != state || s.lastPublishedAt == nil || s.lastPublishedAt[chatID].IsZero() || now.Sub(s.lastPublishedAt[chatID]) >= 10*time.Minute {
+			items = append(items, item{
+				chatID:  chatID,
+				ownerID: s.owners[chatID],
+				state:   state,
+			})
+		}
 	}
 	s.mu.Unlock()
 

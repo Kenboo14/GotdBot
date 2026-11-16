@@ -154,3 +154,63 @@ func TestDataManagerSQLiteOnly(t *testing.T) {
 		t.Fatalf("GetActiveUserLicense mismatch: %+v, err: %v", activeUL, err)
 	}
 }
+
+func TestCloneJasebConfig_DeepCopy(t *testing.T) {
+	orig := &JasebConfig{
+		OwnerID: 999,
+		Lists:   []int{1, 2, 3},
+		Groups: []GroupEntry{
+			{Target: "@group1", Title: "G1", ChatID: -1001, AccessHash: 111, PeerType: "channel"},
+		},
+		Topics: []TopicEntry{
+			{ChatID: -1001, TopicID: 10, Title: "T1"},
+		},
+		UpdatedAt: time.Now(),
+	}
+
+	clone := cloneJasebConfig(orig)
+	if clone == nil {
+		t.Fatal("clone should not be nil")
+	}
+
+	// Mutate clone slices
+	clone.Lists[0] = 999
+	clone.Lists = append(clone.Lists, 4)
+	clone.Groups[0].Target = "@mutated"
+	clone.Topics[0].Title = "Mutated"
+
+	// Verify original slices were NOT affected
+	if orig.Lists[0] != 1 || len(orig.Lists) != 3 {
+		t.Errorf("orig.Lists was modified: %+v", orig.Lists)
+	}
+	if orig.Groups[0].Target != "@group1" {
+		t.Errorf("orig.Groups was modified: %+v", orig.Groups)
+	}
+	if orig.Topics[0].Title != "T1" {
+		t.Errorf("orig.Topics was modified: %+v", orig.Topics)
+	}
+
+	// Nil safety
+	if cloneJasebConfig(nil) != nil {
+		t.Error("cloneJasebConfig(nil) should be nil")
+	}
+}
+
+func TestDataManager_CoalescingNonNil(t *testing.T) {
+	dm := &DataManager{
+		mongoSaveSem:    make(chan struct{}, 8),
+		pendingMongoCfg: make(map[int64]*JasebConfig),
+		inFlightMongo:   make(map[int64]bool),
+	}
+
+	cfg1 := &JasebConfig{OwnerID: 101, Delay: 5}
+	cfg2 := &JasebConfig{OwnerID: 101, Delay: 10}
+
+	ctx := context.Background()
+	if err := dm.SaveUserConfig(ctx, cfg1); err != nil {
+		t.Fatalf("SaveUserConfig failed: %v", err)
+	}
+	if err := dm.SaveUserConfig(ctx, cfg2); err != nil {
+		t.Fatalf("SaveUserConfig failed: %v", err)
+	}
+}

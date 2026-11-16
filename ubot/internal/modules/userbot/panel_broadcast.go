@@ -87,6 +87,16 @@ type panelCachedMsg struct {
 
 var panelMsgCache sync.Map // key: int (msgID) -> panelCachedMsg
 
+// evictStalePanelMsgCache menghapus pesan dari panelMsgCache yang usianya sudah >= 5 menit.
+func evictStalePanelMsgCache(now time.Time) {
+	panelMsgCache.Range(func(key, val any) bool {
+		if entry, ok := val.(panelCachedMsg); !ok || now.Sub(entry.fetchedAt) >= 5*time.Minute {
+			panelMsgCache.Delete(key)
+		}
+		return true
+	})
+}
+
 func getCachedPanelMsg(msgID int) *tg.Message {
 	if val, ok := panelMsgCache.Load(msgID); ok {
 		if entry, ok := val.(panelCachedMsg); ok {

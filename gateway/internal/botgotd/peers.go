@@ -9,17 +9,19 @@ import (
 )
 
 type PeerStorage struct {
-	mu    sync.RWMutex
-	users map[int64]int64 // userID -> accessHash
-	chats map[int64]int64 // channelID -> accessHash
-	db    *sql.DB
+	mu       sync.RWMutex
+	users    map[int64]int64 // userID -> accessHash
+	chats    map[int64]int64 // channelID -> accessHash
+	db       *sql.DB
+	writeSem chan struct{}
 }
 
 func NewPeerStorage(sqliteDB *sql.DB) *PeerStorage {
 	ps := &PeerStorage{
-		users: make(map[int64]int64),
-		chats: make(map[int64]int64),
-		db:    sqliteDB,
+		users:    make(map[int64]int64),
+		chats:    make(map[int64]int64),
+		db:       sqliteDB,
+		writeSem: make(chan struct{}, 4),
 	}
 	ps.initDB()
 	return ps
@@ -67,15 +69,32 @@ func (ps *PeerStorage) SaveUser(userID, accessHash int64) {
 	if userID <= 0 {
 		return
 	}
+	ps.mu.RLock()
+	if existing, ok := ps.users[userID]; ok && existing == accessHash {
+		ps.mu.RUnlock()
+		return
+	}
+	ps.mu.RUnlock()
+
 	ps.mu.Lock()
+	if existing, ok := ps.users[userID]; ok && existing == accessHash {
+		ps.mu.Unlock()
+		return
+	}
 	ps.users[userID] = accessHash
 	ps.mu.Unlock()
 
 	if ps.db != nil {
 		go func() {
+			if ps.writeSem != nil {
+				ps.writeSem <- struct{}{}
+				defer func() { <-ps.writeSem }()
+			}
 			query := `INSERT INTO bot_peers (peer_id, peer_type, access_hash) VALUES (?, 'user', ?)
 			ON CONFLICT(peer_id) DO UPDATE SET access_hash = excluded.access_hash, updated_at = CURRENT_TIMESTAMP;`
-			_, _ = ps.db.Exec(query, userID, accessHash)
+			if _, err := ps.db.Exec(query, userID, accessHash); err != nil {
+				log.Printf("[botgotd] peer db exec user error: %v", err)
+			}
 		}()
 	}
 }
@@ -84,15 +103,32 @@ func (ps *PeerStorage) SaveChannel(channelID, accessHash int64) {
 	if channelID <= 0 {
 		return
 	}
+	ps.mu.RLock()
+	if existing, ok := ps.chats[channelID]; ok && existing == accessHash {
+		ps.mu.RUnlock()
+		return
+	}
+	ps.mu.RUnlock()
+
 	ps.mu.Lock()
+	if existing, ok := ps.chats[channelID]; ok && existing == accessHash {
+		ps.mu.Unlock()
+		return
+	}
 	ps.chats[channelID] = accessHash
 	ps.mu.Unlock()
 
 	if ps.db != nil {
 		go func() {
+			if ps.writeSem != nil {
+				ps.writeSem <- struct{}{}
+				defer func() { <-ps.writeSem }()
+			}
 			query := `INSERT INTO bot_peers (peer_id, peer_type, access_hash) VALUES (?, 'channel', ?)
 			ON CONFLICT(peer_id) DO UPDATE SET access_hash = excluded.access_hash, updated_at = CURRENT_TIMESTAMP;`
-			_, _ = ps.db.Exec(query, channelID, accessHash)
+			if _, err := ps.db.Exec(query, channelID, accessHash); err != nil {
+				log.Printf("[botgotd] peer db exec channel error: %v", err)
+			}
 		}()
 	}
 }

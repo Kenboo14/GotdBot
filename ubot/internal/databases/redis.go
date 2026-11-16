@@ -103,7 +103,21 @@ func (r *Redis) Listener(ctx context.Context, group, worker, stream string, call
 						}()
 
 						callback(ctx, msg)
-						r.Client.XAck(ctx, stream, group, msg.ID)
+						var ackErr error
+						for attempt := 0; attempt < 3; attempt++ {
+							ackErr = r.Client.XAck(ctx, stream, group, msg.ID).Err()
+							if ackErr == nil {
+								break
+							}
+							select {
+							case <-ctx.Done():
+								break
+							case <-time.After(100 * time.Millisecond):
+							}
+						}
+						if ackErr != nil {
+							log.Printf("⚠️ XAck failed after 3 attempts on %s (group: %s, msg_id: %s): %v", stream, group, msg.ID, ackErr)
+						}
 					}()
 				}
 			}
@@ -121,6 +135,7 @@ func (r *Redis) Listener(ctx context.Context, group, worker, stream string, call
 
 	// 1. Recovery Fase: Baca pesan pending yang belum di-ACK (PEL) jika container baru restart
 	log.Printf("🔄 Ubot worker %s checking for pending messages in %s...", worker, stream)
+	lastPendingID := "0"
 	for {
 		if ctx.Err() != nil {
 			break
@@ -129,7 +144,7 @@ func (r *Redis) Listener(ctx context.Context, group, worker, stream string, call
 		pendingRes, err := r.Client.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    group,
 			Consumer: worker,
-			Streams:  []string{stream, "0"},
+			Streams:  []string{stream, lastPendingID},
 			Count:    20,
 			Block:    0,
 		}).Result()
@@ -147,11 +162,17 @@ func (r *Redis) Listener(ctx context.Context, group, worker, stream string, call
 		}
 
 		log.Printf("🔥 Recovering %d pending messages in %s...", len(pendingRes[0].Messages), stream)
+		enqueuedAll := true
 		for _, msg := range pendingRes[0].Messages {
 			if !enqueueJob(msg) {
+				enqueuedAll = false
 				break
 			}
 		}
+		if !enqueuedAll {
+			break
+		}
+		lastPendingID = pendingRes[0].Messages[len(pendingRes[0].Messages)-1].ID
 	}
 
 	// 2. Live Reader Fase: Baca pesan baru yang masuk (">")

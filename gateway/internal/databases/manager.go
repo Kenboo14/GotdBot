@@ -20,10 +20,35 @@ type ConfigUpdateEvent struct {
 	OwnerID int64 `json:"owner_id"`
 }
 
+// cloneJasebConfig membuat salinan mendalam (deep copy) dari JasebConfig
+// termasuk slice Lists, Groups, dan Topics untuk mengeliminasi race condition saat mutasi.
+func cloneJasebConfig(cfg *JasebConfig) *JasebConfig {
+	if cfg == nil {
+		return nil
+	}
+	cp := *cfg
+	if cfg.Lists != nil {
+		cp.Lists = make([]int, len(cfg.Lists))
+		copy(cp.Lists, cfg.Lists)
+	}
+	if cfg.Groups != nil {
+		cp.Groups = make([]GroupEntry, len(cfg.Groups))
+		copy(cp.Groups, cfg.Groups)
+	}
+	if cfg.Topics != nil {
+		cp.Topics = make([]TopicEntry, len(cfg.Topics))
+		copy(cp.Topics, cfg.Topics)
+	}
+	return &cp
+}
+
 type DataManager struct {
-	sqlite *SQLiteClient
-	mu     sync.RWMutex
-	mongo  *MongoClient
+	sqlite          *SQLiteClient
+	mu              sync.RWMutex
+	mongo           *MongoClient
+	mongoSaveSem    chan struct{}
+	pendingMongoCfg map[int64]*JasebConfig
+	inFlightMongo   map[int64]bool
 }
 
 func (dm *DataManager) setMongo(mc *MongoClient) {
@@ -42,7 +67,11 @@ func (dm *DataManager) getMongo() *MongoClient {
 // bgCtx: parent context panjang untuk retry MongoDB.
 // initCtx: context pendek hanya untuk inisialisasi SQLite.
 func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mongoDBName, sqlitePath string) (*DataManager, error) {
-	dm := &DataManager{}
+	dm := &DataManager{
+		mongoSaveSem:    make(chan struct{}, 8),
+		pendingMongoCfg: make(map[int64]*JasebConfig),
+		inFlightMongo:   make(map[int64]bool),
+	}
 
 	// Connect SQLite (harus sukses — primary DB)
 	sClient, err := NewSQLiteClient(sqlitePath)
@@ -199,7 +228,7 @@ func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebCo
 	return defaultCfg
 }
 
-// SaveUserConfig: simpan SQLite langsung (synchronous), MongoDB di goroutine background (non-blocking).
+// SaveUserConfig: simpan SQLite langsung (synchronous), MongoDB di goroutine background (non-blocking) dengan deep copy dan coalescing per-owner.
 func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) error {
 	cfg.UpdatedAt = time.Now()
 
@@ -211,16 +240,63 @@ func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) erro
 		}
 	}
 
-	// 2. Simpan ke MongoDB di background — tidak memblokir response ke user
+	// 2. Simpan ke MongoDB di background — deep copy + per-owner coalescing
 	if mg := m.getMongo(); mg != nil {
-		cfgCopy := *cfg
-		go func() {
-			mongoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := mg.SaveConfig(mongoCtx, &cfgCopy); err != nil {
-				log.Printf("⚠️ MongoDB SaveConfig error: %v", err)
+		cfgCopy := cloneJasebConfig(cfg)
+		ownerID := cfgCopy.OwnerID
+
+		m.mu.Lock()
+		if m.pendingMongoCfg == nil {
+			m.pendingMongoCfg = make(map[int64]*JasebConfig)
+		}
+		if m.inFlightMongo == nil {
+			m.inFlightMongo = make(map[int64]bool)
+		}
+		m.pendingMongoCfg[ownerID] = cfgCopy
+
+		if m.inFlightMongo[ownerID] {
+			m.mu.Unlock()
+			return nil
+		}
+		m.inFlightMongo[ownerID] = true
+		m.mu.Unlock()
+
+		go func(oid int64) {
+			for {
+				m.mu.Lock()
+				curCfg, ok := m.pendingMongoCfg[oid]
+				if !ok || curCfg == nil {
+					delete(m.inFlightMongo, oid)
+					m.mu.Unlock()
+					return
+				}
+				delete(m.pendingMongoCfg, oid)
+				m.mu.Unlock()
+
+				currentMg := m.getMongo()
+				if currentMg != nil {
+					if m.mongoSaveSem != nil {
+						m.mongoSaveSem <- struct{}{}
+					}
+					mongoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					if err := currentMg.SaveConfig(mongoCtx, curCfg); err != nil {
+						log.Printf("⚠️ MongoDB SaveConfig error (owner=%d): %v", oid, err)
+					}
+					cancel()
+					if m.mongoSaveSem != nil {
+						<-m.mongoSaveSem
+					}
+				}
+
+				m.mu.Lock()
+				if _, hasMore := m.pendingMongoCfg[oid]; !hasMore {
+					delete(m.inFlightMongo, oid)
+					m.mu.Unlock()
+					return
+				}
+				m.mu.Unlock()
 			}
-		}()
+		}(ownerID)
 	}
 
 	return nil
