@@ -76,6 +76,9 @@ func (s *Service) isLogEnabled(ctx context.Context, ownerID int64) bool {
 	if val, ok := s.logStatusCache.Load(ownerID); ok {
 		return val.(bool)
 	}
+	if s.sqlite == nil {
+		return false
+	}
 	enabled, err := s.sqlite.GetLogStatus(ctx, ownerID)
 	if err != nil {
 		return false
@@ -88,13 +91,13 @@ func (s *Service) isLogEnabled(ctx context.Context, ownerID int64) bool {
 
 // resolveLogBotInfo mengambil UserID & Username dari LOGBOT_TOKEN via getMe (cached)
 func (s *Service) resolveLogBotInfo(ctx context.Context) (int64, string, error) {
-	s.mu.Lock()
+	s.mu.RLock()
 	if s.logBotID != 0 && s.logBotUsername != "" {
 		id, username := s.logBotID, s.logBotUsername
-		s.mu.Unlock()
+		s.mu.RUnlock()
 		return id, username, nil
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	token := s.logBotToken
 	if strings.TrimSpace(token) == "" {
@@ -192,13 +195,11 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
+	s.mu.RLock()
 	ownerID := s.owners[chatID]
-	var ownerUsername string
-	if val, ok := s.ownerUsernames.Load(ownerID); ok {
-		ownerUsername = val.(string)
-	}
+	s.mu.RUnlock()
 
-	if ownerID == 0 || ownerUsername == "" {
+	if ownerID == 0 && client != nil {
 		self, err := client.Self(ctx)
 		if err == nil && self != nil {
 			ownerID = self.ID
@@ -206,8 +207,9 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 			s.owners[chatID] = ownerID
 			s.mu.Unlock()
 			if self.Username != "" {
-				ownerUsername = strings.ToLower(self.Username)
-				s.ownerUsernames.Store(ownerID, ownerUsername)
+				s.ownerUsernames.Store(ownerID, strings.ToLower(self.Username))
+			} else {
+				s.ownerUsernames.Store(ownerID, "-")
 			}
 		}
 	}
@@ -215,48 +217,74 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
-	logBotID, _, _ := s.resolveLogBotInfo(ctx)
-	if logBotID == 0 {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		logBotID, _, _ = s.resolveLogBotInfo(bgCtx)
-		cancel()
-	}
-
 	// Kasus: User membalas pesan logbot di chat private -> balas ke chat sumber
 	if msg.Out {
-		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && logBotID != 0 && peerUser.UserID == logBotID {
-			log.Printf("[LogBot] Terdeteksi pesan keluar ke LogBot (ID %d): msgID=%d text=%q flags=%v", logBotID, msg.ID, msg.Message, msg.Flags)
-
-			// Cari replyToMsgID dari dua sumber (GetReplyTo + fallback ReplyTo langsung)
-			var replyToID int
-			if rh, hasReply := msg.GetReplyTo(); hasReply {
-				if rHeader, ok := rh.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
-					replyToID = rHeader.ReplyToMsgID
-				}
+		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok {
+			logBotID, _, _ := s.resolveLogBotInfo(ctx)
+			if logBotID == 0 {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				logBotID, _, _ = s.resolveLogBotInfo(bgCtx)
+				cancel()
 			}
-			if replyToID == 0 && msg.ReplyTo != nil {
-				if rHeader, ok := msg.ReplyTo.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
-					replyToID = rHeader.ReplyToMsgID
-				}
-			}
+			if logBotID != 0 && peerUser.UserID == logBotID {
+				log.Printf("[LogBot] Terdeteksi pesan keluar ke LogBot (ID %d): msgID=%d text=%q flags=%v", logBotID, msg.ID, msg.Message, msg.Flags)
 
-			if replyToID > 0 {
-				log.Printf("[LogBot] Reply terdeteksi: replyToMsgID=%d, memproses balasan...", replyToID)
-				go func(rid int, rText string) {
-					bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-					defer cancel()
-					s.replyToLoggedMessage(bgCtx, client, ownerID, logBotID, rid, rText)
-				}(replyToID, msg.Message)
-			} else {
-				log.Printf("[LogBot] Pesan keluar ke LogBot tanpa reply: msgID=%d replyTo=%v", msg.ID, msg.ReplyTo)
+				// Cari replyToMsgID dari dua sumber (GetReplyTo + fallback ReplyTo langsung)
+				var replyToID int
+				if rh, hasReply := msg.GetReplyTo(); hasReply {
+					if rHeader, ok := rh.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
+						replyToID = rHeader.ReplyToMsgID
+					}
+				}
+				if replyToID == 0 && msg.ReplyTo != nil {
+					if rHeader, ok := msg.ReplyTo.(*tg.MessageReplyHeader); ok && rHeader.ReplyToMsgID > 0 {
+						replyToID = rHeader.ReplyToMsgID
+					}
+				}
+
+				if replyToID > 0 {
+					log.Printf("[LogBot] Reply terdeteksi: replyToMsgID=%d, memproses balasan...", replyToID)
+					go func(rid int, rText string) {
+						bgCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+						defer cancel()
+						s.replyToLoggedMessage(bgCtx, client, ownerID, logBotID, rid, rText)
+					}(replyToID, msg.Message)
+				} else {
+					log.Printf("[LogBot] Pesan keluar ke LogBot tanpa reply: msgID=%d replyTo=%v", msg.ID, msg.ReplyTo)
+				}
 			}
 		}
 		return // Semua pesan keluar (outgoing) tidak di-log
 	}
 
-	// Cek status aktif fitur log
+	// Cek status aktif fitur log lebih awal sebelum memanggil API / cache lain
 	if !s.isLogEnabled(ctx, ownerID) {
 		return
+	}
+
+	var ownerUsername string
+	if val, ok := s.ownerUsernames.Load(ownerID); ok {
+		ownerUsername = val.(string)
+	} else if client != nil {
+		self, err := client.Self(ctx)
+		if err == nil && self != nil {
+			if self.Username != "" {
+				ownerUsername = strings.ToLower(self.Username)
+				s.ownerUsernames.Store(ownerID, ownerUsername)
+			} else {
+				s.ownerUsernames.Store(ownerID, "-")
+			}
+		}
+	}
+	if ownerUsername == "-" {
+		ownerUsername = ""
+	}
+
+	logBotID, _, _ := s.resolveLogBotInfo(ctx)
+	if logBotID == 0 {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		logBotID, _, _ = s.resolveLogBotInfo(bgCtx)
+		cancel()
 	}
 
 	// Identifikasi tipe chat
@@ -325,7 +353,7 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 						}
 					}
 				}
-				if !shouldLog && rHeader.ReplyToMsgID > 0 {
+				if !shouldLog && msg.Mentioned && rHeader.ReplyToMsgID > 0 && client != nil {
 					targetPeer, peerErr := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
 					if peerErr == nil {
 						origMsg, origErr := s.replyMessage(ctx, client, msg, targetPeer)
@@ -398,19 +426,10 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 	switch p := msg.PeerID.(type) {
 	case *tg.PeerUser:
 		peerType = "user"
-		if pm := s.getPeerManager(client); pm != nil {
-			if resolved, rErr := pm.ResolveUserID(ctx, p.UserID); rErr == nil {
-				if ip, ok := resolved.InputPeer().(*tg.InputPeerUser); ok {
-					peerAccessHash = ip.AccessHash
-				}
-			}
-		}
-		if peerAccessHash == 0 {
-			for _, u := range entities.Users {
-				if u != nil && !u.Min && u.ID == p.UserID {
-					peerAccessHash = u.AccessHash
-					break
-				}
+		for _, u := range entities.Users {
+			if u != nil && !u.Min && u.ID == p.UserID {
+				peerAccessHash = u.AccessHash
+				break
 			}
 		}
 		if peerAccessHash == 0 {
@@ -422,19 +441,10 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 		peerType = "chat"
 	case *tg.PeerChannel:
 		peerType = "channel"
-		if pm := s.getPeerManager(client); pm != nil {
-			if resolved, rErr := pm.ResolveChannelID(ctx, p.ChannelID); rErr == nil {
-				if ip, ok := resolved.InputPeer().(*tg.InputPeerChannel); ok {
-					peerAccessHash = ip.AccessHash
-				}
-			}
-		}
-		if peerAccessHash == 0 {
-			for _, ch := range entities.Channels {
-				if ch != nil && !ch.Min && ch.ID == p.ChannelID {
-					peerAccessHash = ch.AccessHash
-					break
-				}
+		for _, ch := range entities.Channels {
+			if ch != nil && !ch.Min && ch.ID == p.ChannelID {
+				peerAccessHash = ch.AccessHash
+				break
 			}
 		}
 		if peerAccessHash == 0 {

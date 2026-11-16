@@ -15,7 +15,6 @@ import (
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
-	"github.com/gotd/td/telegram/peers"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"go.mongodb.org/mongo-driver/bson"
@@ -23,7 +22,7 @@ import (
 )
 
 var idleTimeoutMinutes = 30
-var maxActiveSessions = 100
+var maxActiveSessions = 1000
 var sessionHeartbeatSeconds = 30
 
 func init() {
@@ -117,7 +116,7 @@ type Service struct {
 	inlineMu            sync.RWMutex
 	botUsernameCache    string
 	inlineBots          map[*telegram.Client]*tg.InputUser
-	mu                  sync.Mutex
+	mu                  sync.RWMutex
 	logins              map[int64]*login
 	active              map[int64]*telegram.Client
 	connecting          map[int64]uint64                     // guard terhadap double activation & reservasi slot (chatID -> genID)
@@ -138,7 +137,6 @@ type Service struct {
 	owners              map[int64]int64                      // chatID -> ownerID
 	clientOwners        map[*telegram.Client]int64           // client -> ownerID
 	senderCache         map[*telegram.Client]*message.Sender // cached message.Sender per client
-	peerManagers        map[*telegram.Client]*peers.Manager
 	prefixes            map[int64]string
 	broadcasts          map[int64]*broadcastJob
 	panelBroadcasts     map[int64]*panelBroadcastJob
@@ -254,32 +252,27 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		owners:          make(map[int64]int64),
 		clientOwners:    make(map[*telegram.Client]int64),
 		senderCache:     make(map[*telegram.Client]*message.Sender),
-		peerManagers:    make(map[*telegram.Client]*peers.Manager),
 		prefixes:        make(map[int64]string),
 		broadcasts:      make(map[int64]*broadcastJob),
 		panelBroadcasts: make(map[int64]*panelBroadcastJob),
 		inlineBots:      make(map[*telegram.Client]*tg.InputUser),
 		sudoCache:       make(map[string]sudoCacheEntry),
-		broadcastSem:    make(chan struct{}, 5), // maksimal 5 gcast bersamaan untuk hemat CPU & RAM
+		broadcastSem:    make(chan struct{}, 32), // batas concurrent gcast untuk kapasitas 1000 akun
 		cmdSem:          make(chan struct{}, 32), // batas concurrency perintah background
 	}
-}
-
-func (s *Service) getPeerManager(client *telegram.Client) *peers.Manager {
-	if client == nil {
-		return nil
-	}
-	s.mu.Lock()
-	pm := s.peerManagers[client]
-	s.mu.Unlock()
-	return pm
 }
 
 // getSender returns a cached message.Sender for the given client, avoiding
 // repeated allocation of the wrapper on every command invocation.
 func (s *Service) getSender(client *telegram.Client) *message.Sender {
-	s.mu.Lock()
+	s.mu.RLock()
 	sender, ok := s.senderCache[client]
+	s.mu.RUnlock()
+	if ok {
+		return sender
+	}
+	s.mu.Lock()
+	sender, ok = s.senderCache[client]
 	if !ok {
 		sender = message.NewSender(tg.NewClient(client))
 		s.senderCache[client] = sender
@@ -520,7 +513,6 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			if client != nil {
 				delete(s.clientOwners, client)
 				delete(s.senderCache, client)
-				delete(s.peerManagers, client)
 			}
 			s.mu.Unlock()
 			s.inlineMu.Lock()
@@ -532,31 +524,11 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, ownerID: ownerID, key: s.key}
 		dispatcher := tg.NewUpdateDispatcher()
 		dispatcher.OnNewMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewMessage) error {
-			s.mu.Lock()
-			s.lastActive[chatID] = time.Now()
-			s.mu.Unlock()
-			s.cacheEntities(entities)
-			if msg, ok := update.Message.(*tg.Message); ok {
-				if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && peerUser.UserID == 777000 {
-					s.triggerImmediateVerification(chatID)
-				}
-				s.interceptLogMessage(ctx, chatID, client, entities, msg)
-			}
-			return s.handleUserbotMessage(ctx, chatID, client, entities, update)
+			return s.processNewMessage(ctx, chatID, client, entities, update)
 		})
 		dispatcher.OnNewChannelMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
-			// Telegram represents supergroup/channel messages with a separate
-			// update constructor. Reuse the same outgoing-command dispatcher.
-			s.mu.Lock()
-			s.lastActive[chatID] = time.Now()
-			s.mu.Unlock()
-			s.cacheEntities(entities)
-			if msg, ok := update.Message.(*tg.Message); ok {
-				s.interceptLogMessage(ctx, chatID, client, entities, msg)
-			}
-			return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
+			return s.processNewChannelMessage(ctx, chatID, client, entities, update)
 		})
-		var h telegram.UpdateHandler
 		updateHandler := &userbotUpdateHandler{
 			dispatcher: dispatcher,
 			s:          s,
@@ -565,12 +537,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		}
 		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{
 			SessionStorage: store,
-			UpdateHandler: telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
-				if h != nil {
-					return h.Handle(ctx, u)
-				}
-				return updateHandler.Handle(ctx, u)
-			}),
+			UpdateHandler:  updateHandler,
 			Middlewares: []telegram.Middleware{
 				&rpcErrorMiddleware{chatID: chatID, genID: genID, service: s},
 			},
@@ -619,13 +586,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				s.mu.Unlock()
 			},
 		})
-		peerManager := peers.Options{
-			Storage: &peers.InmemoryStorage{},
-			Cache:   &peers.InmemoryCache{},
-		}.Build(client.API())
-		h = peerManager.UpdateHook(updateHandler)
 		s.mu.Lock()
-		s.peerManagers[client] = peerManager
 		if s.connecting[chatID] == genID {
 			delete(s.connecting, chatID)
 		}
@@ -638,9 +599,6 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		}
 		s.mu.Unlock()
 		err := client.Run(clientCtx, func(ctx context.Context) error {
-			if initErr := peerManager.Init(ctx); initErr != nil {
-				slog.Warn("peerManager.Init warning", slog.Int64("chat_id", chatID), slog.String("error", initErr.Error()))
-			}
 			self, err := client.Self(ctx)
 			if err != nil {
 				return err
@@ -728,6 +686,35 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	}()
 }
 
+func (s *Service) processNewMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
+	if msg, ok := update.Message.(*tg.Message); ok {
+		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && peerUser.UserID == 777000 {
+			s.triggerImmediateVerification(chatID)
+		}
+		if !s.isRelevantMessage(chatID, msg) {
+			return nil
+		}
+		s.cacheEntities(entities)
+		s.interceptLogMessage(ctx, chatID, client, entities, msg)
+	} else {
+		s.cacheEntities(entities)
+	}
+	return s.handleUserbotMessage(ctx, chatID, client, entities, update)
+}
+
+func (s *Service) processNewChannelMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
+	if msg, ok := update.Message.(*tg.Message); ok {
+		if !s.isRelevantMessage(chatID, msg) {
+			return nil
+		}
+		s.cacheEntities(entities)
+		s.interceptLogMessage(ctx, chatID, client, entities, msg)
+	} else {
+		s.cacheEntities(entities)
+	}
+	return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
+}
+
 func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client) {
 	if client == nil {
 		return
@@ -744,13 +731,8 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client)
 	syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	peerManager := s.getPeerManager(client)
-
 	if contacts, err := client.API().ContactsGetContacts(syncCtx, 0); err == nil {
 		if c, ok := contacts.(*tg.ContactsContacts); ok {
-			if peerManager != nil {
-				_ = peerManager.Apply(syncCtx, c.Users, nil)
-			}
 			for _, u := range c.Users {
 				if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.ID != 0 && user.AccessHash != 0 {
 					s.userAccessHashes.Store(user.ID, user.AccessHash)
@@ -760,13 +742,10 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client)
 	}
 
 	if dialogs, err := client.API().MessagesGetDialogs(syncCtx, &tg.MessagesGetDialogsRequest{
-		Limit:      100,
+		Limit:      30,
 		OffsetPeer: &tg.InputPeerEmpty{},
 	}); err == nil {
 		if mod, ok := dialogs.AsModified(); ok {
-			if peerManager != nil {
-				_ = peerManager.Apply(syncCtx, mod.GetUsers(), mod.GetChats())
-			}
 			for _, u := range mod.GetUsers() {
 				if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.ID != 0 && user.AccessHash != 0 {
 					s.userAccessHashes.Store(user.ID, user.AccessHash)

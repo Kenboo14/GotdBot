@@ -477,3 +477,158 @@ func TestSyncSessionStates_DeltaFilter(t *testing.T) {
 	}
 }
 
+func TestIsRelevantMessage_EarlyDrop(t *testing.T) {
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc := NewService(root, nil, nil, nil, 0, "", nil, "", "", 0)
+	chatID := int64(1001)
+	svc.mu.Lock()
+	svc.owners[chatID] = chatID
+	svc.prefixes[chatID] = "!"
+	svc.mu.Unlock()
+
+	if svc.isRelevantMessage(chatID, &tg.Message{
+		PeerID:  &tg.PeerChannel{ChannelID: 777},
+		Message: "pesan grup biasa",
+	}) {
+		t.Fatal("expected normal group chatter to be dropped early")
+	}
+
+	if !svc.isRelevantMessage(chatID, &tg.Message{
+		PeerID:  &tg.PeerChannel{ChannelID: 777},
+		Message: "!ping",
+	}) {
+		t.Fatal("expected prefix command in group to pass early filter")
+	}
+
+	if !svc.isRelevantMessage(chatID, &tg.Message{
+		PeerID:  &tg.PeerChannel{ChannelID: 777},
+		Message: "#promo",
+	}) {
+		t.Fatal("expected hashtag note in group to pass early filter")
+	}
+
+	if !svc.isRelevantMessage(chatID, &tg.Message{
+		PeerID:    &tg.PeerChannel{ChannelID: 777},
+		Mentioned: true,
+		Message:   "halo bot",
+	}) {
+		t.Fatal("expected mentioned message in group to pass early filter")
+	}
+
+	if !svc.isRelevantMessage(chatID, &tg.Message{
+		PeerID:  &tg.PeerUser{UserID: 999},
+		Message: "halo pm",
+	}) {
+		t.Fatal("expected private message to pass early filter")
+	}
+}
+
+func TestResolvePeer_SharedAccessHash(t *testing.T) {
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc := NewService(root, nil, nil, nil, 0, "", nil, "", "", 0)
+	chatID := int64(1001)
+
+	svc.userAccessHashes.Store(int64(555), int64(99999))
+	svc.channelAccessHashes.Store(int64(777), int64(88888))
+
+	uPeer, err := svc.resolvePeer(context.Background(), nil, chatID, tg.Entities{}, &tg.PeerUser{UserID: 555}, nil)
+	if err != nil {
+		t.Fatalf("resolvePeer user failed: %v", err)
+	}
+	ipUser, ok := uPeer.(*tg.InputPeerUser)
+	if !ok || ipUser.UserID != 555 || ipUser.AccessHash != 99999 {
+		t.Fatalf("unexpected resolved user peer: %+v", uPeer)
+	}
+
+	cPeer, err := svc.resolvePeer(context.Background(), nil, chatID, tg.Entities{}, &tg.PeerChannel{ChannelID: 777}, nil)
+	if err != nil {
+		t.Fatalf("resolvePeer channel failed: %v", err)
+	}
+	ipChan, ok := cPeer.(*tg.InputPeerChannel)
+	if !ok || ipChan.ChannelID != 777 || ipChan.AccessHash != 88888 {
+		t.Fatalf("unexpected resolved channel peer: %+v", cPeer)
+	}
+}
+
+func BenchmarkPeerOverhead_1000Accounts(b *testing.B) {
+	b.ReportAllocs()
+	users := make([]*tg.User, 30)
+	for i := 0; i < 30; i++ {
+		users[i] = &tg.User{
+			ID:         int64(10000 + i),
+			AccessHash: int64(900000 + i),
+			FirstName:  "User",
+			Username:   fmt.Sprintf("user_%d", i),
+		}
+	}
+	chats := make([]*tg.Channel, 20)
+	for i := 0; i < 20; i++ {
+		chats[i] = &tg.Channel{
+			ID:         int64(20000 + i),
+			AccessHash: int64(800000 + i),
+			Title:      fmt.Sprintf("Group Promo %d", i),
+		}
+	}
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for iter := 0; iter < b.N; iter++ {
+		svc := NewService(root, nil, nil, nil, 0, "", nil, "", "", 0)
+		for i := 0; i < 1000; i++ {
+			for _, u := range users {
+				if _, exists := svc.userAccessHashes.Load(u.ID); !exists {
+					svc.userAccessHashes.Store(u.ID, u.AccessHash)
+				}
+			}
+			for _, ch := range chats {
+				if _, exists := svc.channelAccessHashes.Load(ch.ID); !exists {
+					svc.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+				}
+			}
+		}
+		runtime.KeepAlive(svc)
+	}
+}
+
+func BenchmarkGroupNoiseHotPath(b *testing.B) {
+	root, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	svc := NewService(root, nil, nil, nil, 0, "", nil, "", "", 0)
+	chatID := int64(1001)
+	svc.mu.Lock()
+	svc.owners[chatID] = chatID
+	svc.prefixes[chatID] = "!"
+	svc.mu.Unlock()
+	svc.logStatusCache.Store(chatID, false)
+	svc.ownerUsernames.Store(chatID, "testuser")
+
+	entities := tg.Entities{
+		Users: map[int64]*tg.User{
+			555: {ID: 555, AccessHash: 9999, FirstName: "Sender"},
+			556: {ID: 556, AccessHash: 9998, FirstName: "Other"},
+		},
+		Channels: map[int64]*tg.Channel{
+			777: {ID: 777, AccessHash: 8888, Title: "Grup Ramai"},
+		},
+	}
+	msg := &tg.Message{
+		ID:      42,
+		Out:     false,
+		FromID:  &tg.PeerUser{UserID: 555},
+		PeerID:  &tg.PeerChannel{ChannelID: 777},
+		Message: "halo guys lagi promo nih yuk merapat",
+	}
+	upd := &tg.UpdateNewChannelMessage{Message: msg}
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		svc.recordIncomingUpdate(chatID)
+		_ = svc.processNewChannelMessage(ctx, chatID, nil, entities, upd)
+	}
+}
+

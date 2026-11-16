@@ -27,7 +27,7 @@ func NewSQLiteClient(path string) (*SQLiteClient, error) {
 		}
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-64000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(268435456)&_pragma=wal_autocheckpoint(1000)", path)
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-8000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(33554432)&_pragma=wal_autocheckpoint(1000)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
@@ -48,7 +48,7 @@ func NewSQLiteClient(path string) (*SQLiteClient, error) {
 		"PRAGMA busy_timeout = 5000;",
 		"PRAGMA cache_size = -8000;",
 		"PRAGMA temp_store = MEMORY;",
-		"PRAGMA mmap_size = 268435456;",
+		"PRAGMA mmap_size = 33554432;",
 		"PRAGMA wal_autocheckpoint = 1000;",
 	}
 	for _, p := range pragmas {

@@ -74,7 +74,6 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 	if client != nil {
 		delete(s.clientOwners, client)
 		delete(s.senderCache, client)
-		delete(s.peerManagers, client)
 	}
 	cancel := s.activeCancels[chatID]
 	delete(s.activeCancels, chatID)
@@ -116,81 +115,66 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 		return nil, fmt.Errorf("peer is nil")
 	}
 
-	s.mu.Lock()
+	s.mu.RLock()
 	ownerID := s.owners[chatID]
 	if ownerID == 0 && client != nil {
 		ownerID = s.clientOwners[client]
 	}
-	s.mu.Unlock()
-
-	peerManager := s.getPeerManager(client)
-
-	if peerManager != nil {
-		var users []tg.UserClass
-		for _, u := range entities.Users {
-			if u != nil && !u.Min && u.AccessHash != 0 {
-				users = append(users, u)
-			}
-		}
-		var chats []tg.ChatClass
-		for _, c := range entities.Chats {
-			if c != nil {
-				chats = append(chats, c)
-			}
-		}
-		for _, ch := range entities.Channels {
-			if ch != nil && !ch.Min && ch.AccessHash != 0 {
-				chats = append(chats, ch)
-			}
-		}
-		if len(users) > 0 || len(chats) > 0 {
-			_ = peerManager.Apply(ctx, users, chats)
-		}
-	}
+	s.mu.RUnlock()
 
 	switch peerObj := p.(type) {
 	case *tg.PeerUser:
 		if peerObj.UserID == 0 || peerObj.UserID == chatID || (ownerID > 0 && peerObj.UserID == ownerID) {
 			return &tg.InputPeerSelf{}, nil
 		}
-		if peerManager != nil {
-			if self, err := peerManager.Self(ctx); err == nil && self.ID() == peerObj.UserID {
-				return &tg.InputPeerSelf{}, nil
-			}
-			if resolved, err := peerManager.ResolvePeer(ctx, p); err == nil {
-				return resolved.InputPeer(), nil
-			}
-		}
 		if u, ok := entities.Users[peerObj.UserID]; ok && u != nil && !u.Min && u.AccessHash != 0 {
+			s.userAccessHashes.Store(u.ID, u.AccessHash)
 			return &tg.InputPeerUser{UserID: u.ID, AccessHash: u.AccessHash}, nil
 		}
-		if client != nil && peerManager != nil {
+		if val, ok := s.userAccessHashes.Load(peerObj.UserID); ok {
+			if hash, ok := val.(int64); ok && hash != 0 {
+				return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}, nil
+			}
+		}
+		if client != nil {
 			if msg != nil && msg.ID > 0 {
 				if msgs, err := client.API().MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: msg.ID}}); err == nil {
 					if mod, ok := msgs.AsModified(); ok {
-						_ = peerManager.Apply(ctx, mod.GetUsers(), mod.GetChats())
-						if resolved, rErr := peerManager.ResolveUserID(ctx, peerObj.UserID); rErr == nil {
-							return resolved.InputPeer(), nil
+						for _, u := range mod.GetUsers() {
+							if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.AccessHash != 0 {
+								s.userAccessHashes.Store(user.ID, user.AccessHash)
+								if user.ID == peerObj.UserID {
+									return &tg.InputPeerUser{UserID: user.ID, AccessHash: user.AccessHash}, nil
+								}
+							}
 						}
 					}
 				}
 			}
 			if contacts, err := client.API().ContactsGetContacts(ctx, 0); err == nil {
 				if c, ok := contacts.(*tg.ContactsContacts); ok {
-					_ = peerManager.Apply(ctx, c.Users, nil)
-					if resolved, rErr := peerManager.ResolveUserID(ctx, peerObj.UserID); rErr == nil {
-						return resolved.InputPeer(), nil
+					for _, u := range c.Users {
+						if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.AccessHash != 0 {
+							s.userAccessHashes.Store(user.ID, user.AccessHash)
+							if user.ID == peerObj.UserID {
+								return &tg.InputPeerUser{UserID: user.ID, AccessHash: user.AccessHash}, nil
+							}
+						}
 					}
 				}
 			}
 			if dialogs, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-				Limit:      100,
+				Limit:      30,
 				OffsetPeer: &tg.InputPeerEmpty{},
 			}); err == nil {
 				if mod, ok := dialogs.AsModified(); ok {
-					_ = peerManager.Apply(ctx, mod.GetUsers(), mod.GetChats())
-					if resolved, rErr := peerManager.ResolveUserID(ctx, peerObj.UserID); rErr == nil {
-						return resolved.InputPeer(), nil
+					for _, u := range mod.GetUsers() {
+						if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.AccessHash != 0 {
+							s.userAccessHashes.Store(user.ID, user.AccessHash)
+							if user.ID == peerObj.UserID {
+								return &tg.InputPeerUser{UserID: user.ID, AccessHash: user.AccessHash}, nil
+							}
+						}
 					}
 				}
 			}
@@ -198,37 +182,41 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 		return nil, fmt.Errorf("peer %v tidak dapat di-resolve: access_hash tidak ditemukan", p)
 
 	case *tg.PeerChat:
-		if peerManager != nil {
-			if resolved, err := peerManager.ResolvePeer(ctx, p); err == nil {
-				return resolved.InputPeer(), nil
-			}
-		}
 		return &tg.InputPeerChat{ChatID: peerObj.ChatID}, nil
 
 	case *tg.PeerChannel:
-		if peerManager != nil {
-			if resolved, err := peerManager.ResolvePeer(ctx, p); err == nil {
-				return resolved.InputPeer(), nil
-			}
-		}
 		if ch, ok := entities.Channels[peerObj.ChannelID]; ok && ch != nil && !ch.Min && ch.AccessHash != 0 {
+			s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
 			return &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
 		}
-		if client != nil && peerManager != nil {
+		if val, ok := s.channelAccessHashes.Load(peerObj.ChannelID); ok {
+			if hash, ok := val.(int64); ok && hash != 0 {
+				return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: hash}, nil
+			}
+		}
+		if client != nil {
 			if chats, err := client.API().MessagesGetChats(ctx, []int64{peerObj.ChannelID}); err == nil {
-				_ = peerManager.Apply(ctx, nil, chats.GetChats())
-				if resolved, rErr := peerManager.ResolveChannelID(ctx, peerObj.ChannelID); rErr == nil {
-					return resolved.InputPeer(), nil
+				for _, c := range chats.GetChats() {
+					if ch, ok := c.(*tg.Channel); ok && ch != nil && !ch.Min && ch.AccessHash != 0 {
+						s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+						if ch.ID == peerObj.ChannelID {
+							return &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
+						}
+					}
 				}
 			}
 			if dialogs, err := client.API().MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
-				Limit:      100,
+				Limit:      30,
 				OffsetPeer: &tg.InputPeerEmpty{},
 			}); err == nil {
 				if mod, ok := dialogs.AsModified(); ok {
-					_ = peerManager.Apply(ctx, mod.GetUsers(), mod.GetChats())
-					if resolved, rErr := peerManager.ResolveChannelID(ctx, peerObj.ChannelID); rErr == nil {
-						return resolved.InputPeer(), nil
+					for _, c := range mod.GetChats() {
+						if ch, ok := c.(*tg.Channel); ok && ch != nil && !ch.Min && ch.AccessHash != 0 {
+							s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
+							if ch.ID == peerObj.ChannelID {
+								return &tg.InputPeerChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash}, nil
+							}
+						}
 					}
 				}
 			}
@@ -236,11 +224,6 @@ func (s *Service) resolvePeer(ctx context.Context, client *telegram.Client, chat
 		return nil, fmt.Errorf("peer %v tidak dapat di-resolve: access_hash tidak ditemukan", p)
 
 	default:
-		if peerManager != nil {
-			if resolved, err := peerManager.ResolvePeer(ctx, p); err == nil {
-				return resolved.InputPeer(), nil
-			}
-		}
 		return peer.EntitiesFromUpdate(entities).ExtractPeer(p)
 	}
 }
@@ -259,6 +242,47 @@ func extractThreadID(msg *tg.Message) int {
 	return 0
 }
 
+func (s *Service) isRelevantMessage(chatID int64, msg *tg.Message) bool {
+	if msg == nil {
+		return false
+	}
+	if _, isUser := msg.PeerID.(*tg.PeerUser); isUser {
+		return true
+	}
+	if msg.Out || msg.Mentioned || msg.ReplyTo != nil {
+		return true
+	}
+	text := msg.Message
+	if len(text) > 1 && text[0] == '#' {
+		return true
+	}
+
+	prefix := "!"
+	s.mu.RLock()
+	if p, ok := s.prefixes[chatID]; ok {
+		prefix = p
+	}
+	ownerID := s.owners[chatID]
+	s.mu.RUnlock()
+
+	if prefix == "" || strings.HasPrefix(text, prefix) {
+		return true
+	}
+	if ownerID != 0 && len(msg.Entities) > 0 {
+		if val, ok := s.logStatusCache.Load(ownerID); ok {
+			if enabled, ok := val.(bool); ok && enabled {
+				for _, ent := range msg.Entities {
+					switch ent.(type) {
+					case *tg.MessageEntityMention, *tg.MessageEntityMentionName:
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
 	msg, ok := update.Message.(*tg.Message)
 	if !ok {
@@ -266,11 +290,11 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	threadID := extractThreadID(msg)
 	prefix := "!"
-	s.mu.Lock()
+	s.mu.RLock()
 	if p, ok := s.prefixes[chatID]; ok {
 		prefix = p
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 
 	if strings.HasPrefix(msg.Message, "#") && len(msg.Message) > 1 && !strings.ContainsAny(msg.Message, " \t\r\n") {
 		hashName := strings.TrimPrefix(msg.Message, "#")
@@ -288,9 +312,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		}
 	} else {
 		if !msg.Out {
-			s.mu.Lock()
+			s.mu.RLock()
 			ownerID := s.owners[chatID]
-			s.mu.Unlock()
+			s.mu.RUnlock()
 			senderID := int64(0)
 			if sender, ok := msg.FromID.(*tg.PeerUser); ok {
 				senderID = sender.UserID

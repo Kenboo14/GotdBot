@@ -28,9 +28,9 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 		if upd.UserID == 777000 {
 			h.s.triggerImmediateVerification(h.chatID)
 		}
-		h.s.mu.Lock()
+		h.s.mu.RLock()
 		ownerID := h.s.owners[h.chatID]
-		h.s.mu.Unlock()
+		h.s.mu.RUnlock()
 
 		var fromPeer tg.PeerClass
 		if upd.Out {
@@ -71,9 +71,9 @@ func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) er
 		})
 
 	case *tg.UpdateShortChatMessage:
-		h.s.mu.Lock()
+		h.s.mu.RLock()
 		ownerID := h.s.owners[h.chatID]
-		h.s.mu.Unlock()
+		h.s.mu.RUnlock()
 
 		var fromPeer tg.PeerClass
 		if upd.Out {

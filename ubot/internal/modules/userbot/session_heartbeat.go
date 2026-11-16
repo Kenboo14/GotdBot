@@ -152,9 +152,19 @@ func (s *Service) reapStaleResources() {
 
 func (s *Service) recordIncomingUpdate(chatID int64) {
 	now := time.Now()
+	s.mu.RLock()
+	last := s.lastUpdate[chatID]
+	s.mu.RUnlock()
+	if !last.IsZero() && now.Sub(last) < 15*time.Second {
+		return
+	}
 	s.mu.Lock()
-	s.lastUpdate[chatID] = now
-	s.lastActive[chatID] = now
+	if s.lastUpdate != nil {
+		s.lastUpdate[chatID] = now
+	}
+	if s.lastActive != nil {
+		s.lastActive[chatID] = now
+	}
 	s.mu.Unlock()
 }
 
