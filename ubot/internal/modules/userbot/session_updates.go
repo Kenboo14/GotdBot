@@ -247,7 +247,18 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "help" {
 		if err := s.sendInlineHelp(ctx, client, peerID, threadID); err != nil {
 			log.Printf("[userbot %d] !help inline gagal: %v", msg.ID, err)
-			sendErr := sendUserText(ctx, client, peerID, "Help gagal. Periksa koneksi bot inline dan status sesi userbot.", threadID)
+			text := `<h1>📖 Panduan Perintah GotdBot</h1>
+<blockquote expandable>Daftar shortcut dan perintah esensial untuk kontrol userbot MTProto.</blockquote>
+<table border="1">
+  <tr><th>Perintah</th><th>Fungsi</th></tr>
+  <tr><td><code>!ping</code> / <code>!p</code></td><td>Ukur latency koneksi MTProto</td></tr>
+  <tr><td><code>!help</code></td><td>Buka menu bantuan interaktif</td></tr>
+  <tr><td><code>!server</code></td><td>Status server userbot</td></tr>
+  <tr><td><code>!ping</code></td><td>Alias cepat</td></tr>
+</table>
+<hr/>
+<p>GotdBot • Interactive Assistance</p>`
+			sendErr := sendUserText(ctx, client, peerID, text, threadID)
 			return sendErr
 		}
 		return nil
@@ -255,7 +266,12 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "server" {
 		if err := s.sendInlineQuery(ctx, client, peerID, "server", threadID); err != nil {
 			log.Printf("[userbot %d] !server inline gagal: %v", msg.ID, err)
-			sendErr := sendUserText(ctx, client, peerID, "Status server tidak bisa dibuka. Pastikan inline mode bot aktif.", threadID)
+			text := `<h1>🖥 Status Server</h1>
+<blockquote expandable>Menampilkan beban resource CPU, RAM, Uptime, dan performa Gateway MTProto.</blockquote>
+<hr/>
+<p>Ketik <code>!server</code> pada chat untuk memeriksa statistik sistem secara real-time.</p>
+<p>GotdBot • Server Status</p>`
+			sendErr := sendUserText(ctx, client, peerID, text, threadID)
 			return sendErr
 		}
 		return nil
