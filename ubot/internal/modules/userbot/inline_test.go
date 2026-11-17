@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 )
 
@@ -19,7 +19,7 @@ import (
 
 func newServiceWithInlineCache() *Service {
 	return &Service{
-		inlineBots: make(map[*telegram.Client]*tg.InputUser),
+		inlineBots: make(map[*gobot.Client]*tg.InputUser),
 	}
 }
 
@@ -27,8 +27,8 @@ func newServiceWithInlineCache() *Service {
 // is returned on hit, and nil on miss.
 func TestInlineBotCache_HitAndMiss(t *testing.T) {
 	svc := newServiceWithInlineCache()
-	client := &telegram.Client{}
-	otherClient := &telegram.Client{}
+	client := &gobot.Client{}
+	otherClient := &gobot.Client{}
 
 	bot := &tg.InputUser{UserID: 123, AccessHash: 456}
 
@@ -62,7 +62,7 @@ func TestInlineBotCache_HitAndMiss(t *testing.T) {
 // TestInlineBotCache_Eviction verifies that evictInlineBot removes the entry.
 func TestInlineBotCache_Eviction(t *testing.T) {
 	svc := newServiceWithInlineCache()
-	client := &telegram.Client{}
+	client := &gobot.Client{}
 	bot := &tg.InputUser{UserID: 100, AccessHash: 200}
 
 	svc.inlineMu.Lock()
@@ -91,8 +91,8 @@ func TestInlineBotCache_Eviction(t *testing.T) {
 // maintain separate cache entries (no cross-account data leak).
 func TestInlineBotCache_SessionIsolation(t *testing.T) {
 	svc := newServiceWithInlineCache()
-	clientA := &telegram.Client{}
-	clientB := &telegram.Client{}
+	clientA := &gobot.Client{}
+	clientB := &gobot.Client{}
 
 	botA := &tg.InputUser{UserID: 1, AccessHash: 100}
 	botB := &tg.InputUser{UserID: 2, AccessHash: 200}
@@ -188,9 +188,9 @@ func TestTruncateQuery(t *testing.T) {
 
 func TestInlineBotCache_ConcurrentAccess(t *testing.T) {
 	svc := newServiceWithInlineCache()
-	clients := make([]*telegram.Client, 10)
+	clients := make([]*gobot.Client, 10)
 	for i := range clients {
-		clients[i] = &telegram.Client{}
+		clients[i] = &gobot.Client{}
 	}
 
 	var wg sync.WaitGroup
@@ -339,7 +339,7 @@ func TestInlineRandomID_Uniqueness(t *testing.T) {
 // immediately when the client context is canceled.
 func TestPreWarmInlineBot_Cancellation(t *testing.T) {
 	svc := newServiceWithInlineCache()
-	client := &telegram.Client{}
+	client := &gobot.Client{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -388,7 +388,7 @@ func BenchmarkRandomID_LegacyBinaryRead(b *testing.B) {
 // BenchmarkInlineCache_RLockConcurrent measures concurrent read throughput on RWMutex cache.
 func BenchmarkInlineCache_RLockConcurrent(b *testing.B) {
 	svc := newServiceWithInlineCache()
-	client := &telegram.Client{}
+	client := &gobot.Client{}
 	svc.inlineMu.Lock()
 	svc.inlineBots[client] = &tg.InputUser{UserID: 1, AccessHash: 2}
 	svc.inlineMu.Unlock()
@@ -406,8 +406,8 @@ func BenchmarkInlineCache_RLockConcurrent(b *testing.B) {
 // BenchmarkInlineCache_LockConcurrent measures throughput with standard Mutex (the old implementation).
 func BenchmarkInlineCache_LockConcurrent(b *testing.B) {
 	var mu sync.Mutex
-	cache := make(map[*telegram.Client]*tg.InputUser)
-	client := &telegram.Client{}
+	cache := make(map[*gobot.Client]*tg.InputUser)
+	client := &gobot.Client{}
 	mu.Lock()
 	cache[client] = &tg.InputUser{UserID: 1, AccessHash: 2}
 	mu.Unlock()

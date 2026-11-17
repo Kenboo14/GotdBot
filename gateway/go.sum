@@ -1,3 +1,5 @@
+github.com/Kenboo14/GoBot v0.0.0-20261117005830-b2f23b2d331f h1:MLhFjSuNqRJsC9AG7/6GtZO0bbJ5bhCXbiQK/1+LW48=
+github.com/Kenboo14/GoBot v0.0.0-20261117005830-b2f23b2d331f/go.mod h1:iz1akVP65+ZdLaiNwGY6OHtBn2LQpb3ryzrO/EqVRxE=
 github.com/andybalholm/brotli v1.2.1 h1:R+f5xP285VArJDRgowrfb9DqL18yVK0gKAW/F+eTWro=
 github.com/andybalholm/brotli v1.2.1/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/bsm/ginkgo/v2 v2.12.0 h1:Ny8MWAHyOepLGlLKYmXG4IEkioBysk6GpaRTLC8zwWs=

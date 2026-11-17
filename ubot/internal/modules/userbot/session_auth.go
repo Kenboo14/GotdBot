@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 	"github.com/redis/go-redis/v9"
@@ -124,7 +124,7 @@ func (s *Service) start(parent context.Context, chatID, ownerID int64, phone str
 
 func (s *Service) authorize(ctx context.Context, chatID, ownerID int64, phone string, l *login) error {
 	store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, ownerID: ownerID, key: s.key}
-	client := telegram.NewClient(s.apiID, s.apiHash, telegram.Options{SessionStorage: store, NoUpdates: true})
+	client := gobot.NewTelegramClient(s.apiID, s.apiHash, gobot.TelegramOptions{SessionStorage: store, NoUpdates: true})
 	return client.Run(ctx, func(ctx context.Context) error {
 		sent, err := client.Auth().SendCode(ctx, phone, auth.SendCodeOptions{})
 		if err != nil {

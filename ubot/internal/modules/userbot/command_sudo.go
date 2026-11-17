@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/crypto"
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
@@ -23,7 +23,7 @@ type sudoRecord struct {
 	UserID  int64 `bson:"user_id"`
 }
 
-func sendUserText(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, text string, threadID int) error {
+func sendUserText(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, text string, threadID int) error {
 	if threadID > 0 {
 		// Use MessagesSendMessage with proper reply_to for topic support.
 		// TopMsgID is the topic ID (first message in topic).
@@ -59,7 +59,7 @@ func randInt64() int64 {
 	return time.Now().UnixNano()
 }
 
-func (s *Service) userbotOwner(ctx context.Context, client *telegram.Client) (int64, error) {
+func (s *Service) userbotOwner(ctx context.Context, client *gobot.Client) (int64, error) {
 	s.mu.Lock()
 	if id, ok := s.clientOwners[client]; ok && id > 0 {
 		s.mu.Unlock()
@@ -147,7 +147,7 @@ func (s *Service) isSudo(ctx context.Context, ownerID, userID int64) bool {
 	return allowed
 }
 
-func (s *Service) commandAllowed(ctx context.Context, client *telegram.Client, msg *tg.Message) bool {
+func (s *Service) commandAllowed(ctx context.Context, client *gobot.Client, msg *tg.Message) bool {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return false
@@ -159,7 +159,7 @@ func (s *Service) commandAllowed(ctx context.Context, client *telegram.Client, m
 	return actorID == ownerID || s.isSudo(ctx, ownerID, actorID)
 }
 
-func (s *Service) sudoCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, add bool, threadID int) error {
+func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, add bool, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err

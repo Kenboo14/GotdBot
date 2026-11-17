@@ -29,9 +29,9 @@ type MessageEntity struct {
 
 // BackendToGateway adalah data balasan dari backend
 type PFromService struct {
-	ChatID        int64   `json:"chat_id"`
-	ThreadID      int     `json:"thread_id,omitempty"`
-	Text          string  `json:"text"`
+	ChatID        int64    `json:"chat_id"`
+	ThreadID      int      `json:"thread_id,omitempty"`
+	Text          string   `json:"text"`
 	State         string   `json:"state,omitempty"`
 	Type          string   `json:"type,omitempty"`
 	OwnerID       int64    `json:"owner_id,omitempty"`

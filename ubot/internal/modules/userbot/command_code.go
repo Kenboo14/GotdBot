@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 )
 
-func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
+func (s *Service) handleCodeCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	language := "go"
 	if fields := strings.Fields(args); len(fields) > 0 {
 		language = fields[0]
@@ -39,7 +39,7 @@ func (s *Service) handleCodeCommand(ctx context.Context, client *telegram.Client
 	return nil
 }
 
-func (s *Service) replySource(ctx context.Context, client *telegram.Client, msg *tg.Message, target tg.InputPeerClass) (string, error) {
+func (s *Service) replySource(ctx context.Context, client *gobot.Client, msg *tg.Message, target tg.InputPeerClass) (string, error) {
 	reply, err := s.replyMessage(ctx, client, msg, target)
 	if err != nil || reply == nil {
 		return "", err
@@ -47,7 +47,7 @@ func (s *Service) replySource(ctx context.Context, client *telegram.Client, msg 
 	return reply.Message, nil
 }
 
-func (s *Service) replyMessage(ctx context.Context, client *telegram.Client, msg *tg.Message, target tg.InputPeerClass) (*tg.Message, error) {
+func (s *Service) replyMessage(ctx context.Context, client *gobot.Client, msg *tg.Message, target tg.InputPeerClass) (*tg.Message, error) {
 	header, ok := msg.GetReplyTo()
 	if !ok {
 		return nil, nil

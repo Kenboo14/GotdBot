@@ -11,8 +11,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/tg"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tgerr"
 )
 
@@ -84,8 +83,8 @@ func Run(ctx context.Context) {
 	// Wire MTProto update handlers
 	botInstance.SetupUpdateHandlers()
 
-	// 8. MTProto Telegram Client with retry
-	opts := telegram.Options{
+	// 8. MTProto Telegram Client with retry (GoBot lightweight engine)
+	opts := gobot.TelegramOptions{
 		UpdateHandler: botInstance.Dispatcher,
 	}
 
@@ -99,9 +98,10 @@ func Run(ctx context.Context) {
 		default:
 		}
 
-		client := telegram.NewClient(appID, appHash, opts)
-		botInstance.Client = client
-		botInstance.API = tg.NewClient(client)
+		client := gobot.NewTelegramClient(appID, appHash, opts)
+		botInstance.EngineConn = client.Conn()
+		botInstance.API = client.API()
+		botInstance.Sender = client.Sender()
 
 		err := client.Run(ctx, func(runCtx context.Context) error {
 			status, err := client.Auth().Status(runCtx)
@@ -121,9 +121,7 @@ func Run(ctx context.Context) {
 				peerStorage.SaveUser(self.ID, self.AccessHash)
 			}
 
-			// Keep client running
-			<-runCtx.Done()
-			return runCtx.Err()
+			return nil
 		})
 
 		if err != nil && ctx.Err() == nil {

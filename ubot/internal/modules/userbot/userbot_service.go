@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/bin"
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -55,7 +55,7 @@ type rpcErrorMiddleware struct {
 	service *Service
 }
 
-func (m *rpcErrorMiddleware) Handle(next tg.Invoker) telegram.InvokeFunc {
+func (m *rpcErrorMiddleware) Handle(next tg.Invoker) gobot.InvokeFunc {
 	return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
 		// Flood control guard: jika akun sedang dalam periode cooldown FLOOD_WAIT Telegram,
 		// tahan request sejenak hingga cooldown selesai untuk mencegah eskalasi penalti ban Telegram.
@@ -108,35 +108,36 @@ type Service struct {
 	ownerUsernames      sync.Map // key: int64 (ownerID) -> lowercase username without @
 	userAccessHashes    sync.Map // key: int64 (userID) -> int64 (accessHash)
 	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
-	lastLogBotMsgID     sync.Map // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
-	floodCooldowns      sync.Map // key: int64 (chatID) -> time.Time (cooldownUntil)
-	albumCache          sync.Map // key: int (firstMsgID) -> []int (semua album msgIDs)
+	peers               *gobot.PeerStorage
+	lastLogBotMsgID     sync.Map      // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
+	floodCooldowns      sync.Map      // key: int64 (chatID) -> time.Time (cooldownUntil)
+	albumCache          sync.Map      // key: int (firstMsgID) -> []int (semua album msgIDs)
 	cmdSem              chan struct{} // semaphore pembatas concurrent Redis command jobs (max 32)
 	peerSyncSem         chan struct{} // semaphore pembatas concurrent syncPeersOnReady (max 4)
 	inlineMu            sync.RWMutex
 	botUsernameCache    string
-	inlineBots          map[*telegram.Client]*tg.InputUser
+	inlineBots          map[*gobot.Client]*tg.InputUser
 	mu                  sync.RWMutex
 	logins              map[int64]*login
-	active              map[int64]*telegram.Client
-	connecting          map[int64]uint64                     // guard terhadap double activation & reservasi slot (chatID -> genID)
-	activeCancels       map[int64]context.CancelFunc         // cancel func untuk graceful shutdown
-	accountCtxs         map[int64]context.Context            // chatID -> clientCtx (account lifecycle context)
-	accountGens         map[int64]uint64                     // chatID -> token kepemilikan generasi lifecycle
-	nextGen             uint64                               // counter generasi unik untuk lifecycle
-	accountStates       map[int64]AccountSessionState        // chatID -> status lifecycle event-driven
-	lastPublishedStates map[int64]AccountSessionState        // chatID -> status terakhir yang di-publish
-	lastPublishedAt     map[int64]time.Time                  // chatID -> timestamp publish terakhir
-	reconnectAttempts   map[int64]int                        // chatID -> counter percobaan reconnect berturut-turut
-	lastActive          map[int64]time.Time                  // chatID -> waktu aktivitas terakhir
-	lastUpdate          map[int64]time.Time                  // chatID -> waktu terakhir incoming update diterima
-	lastVerified        map[int64]time.Time                  // chatID -> waktu terakhir verifikasi pesan 'Check'
-	verifying           map[int64]bool                       // chatID -> guard anti-double-verification
-	verifSem            chan struct{}                        // semaphore pembatas concurrent Check ke AiotdCaches (max 2)
-	heartbeatSem        chan struct{}                        // pembatas RPC heartbeat sesi aktif
-	owners              map[int64]int64                      // chatID -> ownerID
-	clientOwners        map[*telegram.Client]int64           // client -> ownerID
-	senderCache         map[*telegram.Client]*message.Sender // cached message.Sender per client
+	active              map[int64]*gobot.Client
+	connecting          map[int64]uint64                  // guard terhadap double activation & reservasi slot (chatID -> genID)
+	activeCancels       map[int64]context.CancelFunc      // cancel func untuk graceful shutdown
+	accountCtxs         map[int64]context.Context         // chatID -> clientCtx (account lifecycle context)
+	accountGens         map[int64]uint64                  // chatID -> token kepemilikan generasi lifecycle
+	nextGen             uint64                            // counter generasi unik untuk lifecycle
+	accountStates       map[int64]AccountSessionState     // chatID -> status lifecycle event-driven
+	lastPublishedStates map[int64]AccountSessionState     // chatID -> status terakhir yang di-publish
+	lastPublishedAt     map[int64]time.Time               // chatID -> timestamp publish terakhir
+	reconnectAttempts   map[int64]int                     // chatID -> counter percobaan reconnect berturut-turut
+	lastActive          map[int64]time.Time               // chatID -> waktu aktivitas terakhir
+	lastUpdate          map[int64]time.Time               // chatID -> waktu terakhir incoming update diterima
+	lastVerified        map[int64]time.Time               // chatID -> waktu terakhir verifikasi pesan 'Check'
+	verifying           map[int64]bool                    // chatID -> guard anti-double-verification
+	verifSem            chan struct{}                     // semaphore pembatas concurrent Check ke AiotdCaches (max 2)
+	heartbeatSem        chan struct{}                     // pembatas RPC heartbeat sesi aktif
+	owners              map[int64]int64                   // chatID -> ownerID
+	clientOwners        map[*gobot.Client]int64           // client -> ownerID
+	senderCache         map[*gobot.Client]*message.Sender // cached message.Sender per client
 	prefixes            map[int64]string
 	broadcasts          map[int64]*broadcastJob
 	panelBroadcasts     map[int64]*panelBroadcastJob
@@ -222,22 +223,22 @@ type record struct {
 
 func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.Database, redis *databases.Redis, apiID int, apiHash string, key []byte, botToken, logBotToken string, ownerID int64) *Service {
 	return &Service{
-		root:            root,
-		sqlite:          sqlite,
-		db:              db,
-		redis:           redis,
-		apiID:           apiID,
-		apiHash:         apiHash,
-		key:             key,
-		botToken:        botToken,
-		logBotToken:     logBotToken,
-		ownerID:         ownerID,
-		logins:          make(map[int64]*login),
-		active:          make(map[int64]*telegram.Client),
-		connecting:      make(map[int64]uint64),
-		activeCancels:   make(map[int64]context.CancelFunc),
-		accountCtxs:     make(map[int64]context.Context),
-		accountGens:     make(map[int64]uint64),
+		root:                root,
+		sqlite:              sqlite,
+		db:                  db,
+		redis:               redis,
+		apiID:               apiID,
+		apiHash:             apiHash,
+		key:                 key,
+		botToken:            botToken,
+		logBotToken:         logBotToken,
+		ownerID:             ownerID,
+		logins:              make(map[int64]*login),
+		active:              make(map[int64]*gobot.Client),
+		connecting:          make(map[int64]uint64),
+		activeCancels:       make(map[int64]context.CancelFunc),
+		accountCtxs:         make(map[int64]context.Context),
+		accountGens:         make(map[int64]uint64),
 		accountStates:       make(map[int64]AccountSessionState),
 		lastPublishedStates: make(map[int64]AccountSessionState),
 		lastPublishedAt:     make(map[int64]time.Time),
@@ -249,22 +250,30 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		verifSem:            make(chan struct{}, 2), // hemat resource, max 2 concurrent Check ke AiotdCaches
 		heartbeatSem:        make(chan struct{}, 16),
 		peerSyncSem:         make(chan struct{}, 4),
-		owners:          make(map[int64]int64),
-		clientOwners:    make(map[*telegram.Client]int64),
-		senderCache:     make(map[*telegram.Client]*message.Sender),
-		prefixes:        make(map[int64]string),
-		broadcasts:      make(map[int64]*broadcastJob),
-		panelBroadcasts: make(map[int64]*panelBroadcastJob),
-		inlineBots:      make(map[*telegram.Client]*tg.InputUser),
-		sudoCache:       make(map[string]sudoCacheEntry),
-		broadcastSem:    make(chan struct{}, 32), // batas concurrent gcast untuk kapasitas 1000 akun
-		cmdSem:          make(chan struct{}, 32), // batas concurrency perintah background
+		owners:              make(map[int64]int64),
+		clientOwners:        make(map[*gobot.Client]int64),
+		senderCache:         make(map[*gobot.Client]*message.Sender),
+		prefixes:            make(map[int64]string),
+		broadcasts:          make(map[int64]*broadcastJob),
+		panelBroadcasts:     make(map[int64]*panelBroadcastJob),
+		inlineBots:          make(map[*gobot.Client]*tg.InputUser),
+		sudoCache:           make(map[string]sudoCacheEntry),
+		broadcastSem:        make(chan struct{}, 32), // batas concurrent gcast untuk kapasitas 1000 akun
+		cmdSem:              make(chan struct{}, 32), // batas concurrency perintah background
+		peers:               gobot.DefaultPool().Peers,
 	}
+}
+
+func (s *Service) peerCache() *gobot.PeerStorage {
+	if s != nil && s.peers != nil {
+		return s.peers
+	}
+	return gobot.DefaultPool().Peers
 }
 
 // getSender returns a cached message.Sender for the given client, avoiding
 // repeated allocation of the wrapper on every command invocation.
-func (s *Service) getSender(client *telegram.Client) *message.Sender {
+func (s *Service) getSender(client *gobot.Client) *message.Sender {
 	s.mu.RLock()
 	sender, ok := s.senderCache[client]
 	s.mu.RUnlock()
@@ -492,7 +501,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	s.mu.Unlock()
 	s.publishSessionState(chatID, initialOwnerID, StateConnecting, "MTProto client sedang menghubungkan akun")
 	go func() {
-		var client *telegram.Client
+		var client *gobot.Client
 		defer func() {
 			s.mu.Lock()
 			// Ownership check: hanya bersihkan connecting jika token generasi masih cocok
@@ -535,10 +544,10 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			chatID:     chatID,
 			clientRef:  &client,
 		}
-		client = telegram.NewClient(s.apiID, s.apiHash, telegram.Options{
+		client = gobot.NewTelegramClient(s.apiID, s.apiHash, gobot.TelegramOptions{
 			SessionStorage: store,
 			UpdateHandler:  updateHandler,
-			Middlewares: []telegram.Middleware{
+			Middlewares: []gobot.Middleware{
 				&rpcErrorMiddleware{chatID: chatID, genID: genID, service: s},
 			},
 			OnDead: func(err error) {
@@ -546,7 +555,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 					go s.handleSessionRevoked(chatID, genID, err)
 				}
 			},
-			OnConnectionState: func(state telegram.ConnectionState) {
+			OnConnectionState: func(state gobot.ConnectionState) {
 				s.mu.Lock()
 				// Ownership check: abaikan event jika generasi client sudah tidak cocok
 				if s.accountGens[chatID] != genID {
@@ -554,7 +563,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 					return
 				}
 				switch state {
-				case telegram.ConnectionStateReady:
+				case gobot.ConnectionStateReady:
 					wasSuspected := (s.accountStates[chatID] == StateSuspected || s.accountStates[chatID] == StateReconnecting)
 					s.accountStates[chatID] = StateConnected
 					ownerID := s.owners[chatID]
@@ -566,15 +575,15 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 					}
 					go s.syncPeersOnReady(clientCtx, client)
 					return
-				case telegram.ConnectionStateDisconnected:
+				case gobot.ConnectionStateDisconnected:
 					// Disconnect bukan bukti sesi dicabut. Tandai event sementara dan
-					// biarkan gotd melakukan reconnect atau mengembalikan auth error.
+					// biarkan GoBot melakukan reconnect atau mengembalikan auth error.
 					s.accountStates[chatID] = StateSuspected
 					ownerID := s.owners[chatID]
 					s.mu.Unlock()
 					s.publishSessionState(chatID, ownerID, StateSuspected, "Koneksi MTProto terputus; menunggu hasil reconnect")
 					return
-				case telegram.ConnectionStateConnecting:
+				case gobot.ConnectionStateConnecting:
 					if s.accountStates[chatID] != StateSuspected {
 						s.accountStates[chatID] = StateConnecting
 					}
@@ -630,9 +639,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			s.lastVerified[chatID] = now
 			s.mu.Unlock()
 
-			// Menunggu hingga context client dihentikan atau koneksi terputus dari MTProto
-			<-ctx.Done()
-			return ctx.Err()
+			// One-shot startup callback returns nil so engine.Conn keeps the session
+			// alive in 1 goroutine until clientCtx is canceled.
+			return nil
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.Error("mtproto finished or failed", slog.Int64("chat_id", chatID), slog.String("error", err.Error()))
@@ -686,7 +695,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 	}()
 }
 
-func (s *Service) processNewMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
+func (s *Service) processNewMessage(ctx context.Context, chatID int64, client *gobot.Client, entities tg.Entities, update *tg.UpdateNewMessage) error {
 	if msg, ok := update.Message.(*tg.Message); ok {
 		if peerUser, ok := msg.PeerID.(*tg.PeerUser); ok && peerUser.UserID == 777000 {
 			s.triggerImmediateVerification(chatID)
@@ -702,7 +711,7 @@ func (s *Service) processNewMessage(ctx context.Context, chatID int64, client *t
 	return s.handleUserbotMessage(ctx, chatID, client, entities, update)
 }
 
-func (s *Service) processNewChannelMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
+func (s *Service) processNewChannelMessage(ctx context.Context, chatID int64, client *gobot.Client, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
 	if msg, ok := update.Message.(*tg.Message); ok {
 		if !s.isRelevantMessage(chatID, msg) {
 			return nil
@@ -715,7 +724,7 @@ func (s *Service) processNewChannelMessage(ctx context.Context, chatID int64, cl
 	return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
 }
 
-func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client) {
+func (s *Service) syncPeersOnReady(ctx context.Context, client *gobot.Client) {
 	if client == nil {
 		return
 	}
@@ -733,11 +742,7 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client)
 
 	if contacts, err := client.API().ContactsGetContacts(syncCtx, 0); err == nil {
 		if c, ok := contacts.(*tg.ContactsContacts); ok {
-			for _, u := range c.Users {
-				if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.ID != 0 && user.AccessHash != 0 {
-					s.userAccessHashes.Store(user.ID, user.AccessHash)
-				}
-			}
+			s.peerCache().ApplyUsersChats(c.Users, nil)
 		}
 	}
 
@@ -746,17 +751,7 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *telegram.Client)
 		OffsetPeer: &tg.InputPeerEmpty{},
 	}); err == nil {
 		if mod, ok := dialogs.AsModified(); ok {
-			for _, u := range mod.GetUsers() {
-				if user, ok := u.(*tg.User); ok && user != nil && !user.Min && user.ID != 0 && user.AccessHash != 0 {
-					s.userAccessHashes.Store(user.ID, user.AccessHash)
-				}
-			}
-			for _, ch := range mod.GetChats() {
-				if channel, ok := ch.(*tg.Channel); ok && channel != nil && !channel.Min && channel.ID != 0 && channel.AccessHash != 0 {
-					s.channelAccessHashes.Store(channel.ID, channel.AccessHash)
-				}
-			}
+			s.peerCache().ApplyUsersChats(mod.GetUsers(), mod.GetChats())
 		}
 	}
 }
-

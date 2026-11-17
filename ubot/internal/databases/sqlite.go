@@ -665,4 +665,3 @@ func (s *SQLiteClient) LoadAllPeers(ctx context.Context) (map[int64]int64, map[i
 	}
 	return users, channels, rows.Err()
 }
-

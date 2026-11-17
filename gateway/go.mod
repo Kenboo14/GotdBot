@@ -3,6 +3,7 @@ module assterisk/gateway
 go 1.26.0
 
 require (
+	github.com/Kenboo14/GoBot v0.0.0-20261117005830-b2f23b2d331f
 	github.com/coder/websocket v1.8.15
 	github.com/gotd/td v0.163.0
 	github.com/redis/go-redis/v9 v9.17.2

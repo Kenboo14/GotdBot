@@ -18,7 +18,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -95,7 +95,7 @@ func isValidNoteName(name string) bool {
 	return noteNameRe.MatchString(name) && !strings.Contains(name, ".") && !strings.HasPrefix(name, "$")
 }
 
-func (s *Service) resolveCachePeer(ctx context.Context, client *telegram.Client) (tg.InputPeerClass, error) {
+func (s *Service) resolveCachePeer(ctx context.Context, client *gobot.Client) (tg.InputPeerClass, error) {
 	groupCache := getGroupCache()
 	resolved, err := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: groupCache})
 	if err != nil {
@@ -176,7 +176,7 @@ func extractInputMedia(media tg.MessageMediaClass) tg.InputMediaClass {
 	return nil
 }
 
-func (s *Service) sendReplyToAiotdCaches(ctx context.Context, client *telegram.Client, fromPeer tg.InputPeerClass, reply *tg.Message) (int, error) {
+func (s *Service) sendReplyToAiotdCaches(ctx context.Context, client *gobot.Client, fromPeer tg.InputPeerClass, reply *tg.Message) (int, error) {
 	groupCache := getGroupCache()
 	topicID := getNotesCacheTopicID()
 
@@ -236,7 +236,7 @@ func (s *Service) sendReplyToAiotdCaches(ctx context.Context, client *telegram.C
 	return cachedMsgID, nil
 }
 
-func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *telegram.Client, topicID int, text string, entities []tg.MessageEntityClass) (int, error) {
+func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *gobot.Client, topicID int, text string, entities []tg.MessageEntityClass) (int, error) {
 	groupCache := getGroupCache()
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
@@ -326,7 +326,7 @@ func extractNoteButtons(rawText string) (string, []NoteButton) {
 }
 
 // saveNoteCommand implements !save <nama> [-cb|-pop]
-func (s *Service) saveNoteCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
+func (s *Service) saveNoteCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -464,7 +464,7 @@ type NoteInlinePayload struct {
 	Mode    string       `json:"mode"`
 }
 
-func (s *Service) sendInlineNote(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, ownerID int64, note *databases.NoteRecord, buttons []NoteButton, threadID int) error {
+func (s *Service) sendInlineNote(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, ownerID int64, note *databases.NoteRecord, buttons []NoteButton, threadID int) error {
 	if s.redis == nil {
 		return fmt.Errorf("redis client tidak tersedia")
 	}
@@ -527,7 +527,7 @@ func (s *Service) sendInlineNote(ctx context.Context, client *telegram.Client, t
 }
 
 // showNote sends the stored note to the current chat
-func (s *Service) showNote(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, name string, noFormat bool, threadID int) error {
+func (s *Service) showNote(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, name string, noFormat bool, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -609,7 +609,7 @@ func (s *Service) showNote(ctx context.Context, client *telegram.Client, target 
 }
 
 // listNotesCommand implements !lsnote or !notes
-func (s *Service) listNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) listNotesCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -637,7 +637,7 @@ func (s *Service) listNotesCommand(ctx context.Context, client *telegram.Client,
 }
 
 // deleteNoteCommand implements !delnote <nama|nomor>
-func (s *Service) deleteNoteCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string, threadID int) error {
+func (s *Service) deleteNoteCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, args string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -685,7 +685,7 @@ func (s *Service) deleteNoteCommand(ctx context.Context, client *telegram.Client
 }
 
 // clearNotesCommand implements !clearnote
-func (s *Service) clearNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) clearNotesCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -709,7 +709,7 @@ func (s *Service) clearNotesCommand(ctx context.Context, client *telegram.Client
 }
 
 // nofmCommand implements !nofm [-html|-md]
-func (s *Service) nofmCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
+func (s *Service) nofmCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	reply, err := s.replyMessage(ctx, client, msg, target)
 	if err != nil || reply == nil {
 		return sendUserText(ctx, client, target, "Balas pesan berformat dengan <code>!nofm</code> atau <code>!nofm -md</code>.", threadID)
@@ -738,7 +738,7 @@ func (s *Service) nofmCommand(ctx context.Context, client *telegram.Client, targ
 }
 
 // exportNotesCommand implements !exportnote (Tanpa Password)
-func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) exportNotesCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -795,7 +795,7 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *telegram.Clien
 }
 
 // importNotesCommand implements !importnote (Tanpa Password)
-func (s *Service) importNotesCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, threadID int) error {
+func (s *Service) importNotesCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err

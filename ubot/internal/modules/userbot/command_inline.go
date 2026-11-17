@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/crypto"
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -40,7 +40,7 @@ func inlineRandomID() int64 {
 // sendInlineHelp — shortcut for !help via inline bot
 // ──────────────────────────────────────────────────────
 
-func (s *Service) sendInlineHelp(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) sendInlineHelp(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	return s.sendInlineQuery(ctx, client, target, "assist_help", threadID)
 }
 
@@ -55,7 +55,7 @@ func (s *Service) sendInlineHelp(ctx context.Context, client *telegram.Client, t
 //  5. RWMutex cached reads for bot InputUser (zero lock contention).
 // ──────────────────────────────────────────────────────
 
-func (s *Service) sendInlineQuery(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, query string, threadID int) error {
+func (s *Service) sendInlineQuery(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, query string, threadID int) error {
 	cmdStart := time.Now()
 
 	// Step 1: Resolve inline bot InputUser (cached after first call per client)
@@ -109,7 +109,7 @@ func truncateQuery(q string) string {
 
 func (s *Service) getInlineBotResultsWithRetry(
 	ctx context.Context,
-	client *telegram.Client,
+	client *gobot.Client,
 	bot *tg.InputUser,
 	peerTarget tg.InputPeerClass,
 	query string,
@@ -153,7 +153,7 @@ func (s *Service) getInlineBotResultsWithRetry(
 
 func (s *Service) sendInlineBotResultWithRetry(
 	ctx context.Context,
-	client *telegram.Client,
+	client *gobot.Client,
 	peerTarget tg.InputPeerClass,
 	queryID int64,
 	resultID string,
@@ -216,7 +216,7 @@ func isAccessHashError(err error) bool {
 //     or access hash error via evictInlineBot).
 // ──────────────────────────────────────────────────────
 
-func (s *Service) inlineBotUser(ctx context.Context, client *telegram.Client) (*tg.InputUser, error) {
+func (s *Service) inlineBotUser(ctx context.Context, client *gobot.Client) (*tg.InputUser, error) {
 	username, err := s.botUsername(ctx)
 	if err != nil {
 		return nil, err
@@ -248,7 +248,7 @@ func (s *Service) inlineBotUser(ctx context.Context, client *telegram.Client) (*
 
 	s.inlineMu.Lock()
 	if s.inlineBots == nil {
-		s.inlineBots = make(map[*telegram.Client]*tg.InputUser)
+		s.inlineBots = make(map[*gobot.Client]*tg.InputUser)
 	}
 	s.inlineBots[client] = resolvedBot
 	cached := *resolvedBot
@@ -257,7 +257,7 @@ func (s *Service) inlineBotUser(ctx context.Context, client *telegram.Client) (*
 }
 
 // evictInlineBot removes the cached bot InputUser for this client, forcing re-resolve.
-func (s *Service) evictInlineBot(client *telegram.Client) {
+func (s *Service) evictInlineBot(client *gobot.Client) {
 	s.inlineMu.Lock()
 	delete(s.inlineBots, client)
 	s.inlineMu.Unlock()
@@ -268,7 +268,7 @@ func (s *Service) evictInlineBot(client *telegram.Client) {
 // doesn't pay the cold-start penalty.
 //
 // Jitter (0-3s) and clientCtx binding prevent startup storms across hundreds of accounts.
-func (s *Service) preWarmInlineBot(clientCtx context.Context, client *telegram.Client) {
+func (s *Service) preWarmInlineBot(clientCtx context.Context, client *gobot.Client) {
 	go func() {
 		// Stagger execution across multiple concurrently booting accounts
 		jitter := time.Duration(atomic.AddUint64(&s.nextGen, 1)%30) * 100 * time.Millisecond

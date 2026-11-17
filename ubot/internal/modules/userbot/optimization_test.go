@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 	"github.com/redis/go-redis/v9"
 )
@@ -47,7 +47,7 @@ func TestFloodWaitEviction_ReapStaleResources(t *testing.T) {
 
 	svc := &Service{
 		root:          root,
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		accountStates: make(map[int64]AccountSessionState),
 		accountGens:   make(map[int64]uint64),
 		lastActive:    make(map[int64]time.Time),
@@ -96,7 +96,7 @@ func TestHeartbeatOptimization_PrioritizeTroubledAccounts(t *testing.T) {
 
 	svc := &Service{
 		root:          root,
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		accountStates: make(map[int64]AccountSessionState),
 		accountGens:   make(map[int64]uint64),
 		lastActive:    make(map[int64]time.Time),
@@ -105,7 +105,7 @@ func TestHeartbeatOptimization_PrioritizeTroubledAccounts(t *testing.T) {
 		verifying:     make(map[int64]bool),
 	}
 
-	fakeClient := &telegram.Client{}
+	fakeClient := &gobot.Client{}
 
 	// Akun healthy, aktif tapi belum diverifikasi > 3 menit
 	healthyID := int64(1001)
@@ -237,7 +237,7 @@ func BenchmarkAccountScaling(b *testing.B) {
 
 				svc := &Service{
 					root:          root,
-					active:        make(map[int64]*telegram.Client, n),
+					active:        make(map[int64]*gobot.Client, n),
 					accountStates: make(map[int64]AccountSessionState, n),
 					accountGens:   make(map[int64]uint64, n),
 					lastActive:    make(map[int64]time.Time, n),
@@ -247,7 +247,7 @@ func BenchmarkAccountScaling(b *testing.B) {
 					owners:        make(map[int64]int64, n),
 				}
 
-				fakeClient := &telegram.Client{}
+				fakeClient := &gobot.Client{}
 				for i := 0; i < n; i++ {
 					chatID := int64(i + 1000000)
 					svc.active[chatID] = fakeClient
@@ -302,15 +302,15 @@ func BenchmarkAccountScaling(b *testing.B) {
 }
 
 func TestFindActiveClientLocked_HierarchyAndNoDeadlock(t *testing.T) {
-	fakeClient1 := &telegram.Client{}
-	fakeClient2 := &telegram.Client{}
+	fakeClient1 := &gobot.Client{}
+	fakeClient2 := &gobot.Client{}
 
 	root, cancelRoot := context.WithCancel(context.Background())
 	defer cancelRoot()
 
 	svc := &Service{
 		root:          root,
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		accountGens:   make(map[int64]uint64),
 		accountStates: make(map[int64]AccountSessionState),
@@ -578,14 +578,10 @@ func BenchmarkPeerOverhead_1000Accounts(b *testing.B) {
 		svc := NewService(root, nil, nil, nil, 0, "", nil, "", "", 0)
 		for i := 0; i < 1000; i++ {
 			for _, u := range users {
-				if _, exists := svc.userAccessHashes.Load(u.ID); !exists {
-					svc.userAccessHashes.Store(u.ID, u.AccessHash)
-				}
+				svc.peerCache().SaveUser(u.ID, u.AccessHash)
 			}
 			for _, ch := range chats {
-				if _, exists := svc.channelAccessHashes.Load(ch.ID); !exists {
-					svc.channelAccessHashes.Store(ch.ID, ch.AccessHash)
-				}
+				svc.peerCache().SaveChannel(ch.ID, ch.AccessHash)
 			}
 		}
 		runtime.KeepAlive(svc)
@@ -631,4 +627,3 @@ func BenchmarkGroupNoiseHotPath(b *testing.B) {
 		_ = svc.processNewChannelMessage(ctx, chatID, nil, entities, upd)
 	}
 }
-

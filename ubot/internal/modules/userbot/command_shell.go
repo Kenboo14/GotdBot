@@ -8,19 +8,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/telegram/message/styling"
 	"github.com/gotd/td/tg"
 )
 
 // shellCommand handles the userbot !sh command.
-func (s *Service) shellCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, args string, threadID int) error {
+func (s *Service) shellCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, prefix, args string, threadID int) error {
 	err := sendUserText(ctx, client, target, "Fitur !sh dinonaktifkan untuk menghemat RAM.", threadID)
 	return err
 }
 
-func (s *Service) runCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, prefix, name, args string, threadID int) error {
+func (s *Service) runCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, prefix, name, args string, threadID int) error {
 	if strings.TrimSpace(args) == "" {
 		err := sendUserText(ctx, client, target, "Gunakan: "+prefix+name+" <perintah>", threadID)
 		return err
@@ -49,7 +49,7 @@ func processCommand(ctx context.Context, command string) (string, error) {
 	return string(out), err
 }
 
-func (s *Service) sendCommandOutput(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, output string, threadID int) error {
+func (s *Service) sendCommandOutput(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, output string, threadID int) error {
 	if strings.TrimSpace(output) == "" {
 		output = "(tidak ada output)"
 	}

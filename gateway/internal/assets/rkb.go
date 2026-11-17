@@ -6,17 +6,17 @@ import "assterisk/gateway/internal/botgotd"
 
 // Main Menu
 const (
-	BtnStatus    = "💎 Status 💎"
-	BtnShop      = "🛒 Shop 🛒"
-	BtnGrupList  = "🧩 Grup & List 🧩"
-	BtnExpert    = "⚡ Expert Extra ⚡"
-	BtnReset     = "🗑️ Reset 🗑️"
-	BtnAturJeda  = "⌛ Atur Jeda ⌛"
-	BtnBantuan   = "⚠️ Bantuan ⚠️"
-	BtnSettings  = "⚙️ Settings ⚙️"
-	BtnFeed      = "📰 Feed 📰"
-	BtnWebapp    = "🌐 Webapp 🌐"
-	BtnHome      = "🌐 Home 🌐"
+	BtnStatus   = "💎 Status 💎"
+	BtnShop     = "🛒 Shop 🛒"
+	BtnGrupList = "🧩 Grup & List 🧩"
+	BtnExpert   = "⚡ Expert Extra ⚡"
+	BtnReset    = "🗑️ Reset 🗑️"
+	BtnAturJeda = "⌛ Atur Jeda ⌛"
+	BtnBantuan  = "⚠️ Bantuan ⚠️"
+	BtnSettings = "⚙️ Settings ⚙️"
+	BtnFeed     = "📰 Feed 📰"
+	BtnWebapp   = "🌐 Webapp 🌐"
+	BtnHome     = "🌐 Home 🌐"
 )
 
 // Status Menu
@@ -33,14 +33,14 @@ const (
 
 // Grup & List Menu
 const (
-	BtnCekTopic    = "🧑‍💻 Cek Topic 🧑‍💻"
-	BtnTopic       = "🧑‍💻 Topic 🧑‍💻"
-	BtnListTopic   = "📌 List Topic"
-	BtnCekList     = "📁 Cek List 📁"
-	BtnCekGrup     = "📚 Cek Grup 📚"
-	BtnTambahList  = "📝 Tambah List 📝"
-	BtnTambahGrup  = "📝 Tambah Grup 📝"
-	BtnSebarKeRC   = "📦 Sebar Ke RC 📦"
+	BtnCekTopic   = "🧑‍💻 Cek Topic 🧑‍💻"
+	BtnTopic      = "🧑‍💻 Topic 🧑‍💻"
+	BtnListTopic  = "📌 List Topic"
+	BtnCekList    = "📁 Cek List 📁"
+	BtnCekGrup    = "📚 Cek Grup 📚"
+	BtnTambahList = "📝 Tambah List 📝"
+	BtnTambahGrup = "📝 Tambah Grup 📝"
+	BtnSebarKeRC  = "📦 Sebar Ke RC 📦"
 )
 
 // Tambah Grup Options

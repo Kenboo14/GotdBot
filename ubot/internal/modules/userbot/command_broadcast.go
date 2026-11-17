@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf16"
 
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/crypto"
-	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -26,7 +26,7 @@ type broadcastTarget struct {
 	Name string
 }
 
-func (s *Service) broadcastCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
+func (s *Service) broadcastCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	parts := strings.Fields(args)
 	if len(parts) > 0 && (strings.EqualFold(parts[0], "cancel") || strings.EqualFold(parts[0], "stop")) {
 		ownerID, err := s.userbotOwner(ctx, client)
@@ -277,7 +277,7 @@ func broadcastReplyMessageID(msg *tg.Message) int {
 	return header.ReplyToMsgID
 }
 
-func repliedText(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message) (string, []tg.MessageEntityClass, error) {
+func repliedText(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message) (string, []tg.MessageEntityClass, error) {
 	if msg == nil {
 		return "", nil, fmt.Errorf("pesan command tidak tersedia")
 	}
@@ -361,7 +361,7 @@ func textMessageFromResult(result tg.MessagesMessagesClass, expectedID, excluded
 	return fallback
 }
 
-func (s *Service) broadcastTargets(ctx context.Context, client *telegram.Client, types map[string]bool, excludeBlacklist bool, ownerID int64) ([]broadcastTarget, error) {
+func (s *Service) broadcastTargets(ctx context.Context, client *gobot.Client, types map[string]bool, excludeBlacklist bool, ownerID int64) ([]broadcastTarget, error) {
 	blacklisted := map[string]bool{}
 	if excludeBlacklist {
 		if s.sqlite != nil {
@@ -463,7 +463,7 @@ func dialogName(peer tg.InputPeerClass, entities tg.Entities, id int64) string {
 	return fmt.Sprintf("%d", id)
 }
 
-func (s *Service) runBroadcast(ctx context.Context, client *telegram.Client, ownerID int64, job *broadcastJob, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string, threadID int) {
+func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerID int64, job *broadcastJob, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string, threadID int) {
 	success, failed := 0, 0
 	lastBucket := 0
 	lastProgress := 0

@@ -3,14 +3,9 @@ package userbot
 import (
 	"assterisk/ubot/internal/databases"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"encoding/base64"
-	"fmt"
-	"io"
 	"time"
 
+	gobotsession "github.com/Kenboo14/GoBot/session"
 	"github.com/gotd/td/session"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -120,36 +115,9 @@ func (s *sqliteStorage) setPrefix(ctx context.Context, prefix string, configured
 }
 
 func encrypt(key, data []byte) (string, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	return base64.StdEncoding.EncodeToString(append(nonce, gcm.Seal(nil, nonce, data, nil)...)), nil
+	return gobotsession.Encrypt(key, data)
 }
 
 func decrypt(key []byte, input string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(input)
-	if err != nil {
-		return nil, err
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	if len(raw) < gcm.NonceSize() {
-		return nil, fmt.Errorf("session terenkripsi tidak valid")
-	}
-	return gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
+	return gobotsession.Decrypt(key, input)
 }

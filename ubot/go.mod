@@ -3,6 +3,7 @@ module assterisk/ubot
 go 1.26.0
 
 require (
+	github.com/Kenboo14/GoBot v0.0.0-20261117005830-b2f23b2d331f
 	github.com/gotd/td v0.163.0
 	github.com/redis/go-redis/v9 v9.17.2
 	go.mongodb.org/mongo-driver v1.17.6

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/message"
 )
 
@@ -23,7 +23,7 @@ func TestReapStaleResources_KeepsActiveSessionsPersistent(t *testing.T) {
 	svc := &Service{
 		root:          root,
 		logins:        make(map[int64]*login),
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		activeCancels: make(map[int64]context.CancelFunc),
 		lastActive:    make(map[int64]time.Time),
@@ -107,7 +107,7 @@ func TestDoubleActivationGuard(t *testing.T) {
 
 	svc := &Service{
 		root:          root,
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		activeCancels: make(map[int64]context.CancelFunc),
 		lastActive:    make(map[int64]time.Time),
@@ -143,7 +143,7 @@ func TestAdmissionLimit_NoEviction(t *testing.T) {
 
 	svc := &Service{
 		root:          root,
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		activeCancels: make(map[int64]context.CancelFunc),
 		lastActive:    make(map[int64]time.Time),
@@ -188,7 +188,7 @@ func TestConcurrentActivation_AtomicSingleWinner(t *testing.T) {
 
 	svc := &Service{
 		root:          root,
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		activeCancels: make(map[int64]context.CancelFunc),
 		lastActive:    make(map[int64]time.Time),
@@ -247,7 +247,7 @@ func TestReapStaleResources_ConcurrentWithSudoCache(t *testing.T) {
 	svc := &Service{
 		root:          root,
 		logins:        make(map[int64]*login),
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		activeCancels: make(map[int64]context.CancelFunc),
 		lastActive:    make(map[int64]time.Time),
@@ -386,14 +386,14 @@ func TestAccountCancellation_PropagatesToBroadcast(t *testing.T) {
 // lifecycle generasi baru (Gen 2) untuk chatID yang sama.
 func TestLifecycleOldGenerationCleanup_DoesNotDeleteNewGeneration(t *testing.T) {
 	svc := &Service{
-		active:        make(map[int64]*telegram.Client),
+		active:        make(map[int64]*gobot.Client),
 		connecting:    make(map[int64]uint64),
 		activeCancels: make(map[int64]context.CancelFunc),
 		accountCtxs:   make(map[int64]context.Context),
 		accountGens:   make(map[int64]uint64),
 		lastActive:    make(map[int64]time.Time),
-		clientOwners:  make(map[*telegram.Client]int64),
-		senderCache:   make(map[*telegram.Client]*message.Sender),
+		clientOwners:  make(map[*gobot.Client]int64),
+		senderCache:   make(map[*gobot.Client]*message.Sender),
 	}
 
 	chatID := int64(12345)
@@ -402,7 +402,7 @@ func TestLifecycleOldGenerationCleanup_DoesNotDeleteNewGeneration(t *testing.T) 
 	gen1ID := uint64(1)
 	_, gen1Cancel := context.WithCancel(context.Background())
 	defer gen1Cancel()
-	var clientGen1 *telegram.Client // misal gagal sebelum client dibuat atau client lama
+	var clientGen1 *gobot.Client // misal gagal sebelum client dibuat atau client lama
 
 	// 2. Lifecycle Gen 2 sudah mengambil alih chatID
 	gen2ID := uint64(2)

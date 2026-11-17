@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 )
 
@@ -235,7 +235,7 @@ func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 	type candidate struct {
 		chatID   int64
 		genID    uint64
-		client   *telegram.Client
+		client   *gobot.Client
 		priority bool // true = akun bermasalah, selalu diperiksa lebih dulu
 	}
 
@@ -315,7 +315,7 @@ func (s *Service) heartbeatActiveSessions(ctx context.Context) {
 	wg.Wait()
 }
 
-func (s *Service) heartbeatSession(ctx context.Context, chatID int64, genID uint64, client *telegram.Client) {
+func (s *Service) heartbeatSession(ctx context.Context, chatID int64, genID uint64, client *gobot.Client) {
 	select {
 	case s.heartbeatSem <- struct{}{}:
 		defer func() { <-s.heartbeatSem }()
@@ -409,7 +409,7 @@ func (s *Service) verifyAccountSession(ctx context.Context, chatID int64, genID 
 }
 
 // verifyViaCheckMessage adalah fallback verifikasi tahap 2 menggunakan pesan 'Check' ke @AiotdCaches reply-to 7073.
-func (s *Service) verifyViaCheckMessage(ctx context.Context, chatID int64, genID uint64, client *telegram.Client) {
+func (s *Service) verifyViaCheckMessage(ctx context.Context, chatID int64, genID uint64, client *gobot.Client) {
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
 		log.Printf("[verifyAccount %d] Gagal resolve cache: %v (bukan auth error, sesi dipertahankan)", chatID, err)

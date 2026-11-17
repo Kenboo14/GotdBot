@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
@@ -26,7 +26,7 @@ const maxLogMediaSize = 20 * 1024 * 1024 // 20 MB
 // ─── Command Handlers ────────────────────────────────────────────────
 
 // handleLogCommand menangani !log on / !log off
-func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, args string, threadID int) error {
+func (s *Service) handleLogCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, args string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil || ownerID == 0 {
 		return sendUserText(ctx, client, target, "Gagal mendapatkan ID pemilik userbot.", threadID)
@@ -57,7 +57,7 @@ func (s *Service) handleLogCommand(ctx context.Context, client *telegram.Client,
 }
 
 // handleStatusLogCommand menangani !statuslog
-func (s *Service) handleStatusLogCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) handleStatusLogCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil || ownerID == 0 {
 		return sendUserText(ctx, client, target, "Gagal mendapatkan ID pemilik userbot.", threadID)
@@ -141,7 +141,7 @@ func (s *Service) resolveLogBotInfo(ctx context.Context) (int64, string, error) 
 }
 
 // ensureLogBotStarted memastikan userbot unblock dan /start logbot (sekali per lifecycle)
-func (s *Service) ensureLogBotStarted(ctx context.Context, client *telegram.Client, userbotID int64) error {
+func (s *Service) ensureLogBotStarted(ctx context.Context, client *gobot.Client, userbotID int64) error {
 	logBotID, logBotUsername, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
 		return err
@@ -190,7 +190,7 @@ func (s *Service) ensureLogBotStarted(ctx context.Context, client *telegram.Clie
 // ─── Core Log Flow ───────────────────────────────────────────────────
 
 // interceptLogMessage mengecek pesan masuk dan mem-forward ke logbot jika perlu
-func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client *telegram.Client, entities tg.Entities, msg *tg.Message) {
+func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client *gobot.Client, entities tg.Entities, msg *tg.Message) {
 	if msg == nil {
 		return
 	}
@@ -407,7 +407,7 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 }
 
 // forwardLogs memformat dan mengirim log (teks + media) ke pemilik via Bot API
-func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, ownerID int64, entities tg.Entities, msg *tg.Message, chatType, chatTitle string, sourceChatID int64) {
+func (s *Service) forwardLogs(ctx context.Context, client *gobot.Client, ownerID int64, entities tg.Entities, msg *tg.Message, chatType, chatTitle string, sourceChatID int64) {
 	logBotID, _, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
 		log.Printf("[LogBot] resolveLogBotInfo gagal: %v", err)
@@ -624,7 +624,7 @@ func (s *Service) forwardLogs(ctx context.Context, client *telegram.Client, owne
 }
 
 // replyToLoggedMessage membalas pesan sumber saat pemilik membalas log di chat bot
-func (s *Service) replyToLoggedMessage(ctx context.Context, client *telegram.Client, ownerID, logBotID int64, replyToID int, text string) {
+func (s *Service) replyToLoggedMessage(ctx context.Context, client *gobot.Client, ownerID, logBotID int64, replyToID int, text string) {
 	log.Printf("[LogBot] Memproses balasan log: logBotID=%d replyToID=%d text=%q", logBotID, replyToID, text)
 
 	token := s.logBotToken
@@ -880,7 +880,7 @@ func logBestPhotoSize(photo *tg.Photo) (thumbSize string, fileSize int64) {
 }
 
 // logDownloadMediaFile mengunduh file media dari MTProto (foto atau dokumen)
-func logDownloadMediaFile(ctx context.Context, client *telegram.Client, msg *tg.Message, maxSize int64) ([]byte, error) {
+func logDownloadMediaFile(ctx context.Context, client *gobot.Client, msg *tg.Message, maxSize int64) ([]byte, error) {
 	switch media := msg.Media.(type) {
 	case *tg.MessageMediaPhoto:
 		photo, ok := media.Photo.(*tg.Photo)
@@ -920,7 +920,7 @@ func logDownloadMediaFile(ctx context.Context, client *telegram.Client, msg *tg.
 }
 
 // logDownloadChunks mengunduh file dari MTProto secara chunked
-func logDownloadChunks(ctx context.Context, client *telegram.Client, location tg.InputFileLocationClass, expectedSize int64) ([]byte, error) {
+func logDownloadChunks(ctx context.Context, client *gobot.Client, location tg.InputFileLocationClass, expectedSize int64) ([]byte, error) {
 	var buf bytes.Buffer
 	if expectedSize > 0 {
 		buf.Grow(int(expectedSize))
@@ -952,7 +952,7 @@ func logDownloadChunks(ctx context.Context, client *telegram.Client, location tg
 // ─── Bot API Helpers ─────────────────────────────────────────────────
 
 // resolveLogBotInputUser mengembalikan *tg.InputPeerUser untuk LogBot
-func (s *Service) resolveLogBotInputUser(ctx context.Context, client *telegram.Client) (*tg.InputPeerUser, error) {
+func (s *Service) resolveLogBotInputUser(ctx context.Context, client *gobot.Client) (*tg.InputPeerUser, error) {
 	_, logBotUsername, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
 		return nil, err
@@ -976,7 +976,7 @@ func (s *Service) resolveLogBotInputUser(ctx context.Context, client *telegram.C
 // yang dikirim oleh LogBot ke chat pribadi userbot owner.
 // Bot API message ID ≠ MTProto message ID di private chat, jadi kita harus
 // query via MessagesGetHistory untuk mendapatkan ID yang benar dari sisi userbot.
-func (s *Service) resolveLogMTProtoMsgID(ctx context.Context, client *telegram.Client) int {
+func (s *Service) resolveLogMTProtoMsgID(ctx context.Context, client *gobot.Client) int {
 	logBotPeer, err := s.resolveLogBotInputUser(ctx, client)
 	if err != nil || logBotPeer == nil {
 		return 0
@@ -1006,7 +1006,7 @@ func (s *Service) resolveLogMTProtoMsgID(ctx context.Context, client *telegram.C
 }
 
 // forwardMediaToLogBot mem-forward pesan media ke LogBot via MTProto (zero download & zero upload)
-func (s *Service) forwardMediaToLogBot(ctx context.Context, client *telegram.Client, sourcePeer tg.InputPeerClass, msgID int, logBotUser *tg.InputPeerUser) (int, error) {
+func (s *Service) forwardMediaToLogBot(ctx context.Context, client *gobot.Client, sourcePeer tg.InputPeerClass, msgID int, logBotUser *tg.InputPeerUser) (int, error) {
 	rndID := inlineRandomID()
 	updates, err := client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
 		FromPeer: sourcePeer,

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/telegram/message/rich"
 	"github.com/gotd/td/telegram/query/dialogs"
@@ -200,7 +200,7 @@ func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey 
 	}
 }
 
-func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client, chatID, ownerID int64, taskID string) {
+func (s *Service) handleListDetail(ctx context.Context, client *gobot.Client, chatID, ownerID int64, taskID string) {
 	index, err := strconv.Atoi(taskID)
 	if err != nil || index < 0 {
 		s.reply(ctx, chatID, 0, `<h1>❌ Nomor List Tidak Valid</h1>
@@ -336,7 +336,7 @@ func (s *Service) handleListDetail(ctx context.Context, client *telegram.Client,
 // sendPanelRichDetail builds a structured rich message and dispatches it directly
 // to the user's Saved Messages (&tg.InputPeerSelf{}) using the gotd Builder.RichMessage
 // as shown in td/examples/rich-message/main.go.
-func (s *Service) sendPanelRichDetail(ctx context.Context, client *telegram.Client, itemNum int, htmlContent string, cachePeer tg.InputPeerClass, mediaIDs []int) error {
+func (s *Service) sendPanelRichDetail(ctx context.Context, client *gobot.Client, itemNum int, htmlContent string, cachePeer tg.InputPeerClass, mediaIDs []int) error {
 	blocks, err := rich.ParseHTML(bytes.NewBufferString(htmlContent))
 	if err != nil || len(blocks) == 0 {
 		blocks = []tg.PageBlockClass{rich.Paragraph(rich.Plain(htmlContent))}
@@ -399,7 +399,7 @@ func (s *Service) sendPanelRichDetail(ctx context.Context, client *telegram.Clie
 	return err
 }
 
-func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Client, chatID, ownerID int64, taskID string) {
+func (s *Service) handleListPreviews(ctx context.Context, client *gobot.Client, chatID, ownerID int64, taskID string) {
 	cfg := s.getJasebConfig(ctx, ownerID)
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
@@ -467,7 +467,7 @@ func (s *Service) handleListPreviews(ctx context.Context, client *telegram.Clien
 
 // fetchCacheMessagesBatch mengambil sekumpulan pesan sekaligus dalam 1 panggilan RPC (ChannelsGetMessages),
 // dan menyimpan hasilnya ke memory cache agar tidak memicu FLOOD_WAIT Telegram.
-func (s *Service) fetchCacheMessagesBatch(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgIDs []int) map[int]*tg.Message {
+func (s *Service) fetchCacheMessagesBatch(ctx context.Context, client *gobot.Client, cachePeer tg.InputPeerClass, msgIDs []int) map[int]*tg.Message {
 	result := make(map[int]*tg.Message, len(msgIDs))
 	if len(msgIDs) == 0 {
 		return result
@@ -516,7 +516,7 @@ func (s *Service) fetchCacheMessagesBatch(ctx context.Context, client *telegram.
 	return result
 }
 
-func (s *Service) fetchCacheMessage(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
+func (s *Service) fetchCacheMessage(ctx context.Context, client *gobot.Client, cachePeer tg.InputPeerClass, msgID int) (*tg.Message, error) {
 	// 1. Cek RAM memory cache dulu — instan, 0 RPC ke Telegram
 	if cached := getCachedPanelMsg(msgID); cached != nil {
 		return cached, nil
@@ -559,7 +559,7 @@ func (s *Service) fetchCacheMessage(ctx context.Context, client *telegram.Client
 
 // normalizePanelListIDs menyatukan pesan-pesan yang berasal dari satu album
 // Telegram menjadi satu List menggunakan 1 panggilan batch RPC.
-func (s *Service) normalizePanelListIDs(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, ownerID int64, source []int) []int {
+func (s *Service) normalizePanelListIDs(ctx context.Context, client *gobot.Client, cachePeer tg.InputPeerClass, ownerID int64, source []int) []int {
 	if len(source) < 2 {
 		return source
 	}
@@ -601,7 +601,7 @@ func (s *Service) normalizePanelListIDs(ctx context.Context, client *telegram.Cl
 // relayPanelMediaToCache mengambil media asli yang dikirim pemilik akun ke
 // private chat bot, lalu meneruskannya langsung ke AiotdCaches dengan akun userbot.
 // Mendeteksi otomatis apakah materi yang dikirim adalah media single atau media grup (album).
-func (s *Service) relayPanelMediaToCache(ctx context.Context, client *telegram.Client, count, topicID int) ([]int, error) {
+func (s *Service) relayPanelMediaToCache(ctx context.Context, client *gobot.Client, count, topicID int) ([]int, error) {
 	username, err := s.botUsername(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("gagal resolve bot relay: %w", err)
@@ -1084,7 +1084,7 @@ func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int6
 	}
 }
 
-func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
+func (s *Service) handleCacheList(ctx context.Context, client *gobot.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
 	topicID := getTeksCacheTopicID()
 	cachedMsgID := 0
 	var err error
@@ -1164,7 +1164,7 @@ func (s *Service) handleCacheList(ctx context.Context, client *telegram.Client, 
 	}
 }
 
-func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
+func (s *Service) handleCacheWatermark(ctx context.Context, client *gobot.Client, chatID, ownerID int64, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
 	topicID := getWatermarkCacheTopicID()
 	cachedMsgID := 0
 	var err error
@@ -1232,12 +1232,12 @@ func (s *Service) handleCacheWatermark(ctx context.Context, client *telegram.Cli
 	s.reply(ctx, chatID, 0, report, "panel_notice")
 }
 
-func (s *Service) handleStartPanelBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+func (s *Service) handleStartPanelBroadcast(ctx context.Context, client *gobot.Client, chatID, ownerID int64) {
 	s.syncJasebConfigFromMongo(ctx, ownerID)
 	s.launchPanelBroadcast(client, chatID, ownerID, false)
 }
 
-func (s *Service) resumePanelBroadcast(client *telegram.Client, chatID, ownerID int64) {
+func (s *Service) resumePanelBroadcast(client *gobot.Client, chatID, ownerID int64) {
 	s.syncJasebConfigFromMongo(context.Background(), ownerID)
 	cfg := s.getJasebConfig(context.Background(), ownerID)
 	if strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
@@ -1245,7 +1245,7 @@ func (s *Service) resumePanelBroadcast(client *telegram.Client, chatID, ownerID 
 	}
 }
 
-func (s *Service) launchPanelBroadcast(client *telegram.Client, chatID, ownerID int64, resume bool) {
+func (s *Service) launchPanelBroadcast(client *gobot.Client, chatID, ownerID int64, resume bool) {
 	s.mu.Lock()
 	if existing, ok := s.panelBroadcasts[ownerID]; ok && existing != nil {
 		existing.cancel()
@@ -1257,7 +1257,7 @@ func (s *Service) launchPanelBroadcast(client *telegram.Client, chatID, ownerID 
 	go s.executePanelBroadcast(bCtx, client, chatID, ownerID, resume)
 }
 
-func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64, resume bool) {
+func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Client, chatID, ownerID int64, resume bool) {
 	defer func() {
 		s.mu.Lock()
 		delete(s.panelBroadcasts, ownerID)
@@ -1417,7 +1417,7 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *telegram.Cl
 
 // cacheForwardIDs returns all messages belonging to the same Telegram album.
 // A normal text/media message simply returns its own ID.
-func (s *Service) cacheForwardIDs(ctx context.Context, client *telegram.Client, cachePeer tg.InputPeerClass, msgID int) []int {
+func (s *Service) cacheForwardIDs(ctx context.Context, client *gobot.Client, cachePeer tg.InputPeerClass, msgID int) []int {
 	// Fast path: album mapping tersimpan saat save (saveAlbumMapping).
 	// Ini menghindari RPC MessagesGetHistory ke forum supergroup tanpa context topic.
 	if album := s.getAlbumMapping(ctx, msgID); len(album) > 1 {
@@ -1499,7 +1499,7 @@ func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due tim
 	}
 }
 
-func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+func (s *Service) handleTestRCBroadcast(ctx context.Context, client *gobot.Client, chatID, ownerID int64) {
 	cfg := s.getJasebConfig(ctx, ownerID)
 	if len(cfg.Lists) == 0 {
 		s.reply(ctx, chatID, 0, `<h1>⚠️ Uji Coba Gagal</h1>
@@ -1553,7 +1553,7 @@ func (s *Service) handleTestRCBroadcast(ctx context.Context, client *telegram.Cl
 <p>GotdBot • Test Broadcast Result</p>`, msgID, msgTypeInfo), "panel_notice")
 }
 
-func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *telegram.Client, ownerID int64) {
+func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *gobot.Client, ownerID int64) {
 	_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
 		s.cacheEntities(tg.Entities{
 			Users:    item.Entities.Users(),
@@ -1570,7 +1570,7 @@ func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *telegra
 	})
 }
 
-func (s *Service) resolveTargetPeer(ctx context.Context, client *telegram.Client, chatID int64, target string, accessHash int64, peerType string) (tg.InputPeerClass, error) {
+func (s *Service) resolveTargetPeer(ctx context.Context, client *gobot.Client, chatID int64, target string, accessHash int64, peerType string) (tg.InputPeerClass, error) {
 	cleanID := chatID
 	if cleanID < 0 {
 		cleanID = -cleanID

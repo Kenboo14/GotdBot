@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/redis/go-redis/v9"
@@ -18,7 +18,7 @@ import (
 
 // findActiveClientLocked mencari client aktif secara berurutan pada targetOwner, userID, chatID,
 // dan s.owners. s.mu HARUS sedang dikunci oleh pemanggil.
-func (s *Service) findActiveClientLocked(targetOwner, userID, chatID int64) (*telegram.Client, int64) {
+func (s *Service) findActiveClientLocked(targetOwner, userID, chatID int64) (*gobot.Client, int64) {
 	if targetOwner != 0 {
 		if c := s.active[targetOwner]; c != nil {
 			return c, targetOwner
@@ -220,7 +220,7 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	s.reply(ctx, job.ChatID, job.ThreadID, fmt.Sprintf("<code>%.3f ms</code>", float64(time.Since(started).Microseconds())/1000), "ok")
 }
 
-func (s *Service) fetchAccountGroups(ctx context.Context, client *telegram.Client, chatID, ownerID int64) {
+func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, chatID, ownerID int64) {
 	if client == nil {
 		s.reply(ctx, chatID, 0, `<h1>❌ Gagal Mengambil Grup</h1>
 <blockquote expandable>Sesi userbot belum aktif atau sedang terputus.</blockquote>

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 )
 
@@ -41,7 +41,7 @@ func parseUserCommand(text, prefix string) (name, args string, ok bool) {
 	return name, args, true
 }
 
-func (s *Service) handleSetPrefix(ctx context.Context, client *telegram.Client, chatID int64, target tg.InputPeerClass, args string, threadID int) error {
+func (s *Service) handleSetPrefix(ctx context.Context, client *gobot.Client, chatID int64, target tg.InputPeerClass, args string, threadID int) error {
 	value := strings.TrimSpace(strings.ToLower(args))
 	if value == "none" {
 		value = ""

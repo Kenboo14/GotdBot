@@ -3,7 +3,7 @@ package userbot
 import (
 	"context"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 )
 
@@ -11,7 +11,7 @@ type userbotUpdateHandler struct {
 	dispatcher tg.UpdateDispatcher
 	s          *Service
 	chatID     int64
-	clientRef  **telegram.Client
+	clientRef  **gobot.Client
 }
 
 func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) error {

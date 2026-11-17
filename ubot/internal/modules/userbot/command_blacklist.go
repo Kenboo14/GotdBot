@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gotd/td/telegram"
+	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -115,7 +115,7 @@ func (p peerEntities) ExtractPeer(value tg.PeerClass) (tg.InputPeerClass, error)
 	}
 }
 
-func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args, operation string, threadID int) error {
+func (s *Service) blacklistCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args, operation string, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -161,7 +161,7 @@ func (s *Service) blacklistCommand(ctx context.Context, client *telegram.Client,
 	}
 }
 
-func (s *Service) listBlacklist(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) listBlacklist(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -210,7 +210,7 @@ func displayChatID(kind string, id int64) int64 {
 	}
 }
 
-func (s *Service) clearBlacklist(ctx context.Context, client *telegram.Client, target tg.InputPeerClass, threadID int) error {
+func (s *Service) clearBlacklist(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
