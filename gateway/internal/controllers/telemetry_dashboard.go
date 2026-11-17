@@ -167,6 +167,12 @@ func (t *telemetryTracker) recordSessionEvent(event models.PFromService, streamI
 	if len(streamID) > 0 {
 		msgID = streamID[0]
 	}
+	if ms, _, ok := parseRedisStreamID(msgID); ok && ms > 0 {
+		if time.Since(time.UnixMilli(ms)) > 2*time.Minute {
+			return
+		}
+	}
+
 	t.mu.Lock()
 	if event.ChatID != 0 && event.State != "" {
 		if t.lastEventIDs == nil {

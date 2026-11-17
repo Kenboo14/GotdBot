@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -227,13 +228,22 @@ func TestTelemetryTrackerMonotonicStreamID(t *testing.T) {
 		alerts:        make(chan alertEventItem, 10),
 	}
 	chatID := int64(8069246732)
+	nowMs := time.Now().UnixMilli()
+	newerID := fmt.Sprintf("%d-0", nowMs)
+	olderID := fmt.Sprintf("%d-0", nowMs-1000)
+	staleID := fmt.Sprintf("%d-0", nowMs-10*60*1000)
 
 	// Newer CONNECTED arrives first
-	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "CONNECTED"}, "1763361449500-0")
+	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "CONNECTED"}, newerID)
 	// Older CONNECTING arrives late out-of-order and must be ignored
-	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "CONNECTING"}, "1763361448390-0")
+	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "CONNECTING"}, olderID)
+	// Historical stale alert (> 2m old) must not trigger alert or overwrite state
+	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "SESSION_INVALID", Text: "AUTH_KEY_UNREGISTERED"}, staleID)
 
 	if got := tr.sessionStates[chatID]; got != "CONNECTED" {
 		t.Fatalf("expected CONNECTED state to be preserved, got %q", got)
+	}
+	if len(tr.alerts) != 0 {
+		t.Fatalf("expected stale historical event not to enqueue alert, got %d", len(tr.alerts))
 	}
 }

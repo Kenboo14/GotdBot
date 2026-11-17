@@ -33,6 +33,9 @@ func startSessionEventWebSocket(ctx context.Context, r *broker.Redis) {
 	}
 
 	go r.ListenerWithWorkers(ctx, nil, "session:events:ws", "session:ws", "session:events", 1, func(_ context.Context, _ *botgotd.Bot, msg redis.XMessage) {
+		if ms, _, ok := parseRedisStreamID(msg.ID); ok && ms > 0 && time.Since(time.UnixMilli(ms)) > 2*time.Minute {
+			return
+		}
 		payload, ok := msg.Values["payload"].(string)
 		if !ok {
 			return
