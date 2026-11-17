@@ -5,7 +5,6 @@ import (
 
 	gobot "github.com/Kenboo14/GoBot"
 	"github.com/Kenboo14/GoBot/engine"
-	"github.com/gotd/td/telegram"
 )
 
 // Type aliases forwarding botgotd symbols to github.com/Kenboo14/GoBot.
@@ -75,10 +74,6 @@ var (
 
 func NewPeerStorage(sqliteDB *sql.DB) *PeerStorage {
 	return gobot.NewPeerStorage(sqliteDB)
-}
-
-func NewBot(client *telegram.Client, token string, peersStorage *PeerStorage) *Bot {
-	return gobot.NewBot(client, token, peersStorage)
 }
 
 func NewEngineBot(conn *engine.Conn, token string, peersStorage *PeerStorage) *Bot {

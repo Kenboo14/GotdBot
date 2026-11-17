@@ -145,8 +145,6 @@ func (s *Service) reapStaleResources() {
 	evictStalePanelMsgCache(now)
 
 	// 5. Pruning sync.Map untuk mencegah unbounded memory retention
-	pruneSyncMap(&s.userAccessHashes, 10000, 2000)
-	pruneSyncMap(&s.channelAccessHashes, 10000, 2000)
 	pruneSyncMap(&s.albumCache, 2000, 400)
 }
 

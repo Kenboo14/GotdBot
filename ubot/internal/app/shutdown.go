@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	gobot "github.com/Kenboo14/GoBot"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -13,6 +14,8 @@ func WaitShutdown(ctx context.Context, sqliteClient *databases.SQLiteClient, mCl
 	<-ctx.Done()
 
 	log.Println("⚠️ Shutting down services...")
+
+	gobot.DefaultPool().Close()
 
 	if redisClient != nil && redisClient.Client != nil {
 		if err := redisClient.Client.Close(); err != nil {

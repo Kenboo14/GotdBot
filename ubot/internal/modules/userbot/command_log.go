@@ -354,7 +354,7 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 					}
 				}
 				if !shouldLog && msg.Mentioned && rHeader.ReplyToMsgID > 0 && client != nil {
-					targetPeer, peerErr := peer.EntitiesFromUpdate(entities).ExtractPeer(msg.PeerID)
+					targetPeer, peerErr := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID, msg)
 					if peerErr == nil {
 						origMsg, origErr := s.replyMessage(ctx, client, msg, targetPeer)
 						if origErr == nil && origMsg != nil {
@@ -433,8 +433,8 @@ func (s *Service) forwardLogs(ctx context.Context, client *gobot.Client, ownerID
 			}
 		}
 		if peerAccessHash == 0 {
-			if val, ok := s.userAccessHashes.Load(p.UserID); ok {
-				peerAccessHash = val.(int64)
+			if hash, ok := s.peerCache().UserHash(p.UserID); ok {
+				peerAccessHash = hash
 			}
 		}
 	case *tg.PeerChat:
@@ -448,8 +448,8 @@ func (s *Service) forwardLogs(ctx context.Context, client *gobot.Client, ownerID
 			}
 		}
 		if peerAccessHash == 0 {
-			if val, ok := s.channelAccessHashes.Load(p.ChannelID); ok {
-				peerAccessHash = val.(int64)
+			if hash, ok := s.peerCache().ChannelHash(p.ChannelID); ok {
+				peerAccessHash = hash
 			}
 		}
 	}
@@ -655,20 +655,17 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *gobot.Client
 	case "channel":
 		accessHash := route.AccessHash
 		if accessHash == 0 {
-			if val, ok := s.channelAccessHashes.Load(route.SourceChatID); ok {
-				accessHash = val.(int64)
+			if hash, ok := s.peerCache().ChannelHash(route.SourceChatID); ok {
+				accessHash = hash
 			}
 		}
 		if accessHash == 0 {
 			// Coba via MessagesGetChats (cepat & direct)
 			chats, cErr := client.API().MessagesGetChats(ctx, []int64{route.SourceChatID})
 			if cErr == nil {
-				for _, c := range chats.GetChats() {
-					if ch, ok := c.(*tg.Channel); ok && ch.ID == route.SourceChatID {
-						accessHash = ch.AccessHash
-						s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
-						break
-					}
+				s.peerCache().ApplyUsersChats(nil, chats.GetChats())
+				if hash, ok := s.peerCache().ChannelHash(route.SourceChatID); ok {
+					accessHash = hash
 				}
 			}
 		}
@@ -680,13 +677,9 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *gobot.Client
 			})
 			if dErr == nil {
 				if mod, ok := dialogs.AsModified(); ok {
-					for _, c := range mod.GetChats() {
-						if ch, ok := c.(*tg.Channel); ok && !ch.Min {
-							s.channelAccessHashes.Store(ch.ID, ch.AccessHash)
-							if ch.ID == route.SourceChatID {
-								accessHash = ch.AccessHash
-							}
-						}
+					s.peerCache().ApplyUsersChats(mod.GetUsers(), mod.GetChats())
+					if hash, ok := s.peerCache().ChannelHash(route.SourceChatID); ok {
+						accessHash = hash
 					}
 				}
 			}
@@ -700,8 +693,8 @@ func (s *Service) replyToLoggedMessage(ctx context.Context, client *gobot.Client
 		} else {
 			accessHash := route.AccessHash
 			if accessHash == 0 {
-				if val, ok := s.userAccessHashes.Load(route.SourceChatID); ok {
-					accessHash = val.(int64)
+				if hash, ok := s.peerCache().UserHash(route.SourceChatID); ok {
+					accessHash = hash
 				}
 			}
 			targetPeer = &tg.InputPeerUser{UserID: route.SourceChatID, AccessHash: accessHash}

@@ -8,10 +8,12 @@ import (
 	"assterisk/gateway/internal/databases"
 	"assterisk/gateway/internal/utils"
 	"context"
+	"database/sql"
 	"log"
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
+	"github.com/Kenboo14/GoBot/peers"
 	"github.com/gotd/td/tgerr"
 )
 
@@ -45,13 +47,16 @@ func Run(ctx context.Context) {
 		log.Printf("⚠️ DataManager warning: %v", err)
 	}
 
-	// 4. Peer Storage for MTProto AccessHash resolution
-	var peerStorage *botgotd.PeerStorage
-	if dbManager != nil && dbManager.GetSQLiteDB() != nil {
-		peerStorage = botgotd.NewPeerStorage(dbManager.GetSQLiteDB())
-	} else {
-		peerStorage = botgotd.NewPeerStorage(nil)
+	// 4. Shared GoBot Pool & Peer Storage for MTProto AccessHash resolution
+	var sqliteDB *sql.DB
+	if dbManager != nil {
+		sqliteDB = dbManager.GetSQLiteDB()
 	}
+	pool := gobot.NewPool(gobot.PoolOptions{
+		Peers: peers.Options{DB: sqliteDB},
+	})
+	defer pool.Close()
+	peerStorage := pool.Peers
 
 	// 5. Bot Token & Credentials
 	token := cfg.Telegram.BotToken
@@ -62,7 +67,7 @@ func Run(ctx context.Context) {
 	}
 
 	// 6. Bot instance
-	botInstance := botgotd.NewBot(nil, token, peerStorage)
+	botInstance := botgotd.NewEngineBot(nil, token, peerStorage)
 
 	// 7. Register Modules
 	modules := []Module{
@@ -85,10 +90,11 @@ func Run(ctx context.Context) {
 
 	// 8. MTProto Telegram Client with retry (GoBot lightweight engine)
 	opts := gobot.TelegramOptions{
+		Pool:          pool,
 		UpdateHandler: botInstance.Dispatcher,
 	}
 
-	go WaitShutdown(ctx, redis, dbManager)
+	go WaitShutdown(ctx, redis, dbManager, pool)
 
 	log.Println("🚀 Starting GotdBot MTProto Gateway...")
 	for {

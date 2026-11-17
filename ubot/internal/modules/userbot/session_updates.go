@@ -45,7 +45,6 @@ func (s *Service) handleSessionRevoked(chatID int64, genID uint64, reason error)
 	delete(s.reconnectAttempts, chatID)
 	if client != nil {
 		delete(s.clientOwners, client)
-		delete(s.senderCache, client)
 	}
 	cancel := s.activeCancels[chatID]
 	delete(s.activeCancels, chatID)
@@ -95,31 +94,9 @@ func (s *Service) resolvePeer(ctx context.Context, client *gobot.Client, chatID 
 	s.mu.RUnlock()
 
 	cache := s.peerCache()
-	switch peerObj := p.(type) {
-	case *tg.PeerUser:
-		if peerObj.UserID == 0 || peerObj.UserID == chatID || (ownerID > 0 && peerObj.UserID == ownerID) {
+	if peerUser, ok := p.(*tg.PeerUser); ok {
+		if peerUser.UserID == 0 || peerUser.UserID == chatID || (ownerID > 0 && peerUser.UserID == ownerID) {
 			return &tg.InputPeerSelf{}, nil
-		}
-		if u, ok := entities.Users[peerObj.UserID]; !ok || u == nil || u.Min || u.AccessHash == 0 {
-			if _, ok := cache.UserHash(peerObj.UserID); !ok {
-				if val, ok := s.userAccessHashes.Load(peerObj.UserID); ok {
-					if hash, ok := val.(int64); ok && hash != 0 {
-						cache.SaveUser(peerObj.UserID, hash)
-						return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}, nil
-					}
-				}
-			}
-		}
-	case *tg.PeerChannel:
-		if ch, ok := entities.Channels[peerObj.ChannelID]; !ok || ch == nil || ch.Min || ch.AccessHash == 0 {
-			if _, ok := cache.ChannelHash(peerObj.ChannelID); !ok {
-				if val, ok := s.channelAccessHashes.Load(peerObj.ChannelID); ok {
-					if hash, ok := val.(int64); ok && hash != 0 {
-						cache.SaveChannel(peerObj.ChannelID, hash)
-						return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: hash}, nil
-					}
-				}
-			}
 		}
 	}
 

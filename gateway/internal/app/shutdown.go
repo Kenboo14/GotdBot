@@ -6,13 +6,19 @@ import (
 	"context"
 	"log"
 	"time"
+
+	gobot "github.com/Kenboo14/GoBot"
 )
 
-func WaitShutdown(ctx context.Context, redis *broker.Redis, dbManager *databases.DataManager) {
+func WaitShutdown(ctx context.Context, redis *broker.Redis, dbManager *databases.DataManager, pool *gobot.Pool) {
 	// Menunggu sinyal stop dari NotifyContext di main
 	<-ctx.Done()
 
 	log.Println("⚠️ Shutting down services...")
+
+	if pool != nil {
+		pool.Close()
+	}
 
 	if redis != nil && redis.Client != nil {
 		if err := redis.Client.Close(); err != nil {

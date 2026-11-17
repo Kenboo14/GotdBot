@@ -14,7 +14,6 @@ import (
 
 	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/bin"
-	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"go.mongodb.org/mongo-driver/bson"
@@ -106,8 +105,6 @@ type Service struct {
 	startedLogBots      sync.Map // key: [2]int64{userbotID, logBotID} -> true
 	logStatusCache      sync.Map // key: int64 (ownerID) -> bool
 	ownerUsernames      sync.Map // key: int64 (ownerID) -> lowercase username without @
-	userAccessHashes    sync.Map // key: int64 (userID) -> int64 (accessHash)
-	channelAccessHashes sync.Map // key: int64 (channelID) -> int64 (accessHash)
 	peers               *gobot.PeerStorage
 	lastLogBotMsgID     sync.Map      // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
 	floodCooldowns      sync.Map      // key: int64 (chatID) -> time.Time (cooldownUntil)
@@ -135,9 +132,8 @@ type Service struct {
 	verifying           map[int64]bool                    // chatID -> guard anti-double-verification
 	verifSem            chan struct{}                     // semaphore pembatas concurrent Check ke AiotdCaches (max 2)
 	heartbeatSem        chan struct{}                     // pembatas RPC heartbeat sesi aktif
-	owners              map[int64]int64                   // chatID -> ownerID
-	clientOwners        map[*gobot.Client]int64           // client -> ownerID
-	senderCache         map[*gobot.Client]*message.Sender // cached message.Sender per client
+	owners              map[int64]int64               // chatID -> ownerID
+	clientOwners        map[*gobot.Client]int64       // client -> ownerID
 	prefixes            map[int64]string
 	broadcasts          map[int64]*broadcastJob
 	panelBroadcasts     map[int64]*panelBroadcastJob
@@ -252,7 +248,6 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		peerSyncSem:         make(chan struct{}, 4),
 		owners:              make(map[int64]int64),
 		clientOwners:        make(map[*gobot.Client]int64),
-		senderCache:         make(map[*gobot.Client]*message.Sender),
 		prefixes:            make(map[int64]string),
 		broadcasts:          make(map[int64]*broadcastJob),
 		panelBroadcasts:     make(map[int64]*panelBroadcastJob),
@@ -269,25 +264,6 @@ func (s *Service) peerCache() *gobot.PeerStorage {
 		return s.peers
 	}
 	return gobot.DefaultPool().Peers
-}
-
-// getSender returns a cached message.Sender for the given client, avoiding
-// repeated allocation of the wrapper on every command invocation.
-func (s *Service) getSender(client *gobot.Client) *message.Sender {
-	s.mu.RLock()
-	sender, ok := s.senderCache[client]
-	s.mu.RUnlock()
-	if ok {
-		return sender
-	}
-	s.mu.Lock()
-	sender, ok = s.senderCache[client]
-	if !ok {
-		sender = message.NewSender(tg.NewClient(client))
-		s.senderCache[client] = sender
-	}
-	s.mu.Unlock()
-	return sender
 }
 
 func (s *Service) Restore(ctx context.Context) {
@@ -521,7 +497,6 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			}
 			if client != nil {
 				delete(s.clientOwners, client)
-				delete(s.senderCache, client)
 			}
 			s.mu.Unlock()
 			s.inlineMu.Lock()

@@ -57,7 +57,7 @@ func (s *Service) sendCommandOutput(ctx context.Context, client *gobot.Client, t
 		err := sendUserText(ctx, client, target, output, threadID)
 		return err
 	}
-	sender := s.getSender(client)
+	sender := client.Sender()
 	if len(output) > 3900 {
 		_, err := sender.To(target).Upload(message.FromBytes("dump.txt", []byte(output))).File(ctx)
 		return err

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
-	"github.com/gotd/td/telegram/message"
 )
 
 // TestReapStaleResources_KeepsActiveSessionsPersistent memverifikasi bahwa
@@ -393,7 +392,6 @@ func TestLifecycleOldGenerationCleanup_DoesNotDeleteNewGeneration(t *testing.T) 
 		accountGens:   make(map[int64]uint64),
 		lastActive:    make(map[int64]time.Time),
 		clientOwners:  make(map[*gobot.Client]int64),
-		senderCache:   make(map[*gobot.Client]*message.Sender),
 	}
 
 	chatID := int64(12345)

@@ -395,7 +395,7 @@ func (s *Service) sendPanelRichDetail(ctx context.Context, client *gobot.Client,
 	msg := rich.New(allBlocks...).Photos(photos...).Documents(documents...)
 	// Send structured rich message to Saved Messages directly via Builder.RichMessage
 	// matching td/examples/rich-message/main.go
-	_, err = s.getSender(client).Self().RichMessage(ctx, msg.Input())
+	_, err = client.Sender().Self().RichMessage(ctx, msg.Input())
 	return err
 }
 
@@ -1563,7 +1563,7 @@ func (s *Service) preWarmDialogAccessHashes(ctx context.Context, client *gobot.C
 		switch p := item.Peer.(type) {
 		case *tg.InputPeerChannel:
 			if p.ChannelID != 0 && p.AccessHash != 0 {
-				s.channelAccessHashes.Store(p.ChannelID, p.AccessHash)
+				s.peerCache().SaveChannel(p.ChannelID, p.AccessHash)
 			}
 		}
 		return nil
@@ -1590,16 +1590,16 @@ func (s *Service) resolveTargetPeer(ctx context.Context, client *gobot.Client, c
 		}
 	}
 
-	// 1. Cek dari channelAccessHashes yang telah dicache
-	if hashVal, ok := s.channelAccessHashes.Load(cleanID); ok {
-		if hash, ok := hashVal.(int64); ok && hash != 0 {
-			return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
-		}
+	cache := s.peerCache()
+
+	// 1. Cek dari peer cache yang telah disimpan
+	if hash, ok := cache.ChannelHash(cleanID); ok && hash != 0 {
+		return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
 	}
 
 	// 2. Jika ada accessHash dari database record
 	if accessHash != 0 {
-		s.channelAccessHashes.Store(cleanID, accessHash)
+		cache.SaveChannel(cleanID, accessHash)
 		return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: accessHash}, nil
 	}
 
@@ -1610,7 +1610,7 @@ func (s *Service) resolveTargetPeer(ctx context.Context, client *gobot.Client, c
 			p, err := peer.EntitiesFromResult(resolved).ExtractPeer(resolved.Peer)
 			if err == nil {
 				if ch, ok := p.(*tg.InputPeerChannel); ok {
-					s.channelAccessHashes.Store(ch.ChannelID, ch.AccessHash)
+					cache.SaveChannel(ch.ChannelID, ch.AccessHash)
 				}
 				return p, nil
 			}
@@ -1621,14 +1621,12 @@ func (s *Service) resolveTargetPeer(ctx context.Context, client *gobot.Client, c
 	if peerType == "channel" || cleanID > 1000000 {
 		_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
 			if ch, ok := item.Peer.(*tg.InputPeerChannel); ok {
-				s.channelAccessHashes.Store(ch.ChannelID, ch.AccessHash)
+				cache.SaveChannel(ch.ChannelID, ch.AccessHash)
 			}
 			return nil
 		})
-		if hashVal, ok := s.channelAccessHashes.Load(cleanID); ok {
-			if hash, ok := hashVal.(int64); ok && hash != 0 {
-				return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
-			}
+		if hash, ok := cache.ChannelHash(cleanID); ok && hash != 0 {
+			return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
 		}
 		return nil, fmt.Errorf("supergroup %d tidak memiliki access_hash (pastikan userbot sudah bergabung ke grup)", cleanID)
 	}

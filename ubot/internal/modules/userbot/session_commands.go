@@ -254,7 +254,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 		case *tg.InputPeerChannel:
 			accessHash = p.AccessHash
 			peerType = "channel"
-			s.channelAccessHashes.Store(p.ChannelID, p.AccessHash)
+			s.peerCache().SaveChannel(p.ChannelID, p.AccessHash)
 		case *tg.InputPeerChat:
 			peerType = "chat"
 		}
@@ -264,7 +264,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 				accessHash = ch.AccessHash
 			}
 			peerType = "channel"
-			s.channelAccessHashes.Store(id, accessHash)
+			s.peerCache().SaveChannel(id, accessHash)
 		}
 
 		allGroups = append(allGroups, jasebGroupDoc{

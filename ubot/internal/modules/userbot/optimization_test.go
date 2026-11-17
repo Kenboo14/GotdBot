@@ -530,8 +530,8 @@ func TestResolvePeer_SharedAccessHash(t *testing.T) {
 	svc := NewService(root, nil, nil, nil, 0, "", nil, "", "", 0)
 	chatID := int64(1001)
 
-	svc.userAccessHashes.Store(int64(555), int64(99999))
-	svc.channelAccessHashes.Store(int64(777), int64(88888))
+	svc.peerCache().SaveUser(555, 99999)
+	svc.peerCache().SaveChannel(777, 88888)
 
 	uPeer, err := svc.resolvePeer(context.Background(), nil, chatID, tg.Entities{}, &tg.PeerUser{UserID: 555}, nil)
 	if err != nil {

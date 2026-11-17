@@ -11,7 +11,6 @@ import (
 
 	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/crypto"
-	"github.com/gotd/td/telegram/message"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -47,7 +46,7 @@ func sendUserText(ctx context.Context, client *gobot.Client, target tg.InputPeer
 		}
 		return err
 	}
-	_, err := message.NewSender(tg.NewClient(client)).To(target).Text(ctx, text)
+	_, err := client.Sender().To(target).Text(ctx, text)
 	return err
 }
 
