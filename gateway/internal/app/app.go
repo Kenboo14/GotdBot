@@ -13,6 +13,7 @@ import (
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
+	"github.com/Kenboo14/GoBot/engine"
 	"github.com/Kenboo14/GoBot/peers"
 	"github.com/gotd/td/tgerr"
 )
@@ -53,7 +54,8 @@ func Run(ctx context.Context) {
 		sqliteDB = dbManager.GetSQLiteDB()
 	}
 	pool := gobot.NewPool(gobot.PoolOptions{
-		Peers: peers.Options{DB: sqliteDB},
+		Scheduler: engine.SchedulerOptions{Workers: 2},
+		Peers:     peers.Options{DB: sqliteDB},
 	})
 	defer pool.Close()
 	peerStorage := pool.Peers
