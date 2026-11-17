@@ -18,5 +18,6 @@ func registerBotCommands(b *botgotd.Bot, h *Handler) {
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "token_set_duration:", botgotd.MatchTypePrefix, h.TokenCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_help:", botgotd.MatchTypePrefix, h.HelpCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_server:", botgotd.MatchTypePrefix, h.HelpCallback)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "alive_ping:", botgotd.MatchTypePrefix, h.AlivePingCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "note:", botgotd.MatchTypePrefix, h.NoteCallback)
 }

@@ -91,6 +91,10 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		s.revokeExpiredSession(ctx, job.ChatID, job.UserID, job.Text)
 		return
 	}
+	if job.Type == "alive_ping" {
+		s.handleAlivePingJob(job)
+		return
+	}
 	targetOwner := job.OwnerID
 	if targetOwner == 0 {
 		targetOwner = job.UserID

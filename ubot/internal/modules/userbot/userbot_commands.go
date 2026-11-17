@@ -10,4 +10,5 @@ var userbotCommandNames = map[string]struct{}{
 	"clearnote": {}, "nofm": {}, "exportnote": {}, "importnote": {},
 	"log": {}, "statuslog": {},
 	"addblock": {}, "rmblock": {}, "lsblock": {}, "rmallblock": {},
+	"alive": {},
 }

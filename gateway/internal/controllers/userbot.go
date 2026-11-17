@@ -27,9 +27,11 @@ import (
 
 var gatewayStartedAt = time.Now()
 var inlineRedis *broker.Redis
+var inlineDB *databases.DataManager
 var reValidMasterToken = regexp.MustCompile(`^GOTD:[A-Za-z]{32}$`)
 
-func SetInlineRedis(redis *broker.Redis) { inlineRedis = redis }
+func SetInlineRedis(redis *broker.Redis)    { inlineRedis = redis }
+func SetInlineDB(db *databases.DataManager) { inlineDB = db }
 
 type UserSession struct {
 	ChatID             int64
@@ -962,6 +964,10 @@ func HandleInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 			InputMessageContent: &botgotd.InputTextMessageContent{MessageText: "Permintaan penghentian broadcast dikirim."},
 		}
 		_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
+		return
+	}
+	if query == "alive" || strings.HasPrefix(query, "alive ") {
+		handleAliveInline(ctx, b, update, query)
 		return
 	}
 	if query == "server" {

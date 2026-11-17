@@ -355,6 +355,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "setp" {
 		return s.handleSetPrefix(ctx, client, chatID, peerID, args, threadID)
 	}
+	if name == "alive" {
+		return s.handleAliveCommand(ctx, client, chatID, peerID, threadID)
+	}
 	if name == "help" {
 		if err := s.sendInlineHelp(ctx, client, peerID, threadID); err != nil {
 			log.Printf("[userbot %d] !help inline gagal: %v", msg.ID, err)

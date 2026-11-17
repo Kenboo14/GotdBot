@@ -55,6 +55,7 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 
 func (m *Init) Register(ctx context.Context, b *botgotd.Bot, r *broker.Redis) {
 	SetInlineRedis(r)
+	SetInlineDB(m.DB)
 	h := NewHandler(r, m.DB)
 	go startSessionEventWebSocket(ctx, r)
 	go startTelemetryDashboard(ctx, b, r)
