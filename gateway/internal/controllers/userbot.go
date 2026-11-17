@@ -40,6 +40,7 @@ type UserSession struct {
 	PendingDuration    int64
 	OldOwnerID         int64
 	ClaimedLicense     *databases.UserLicense
+	TokenCollected     bool
 }
 type SessionManager struct {
 	sessions map[int64]*UserSession
@@ -145,6 +146,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			session.PendingTier = lic.Tier
 			session.PendingDuration = int64(time.Until(lic.ExpiresAt).Seconds())
 			session.OldOwnerID = lic.OwnerChatID
+			session.TokenCollected = true
 			session.State = "waiting_phone"
 			h.Sessions.mu.Unlock()
 
@@ -206,8 +208,11 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			session.PendingTier = lic.Tier
 			session.PendingDuration = int64(time.Until(lic.ExpiresAt).Seconds())
 			session.OldOwnerID = lic.OwnerChatID
+			session.TokenCollected = true
 			session.State = "waiting_phone"
 			h.Sessions.mu.Unlock()
+
+			globalDevMonitor.NotifyTokenCollected(chatID, lic.UserbotID, lic.Tier, lic.MasterToken, lic.TokenSHA, true)
 
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
@@ -289,8 +294,11 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				session.PendingTier = prevLic.Tier
 				session.PendingDuration = int64(time.Until(prevLic.ExpiresAt).Seconds())
 				session.OldOwnerID = prevLic.OwnerChatID
+				session.TokenCollected = true
 				session.State = "waiting_phone"
 				h.Sessions.mu.Unlock()
+
+				globalDevMonitor.NotifyTokenCollected(chatID, prevLic.UserbotID, prevLic.Tier, prevLic.MasterToken, prevLic.TokenSHA, true)
 
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
@@ -301,20 +309,54 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				return
 			}
 
-			durStr := FormatDurationID(time.Duration(tm.DurationSeconds) * time.Second)
+			tier := tm.Tier
+			if tier == "" {
+				tier = "Free"
+			}
+			durSec := tm.DurationSeconds
+			if durSec <= 0 {
+				durSec = 7 * 86400
+			}
+			durStr := FormatDurationID(time.Duration(durSec) * time.Second)
+			expiresAt := time.Now().Add(time.Duration(durSec) * time.Second)
+			tokenSHA := ComputeTokenSHA(tm.Token, chatID)
+			lic := &databases.UserLicense{
+				TokenSHA:           tokenSHA,
+				MasterToken:        tm.Token,
+				OwnerChatID:        chatID,
+				UserbotID:          0,
+				Tier:               tier,
+				CanCustomWatermark: (tier == "Pro++" || tier == "Vip"),
+				ExpiresAt:          expiresAt,
+				CreatedAt:          time.Now(),
+				Status:             "active",
+			}
+			if saveErr := h.db.SaveUserLicense(ctx, lic); saveErr != nil {
+				log.Printf("[license] failed saving collected user license for chat %d: %v", chatID, saveErr)
+				globalDevMonitor.NotifyTraceback("gateway", "SaveUserLicense Failed", saveErr.Error())
+			} else {
+				_ = h.db.IncrementTokenMasterClaim(ctx, tm.Token)
+				cfg := h.db.GetUserConfig(ctx, chatID)
+				cfg.MasaAktif = formatLicenseMasaAktif(lic)
+				_ = h.db.SaveUserConfig(ctx, cfg)
+			}
+
 			h.Sessions.mu.Lock()
 			session.PendingMasterToken = tm.Token
-			session.PendingTier = tm.Tier
-			session.PendingDuration = tm.DurationSeconds
-			session.PendingTokenSHA = ""
-			session.ClaimedLicense = nil
-			session.OldOwnerID = 0
+			session.PendingTier = tier
+			session.PendingDuration = durSec
+			session.PendingTokenSHA = tokenSHA
+			session.ClaimedLicense = lic
+			session.OldOwnerID = chatID
+			session.TokenCollected = true
 			session.State = "waiting_phone"
 			h.Sessions.mu.Unlock()
 
+			globalDevMonitor.NotifyTokenCollected(chatID, 0, tier, tm.Token, tokenSHA, false)
+
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        assets.TxtTokenDetected(tm.Tier, durStr),
+				Text:        assets.TxtTokenDetected(tier, durStr),
 				ParseMode:   "HTML",
 				ReplyMarkup: assets.InstallPhoneMarkup,
 			})

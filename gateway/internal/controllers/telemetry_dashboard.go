@@ -205,8 +205,11 @@ func (t *telemetryTracker) recordSessionEvent(event models.PFromService, streamI
 	if event.ChatID != 0 {
 		switch stateUpper {
 		case "CONNECTED":
-			if prevState != "CONNECTED" {
-				globalDevMonitor.NotifyUserbotConnected(event.ChatID, event.OwnerID, event.Text)
+			// Hanya laporkan ke MONITOR_SESSION_TRACK jika baru pulih dari putus/reconnect,
+			// bukan untuk sesi yang sudah terpasang saat startup. MONITOR_USERBOT_CONNECTED
+			// khusus untuk pemasangan userbot baru di ubot.go.
+			if prevState == "RECONNECTING" || prevState == "SUSPECTED" || prevState == "SESSION_INVALID" {
+				globalDevMonitor.NotifySessionTrack(event.ChatID, event.OwnerID, stateUpper, event.Text)
 			}
 		case "RECONNECTING", "SUSPECTED", "SESSION_INVALID":
 			globalDevMonitor.NotifySessionTrack(event.ChatID, event.OwnerID, stateUpper, event.Text)

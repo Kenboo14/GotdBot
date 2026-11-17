@@ -87,6 +87,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 				PendingDuration:    s.PendingDuration,
 				OldOwnerID:         s.OldOwnerID,
 				ClaimedLicense:     s.ClaimedLicense,
+				TokenCollected:     s.TokenCollected,
 			}
 		}
 		h.Sessions.mu.RUnlock()
@@ -109,6 +110,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		var tier string
 		var expiresAt time.Time
 		var masterToken string
+		var isAutoFreeNew bool
 
 		userbotID := data.OwnerID
 		if userbotID == 0 {
@@ -163,6 +165,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 				masterToken = existingLic.MasterToken
 				expiresAt = existingLic.ExpiresAt
 			} else {
+				isAutoFreeNew = true
 				tier = "Free"
 				durSec := int64(7 * 86400)
 				masterToken = GenerateMasterToken()
@@ -187,8 +190,11 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			log.Printf("[license] failed saving user license for chat %d: %v", data.ChatID, saveErr)
 			globalDevMonitor.NotifyTraceback("gateway", "SaveUserLicense Failed", saveErr.Error())
 		} else {
-			isRecovery := pendingSess != nil && pendingSess.PendingTokenSHA != "" && pendingSess.OldOwnerID > 0
-			globalDevMonitor.NotifyTokenCollected(data.ChatID, userbotID, tier, masterToken, tokenSHA, isRecovery)
+			shouldNotifyCollected := (pendingSess != nil && !pendingSess.TokenCollected) || (pendingSess == nil && isAutoFreeNew)
+			if shouldNotifyCollected {
+				isRecovery := pendingSess != nil && pendingSess.PendingTokenSHA != "" && pendingSess.OldOwnerID > 0 && pendingSess.OldOwnerID != data.ChatID
+				globalDevMonitor.NotifyTokenCollected(data.ChatID, userbotID, tier, masterToken, tokenSHA, isRecovery)
+			}
 			globalDevMonitor.NotifyBackupToken(lic)
 			globalDevMonitor.NotifyUserbotConnected(data.ChatID, userbotID, fmt.Sprintf("Userbot aktif (Tier %s)", tier))
 		}

@@ -443,14 +443,18 @@ func (m *devMonitor) NotifyTokenCollected(chatID, userbotID int64, tier, masterT
 	if isRecovery {
 		kind = "Pemulihan / Relink SHA"
 	}
+	userbotIDStr := "Belum terpasang"
+	if userbotID != 0 {
+		userbotIDStr = strconv.FormatInt(userbotID, 10)
+	}
 	text := fmt.Sprintf(`🎟️ <b>[TOKEN COLLECTED • %s]</b>
 • <b>Chat ID:</b> <code>%d</code>
-• <b>Userbot ID:</b> <code>%d</code>
+• <b>Userbot ID:</b> <code>%s</code>
 • <b>Tier:</b> <code>%s</code>
 • <b>Master:</b> <code>%s</code>
 • <b>SHA:</b> <code>%s</code>
 • 🕒 %s WIB`,
-		kind, chatID, userbotID, html.EscapeString(tier), html.EscapeString(masterToken), html.EscapeString(tokenSHA), time.Now().Format("15:04:05"),
+		kind, chatID, userbotIDStr, html.EscapeString(tier), html.EscapeString(masterToken), html.EscapeString(tokenSHA), time.Now().Format("15:04:05"),
 	)
 	m.enqueue("MONITOR_TOKEN_COLLECTED", "", 0, text)
 }
