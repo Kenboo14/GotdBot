@@ -173,12 +173,26 @@ func (t *telemetryTracker) recordSessionEvent(event models.PFromService, streamI
 		}
 	}
 
+	switch event.Type {
+	case "bot_loader":
+		globalDevMonitor.NotifyBotLoader("ubot", event.Text)
+		return
+	case "traceback":
+		globalDevMonitor.NotifyTraceback("ubot", fmt.Sprintf("Chat %d (Owner %d)", event.ChatID, event.OwnerID), event.Text)
+		return
+	case "db_health":
+		globalDevMonitor.NotifyDatabase("ubot", event.Text)
+		return
+	}
+
+	var prevState string
 	t.mu.Lock()
 	if event.ChatID != 0 && event.State != "" {
 		if t.lastEventIDs == nil {
 			t.lastEventIDs = make(map[int64]string)
 		}
 		if isNewerStreamID(t.lastEventIDs[event.ChatID], msgID) {
+			prevState = t.sessionStates[event.ChatID]
 			t.sessionStates[event.ChatID] = event.State
 			if msgID != "" {
 				t.lastEventIDs[event.ChatID] = msgID
@@ -187,10 +201,21 @@ func (t *telemetryTracker) recordSessionEvent(event models.PFromService, streamI
 	}
 	t.mu.Unlock()
 
+	stateUpper := strings.ToUpper(event.State)
+	if event.ChatID != 0 {
+		switch stateUpper {
+		case "CONNECTED":
+			if prevState != "CONNECTED" {
+				globalDevMonitor.NotifyUserbotConnected(event.ChatID, event.OwnerID, event.Text)
+			}
+		case "RECONNECTING", "SUSPECTED", "SESSION_INVALID":
+			globalDevMonitor.NotifySessionTrack(event.ChatID, event.OwnerID, stateUpper, event.Text)
+		}
+	}
+
 	// Enqueue to alert digest if critical
 	isCritical := false
 	reasonLower := strings.ToLower(event.Text)
-	stateUpper := strings.ToUpper(event.State)
 
 	if stateUpper == "SESSION_INVALID" || strings.Contains(reasonLower, "revoked") || strings.Contains(reasonLower, "banned") {
 		isCritical = true

@@ -63,6 +63,44 @@ func (dm *DataManager) getMongo() *MongoClient {
 	return dm.mongo
 }
 
+type DBHealth struct {
+	SQLiteOK bool
+	SQLiteErr string
+	MongoConfigured bool
+	MongoOK  bool
+	MongoErr string
+}
+
+func (dm *DataManager) CheckHealth(ctx context.Context, mongoConfigured bool) DBHealth {
+	h := DBHealth{MongoConfigured: mongoConfigured}
+	if dm == nil {
+		h.SQLiteErr = "DataManager nil"
+		return h
+	}
+	if dm.sqlite != nil && dm.sqlite.DB != nil {
+		if err := dm.sqlite.DB.PingContext(ctx); err != nil {
+			h.SQLiteErr = err.Error()
+		} else {
+			h.SQLiteOK = true
+		}
+	} else {
+		h.SQLiteErr = "SQLite belum diinisialisasi"
+	}
+
+	if mg := dm.getMongo(); mg != nil && mg.Client != nil {
+		pCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if err := mg.Client.Ping(pCtx, nil); err != nil {
+			h.MongoErr = err.Error()
+		} else {
+			h.MongoOK = true
+		}
+	} else if mongoConfigured {
+		h.MongoErr = "MongoDB belum terhubung / fallback ke SQLite"
+	}
+	return h
+}
+
 // NewDataManager creates a DataManager dengan SQLite (primary) dan MongoDB (backup, retry di background).
 // bgCtx: parent context panjang untuk retry MongoDB.
 // initCtx: context pendek hanya untuk inisialisasi SQLite.

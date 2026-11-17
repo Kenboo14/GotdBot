@@ -191,6 +191,8 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 			}
 			if saveErr := h.db.SaveTokenMaster(ctx, tm); saveErr != nil {
 				log.Printf("[token] SaveTokenMaster free err: %v", saveErr)
+			} else {
+				globalDevMonitor.NotifyTokenCreated(senderID, tm.Tier, tm.Token, FormatDurationID(time.Duration(tm.DurationSeconds)*time.Second), true)
 			}
 		}
 
@@ -298,6 +300,7 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 	}
 
 	durDesc := FormatDurationID(dur)
+	globalDevMonitor.NotifyTokenCreated(senderID, normalizedTier, newToken, durDesc, false)
 	featureDesc := ""
 	switch normalizedTier {
 	case "Pro":

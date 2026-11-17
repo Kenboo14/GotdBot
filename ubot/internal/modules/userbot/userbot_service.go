@@ -5,6 +5,7 @@ import (
 	"assterisk/ubot/internal/models"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
@@ -189,6 +190,20 @@ func (s *Service) publishSessionState(chatID, ownerID int64, state AccountSessio
 		s.lastPublishedAt[chatID] = time.Now()
 		s.mu.Unlock()
 	}
+}
+
+func (s *Service) emitMonitorEvent(eventType, text string, chatID, ownerID int64) {
+	if s.redis == nil || eventType == "" || text == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = s.redis.To(ctx, "session:events", &models.PFromService{
+		ChatID:  chatID,
+		OwnerID: ownerID,
+		Type:    eventType,
+		Text:    text,
+	})
 }
 
 // setAccountState memperbarui state hanya untuk lifecycle generation yang
@@ -476,6 +491,15 @@ func (s *Service) Restore(ctx context.Context) {
 	// RPC ringan sebagai fallback saat koneksi transport masih hidup tetapi
 	// AuthKey sudah dicabut dari perangkat lain.
 	go s.startSessionHeartbeatWorker(ctx)
+
+	mongoStatus := "Nonaktif"
+	if s.db != nil {
+		mongoStatus = "Connected"
+	}
+	s.emitMonitorEvent("bot_loader", fmt.Sprintf("Layanan <b>Ubot</b> siap. Sesi dipulihkan: <code>%d</code> | SQLite: <code>OK</code> | MongoDB: <code>%s</code>", len(sessions), mongoStatus), 0, 0)
+	if s.db == nil && os.Getenv("MONGO_BACKUP_URI") != "" {
+		s.emitMonitorEvent("db_health", "MongoDB backup tidak tersedia saat startup Ubot; berjalan pada mode SQLite lokal.", 0, 0)
+	}
 }
 
 func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
@@ -676,6 +700,7 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				go s.handleSessionRevoked(chatID, genID, err)
 				return
 			}
+			s.emitMonitorEvent("traceback", fmt.Sprintf("MTProto session error: %s", err.Error()), chatID, ownerID)
 
 			// Jika koneksi terputus karena gangguan sementara (jaringan/timeout):
 			// JANGAN hapus sesi! Jadwalkan reconnect otomatis agar akun tetap online 24/7.

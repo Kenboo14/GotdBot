@@ -26,6 +26,9 @@ func (h *Handler) User(ctx context.Context, b *botgotd.Bot, update *botgotd.Upda
 	}
 
 	// Jika user sudah memiliki userbot aktif dan mengetik /start, tampilkan main control panel
+	if cmd == "/start" || strings.HasPrefix(cmd, "/start ") {
+		globalDevMonitor.NotifyUserStart(userID, update.Message.From.Username, userName, hasActive)
+	}
 	if hasActive && (cmd == "/start" || strings.HasPrefix(cmd, "/start")) {
 		h.ShowMainMenu(ctx, b, chatID, userID, userName)
 		return

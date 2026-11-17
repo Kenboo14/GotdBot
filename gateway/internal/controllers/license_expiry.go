@@ -86,7 +86,9 @@ func (h *Handler) expireSingleLicense(ctx context.Context, b *botgotd.Bot, lic *
 	}
 	if err := h.db.MarkUserLicenseExpired(ctx, lic.TokenSHA); err != nil {
 		log.Printf("⚠️ [license] MarkUserLicenseExpired (%s) error: %v", lic.TokenSHA, err)
+		globalDevMonitor.NotifyTraceback("gateway", "MarkUserLicenseExpired Error", err.Error())
 	}
+	globalDevMonitor.NotifyTokenExpired(lic)
 	if lic.MasterToken != "" {
 		if tm, err := h.db.GetTokenMaster(ctx, lic.MasterToken); err == nil && tm != nil && !tm.IsShared {
 			if err := h.db.MarkTokenMasterExpired(ctx, lic.MasterToken); err != nil {

@@ -58,6 +58,7 @@ func (m *Init) Register(ctx context.Context, b *botgotd.Bot, r *broker.Redis) {
 	h := NewHandler(r, m.DB)
 	go startSessionEventWebSocket(ctx, r)
 	go startTelemetryDashboard(ctx, b, r)
+	startDevMonitor(ctx, b, r.Client, m.DB)
 	go h.startLicenseExpiryMonitor(ctx, b)
 
 	// Listener dari ubot

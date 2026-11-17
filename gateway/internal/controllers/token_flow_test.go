@@ -247,3 +247,23 @@ func TestTelemetryTrackerMonotonicStreamID(t *testing.T) {
 		t.Fatalf("expected stale historical event not to enqueue alert, got %d", len(tr.alerts))
 	}
 }
+
+func TestDevMonitorTopicResolutionAndFallback(t *testing.T) {
+	m := &devMonitor{
+		fallbackTop: 18514,
+		topics: map[string]int{
+			"MONITOR_USERBOT_CONNECTED": 18509,
+			"MONITOR_DATABASE":          0,
+		},
+	}
+
+	if got := m.resolveTopic("MONITOR_USERBOT_CONNECTED"); got != 18509 {
+		t.Fatalf("expected specific topic 18509, got %d", got)
+	}
+	if got := m.resolveTopic("MONITOR_DATABASE"); got != 18514 {
+		t.Fatalf("expected fallback topic 18514 when unset, got %d", got)
+	}
+	if got := m.resolveTopic("UNKNOWN_TOPIC"); got != 18514 {
+		t.Fatalf("expected fallback topic 18514 for unknown key, got %d", got)
+	}
+}
