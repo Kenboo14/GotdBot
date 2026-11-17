@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
@@ -20,34 +18,6 @@ import (
 type sudoRecord struct {
 	OwnerID int64 `bson:"owner_id"`
 	UserID  int64 `bson:"user_id"`
-}
-
-func sendUserText(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, text string, threadID int) error {
-	if threadID > 0 {
-		// Use MessagesSendMessage with proper reply_to for topic support.
-		// TopMsgID is the topic ID (first message in topic).
-		// ReplyToMsgID is the message ID to reply to.
-		// For topic replies, both must be set: ReplyToMsgID=threadID (as message ID to reply to)
-		// and TopMsgID=threadID (as topic ID). This tells Telegram to send the message
-		// to the correct topic thread.
-		req := &tg.MessagesSendMessageRequest{
-			Peer:     target,
-			Message:  text,
-			RandomID: randInt64(),
-		}
-		// Set reply_to with both fields for topic routing
-		req.SetReplyTo(&tg.InputReplyToMessage{
-			ReplyToMsgID: threadID,
-			TopMsgID:     threadID,
-		})
-		_, err := client.API().MessagesSendMessage(ctx, req)
-		if err != nil {
-			log.Printf("[sendUserText] MTProto send to topic %d failed: %v", threadID, err)
-		}
-		return err
-	}
-	_, err := client.Sender().To(target).Text(ctx, text)
-	return err
 }
 
 func randInt64() int64 {
@@ -158,7 +128,7 @@ func (s *Service) commandAllowed(ctx context.Context, client *gobot.Client, msg 
 	return actorID == ownerID || s.isSudo(ctx, ownerID, actorID)
 }
 
-func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, add bool, threadID int) error {
+func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args string, add bool, threadID int) error {
 	ownerID, err := s.userbotOwner(ctx, client)
 	if err != nil {
 		return err
@@ -166,13 +136,16 @@ func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target 
 	if !msg.Out {
 		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat mengubah sudo.", threadID)
 	}
-	value := strings.TrimSpace(args)
-	if value == "" {
-		return sendUserText(ctx, client, target, "Gunakan: !addsudo <user_id> atau !rmsudo <user_id>", threadID)
+	userID, displayName, resolveErr := s.resolveTargetUserID(ctx, client, target, msg, entities, args)
+	if resolveErr != nil {
+		if errors.Is(resolveErr, errNoTargetUser) {
+			return sendUserText(ctx, client, target, "Balas pesan pengguna atau gunakan: !addsudo <user_id|@username> / !rmsudo <user_id|@username>", threadID)
+		}
+		return sendUserText(ctx, client, target, resolveErr.Error(), threadID)
 	}
-	userID, err := strconv.ParseInt(strings.TrimPrefix(value, "@"), 10, 64)
-	if err != nil || userID <= 0 {
-		return sendUserText(ctx, client, target, "User ID tidak valid. Gunakan ID numerik Telegram.", threadID)
+	targetLabel := fmt.Sprintf("%d", userID)
+	if displayName != "" {
+		targetLabel = fmt.Sprintf("%s (%d)", displayName, userID)
 	}
 	cacheKey := fmt.Sprintf("%d:%d", ownerID, userID)
 	if add {
@@ -190,7 +163,7 @@ func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target 
 			s.sudoMu.Lock()
 			s.sudoCache[cacheKey] = sudoCacheEntry{allowed: true, expiresAt: time.Now().Add(30 * time.Minute)}
 			s.sudoMu.Unlock()
-			err = sendUserText(ctx, client, target, fmt.Sprintf("Sudo ditambahkan: %d", userID), threadID)
+			err = sendUserText(ctx, client, target, "Sudo ditambahkan: "+targetLabel, threadID)
 		}
 		return err
 	}
@@ -210,5 +183,5 @@ func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target 
 	s.sudoMu.Lock()
 	s.sudoCache[cacheKey] = sudoCacheEntry{allowed: false, expiresAt: time.Now().Add(30 * time.Minute)}
 	s.sudoMu.Unlock()
-	return sendUserText(ctx, client, target, fmt.Sprintf("Sudo dihapus: %d", userID), threadID)
+	return sendUserText(ctx, client, target, "Sudo dihapus: "+targetLabel, threadID)
 }

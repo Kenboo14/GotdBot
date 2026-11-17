@@ -167,14 +167,10 @@ func (s *Service) sendInlineBotResultWithRetry(
 		ID:       resultID,
 		RandomID: randomID,
 	}
-	if threadID > 0 {
-		// Set both ReplyToMsgID and TopMsgID for proper topic routing.
-		// TopMsgID = topic ID, ReplyToMsgID = message ID to reply to.
-		// For topic replies, both must be set to the same value (the topic's first message ID).
-		req.SetReplyTo(&tg.InputReplyToMessage{
-			ReplyToMsgID: threadID,
-			TopMsgID:     threadID,
-		})
+	if replyTo := buildReplyTo(threadID, commandReplyMsgID(ctx)); replyTo != nil {
+		// Set both ReplyToMsgID and TopMsgID (if in a topic) so inline responses
+		// directly reply to the command message while staying in the right topic.
+		req.SetReplyTo(replyTo)
 	}
 
 	result, err := raw.MessagesSendInlineBotResult(ctx, req)

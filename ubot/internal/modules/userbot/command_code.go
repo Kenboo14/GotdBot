@@ -56,8 +56,11 @@ func (s *Service) replyMessage(ctx context.Context, client *gobot.Client, msg *t
 	if !ok {
 		return nil, nil
 	}
-	if rh.ReplyToMsgID == 0 {
-		return &tg.Message{Message: rh.QuoteText}, nil
+	if rh.ReplyToMsgID == 0 || (rh.ForumTopic && rh.ReplyToTopID == 0) {
+		if rh.QuoteText != "" {
+			return &tg.Message{Message: rh.QuoteText}, nil
+		}
+		return nil, nil
 	}
 
 	var messages []tg.MessageClass
@@ -71,10 +74,13 @@ func (s *Service) replyMessage(ctx context.Context, client *gobot.Client, msg *t
 		if err == nil {
 			switch val := res.(type) {
 			case *tg.MessagesMessages:
+				s.peerCache().ApplyUsersChats(val.Users, val.Chats)
 				messages = val.Messages
 			case *tg.MessagesMessagesSlice:
+				s.peerCache().ApplyUsersChats(val.Users, val.Chats)
 				messages = val.Messages
 			case *tg.MessagesChannelMessages:
+				s.peerCache().ApplyUsersChats(val.Users, val.Chats)
 				messages = val.Messages
 			}
 		}
@@ -85,10 +91,13 @@ func (s *Service) replyMessage(ctx context.Context, client *gobot.Client, msg *t
 		if err == nil {
 			switch val := res.(type) {
 			case *tg.MessagesMessages:
+				s.peerCache().ApplyUsersChats(val.Users, val.Chats)
 				messages = val.Messages
 			case *tg.MessagesMessagesSlice:
+				s.peerCache().ApplyUsersChats(val.Users, val.Chats)
 				messages = val.Messages
 			case *tg.MessagesChannelMessages:
+				s.peerCache().ApplyUsersChats(val.Users, val.Chats)
 				messages = val.Messages
 			}
 		}
@@ -113,10 +122,13 @@ func (s *Service) replyMessage(ctx context.Context, client *gobot.Client, msg *t
 	}
 	switch value := result.(type) {
 	case *tg.MessagesMessages:
+		s.peerCache().ApplyUsersChats(value.Users, value.Chats)
 		messages = value.Messages
 	case *tg.MessagesMessagesSlice:
+		s.peerCache().ApplyUsersChats(value.Users, value.Chats)
 		messages = value.Messages
 	case *tg.MessagesChannelMessages:
+		s.peerCache().ApplyUsersChats(value.Users, value.Chats)
 		messages = value.Messages
 	}
 	for _, item := range messages {

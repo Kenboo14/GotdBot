@@ -584,6 +584,9 @@ func (s *Service) showNote(ctx context.Context, client *gobot.Client, target tg.
 				ToPeer:     target,
 				DropAuthor: true,
 			}
+			if replyTo := buildReplyTo(threadID, commandReplyMsgID(ctx)); replyTo != nil {
+				req.SetReplyTo(replyTo)
+			}
 			if _, err := client.API().MessagesForwardMessages(ctx, req); err == nil {
 				return nil
 			}
@@ -784,11 +787,8 @@ func (s *Service) exportNotesCommand(ctx context.Context, client *gobot.Client, 
 		Message:  fmt.Sprintf("%d catatan berhasil diexport (tanpa password).", len(notes)),
 		RandomID: time.Now().UnixNano(),
 	}
-	if threadID > 0 {
-		mediaReq.SetReplyTo(&tg.InputReplyToMessage{
-			ReplyToMsgID: threadID,
-			TopMsgID:     threadID,
-		})
+	if replyTo := buildReplyTo(threadID, commandReplyMsgID(ctx)); replyTo != nil {
+		mediaReq.SetReplyTo(replyTo)
 	}
 	_, err = client.API().MessagesSendMedia(ctx, mediaReq)
 	return err

@@ -53,13 +53,22 @@ func (s *Service) sendCommandOutput(ctx context.Context, client *gobot.Client, t
 	if strings.TrimSpace(output) == "" {
 		output = "(tidak ada output)"
 	}
+	replyID := commandReplyMsgID(ctx)
 	if threadID > 0 {
 		err := sendUserText(ctx, client, target, output, threadID)
 		return err
 	}
 	sender := client.Sender()
 	if len(output) > 3900 {
+		if replyID > 0 {
+			_, err := sender.To(target).Reply(replyID).Upload(message.FromBytes("dump.txt", []byte(output))).File(ctx)
+			return err
+		}
 		_, err := sender.To(target).Upload(message.FromBytes("dump.txt", []byte(output))).File(ctx)
+		return err
+	}
+	if replyID > 0 {
+		_, err := sender.To(target).Reply(replyID).StyledText(ctx, styling.Code(output))
 		return err
 	}
 	_, err := sender.To(target).StyledText(ctx, styling.Code(output))

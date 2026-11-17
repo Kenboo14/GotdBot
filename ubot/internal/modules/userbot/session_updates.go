@@ -300,7 +300,8 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		if isValidNoteName(hashName) && s.commandAllowed(ctx, client, msg) {
 			peerID, err := s.resolvePeer(ctx, client, chatID, entities, msg.PeerID, msg)
 			if err == nil {
-				return s.showNote(ctx, client, peerID, hashName, false, threadID)
+				s.markCommandExecuted(chatID, msg)
+				return s.showNote(withCommandReplyContext(ctx, msg), client, peerID, hashName, false, threadID)
 			}
 		}
 	}
@@ -340,6 +341,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		)
 		return err
 	}
+
+	ctx = withCommandReplyContext(ctx, msg)
+	s.markCommandExecuted(chatID, msg)
 
 	slog.Info("executing userbot command",
 		slog.String("command", name),
@@ -406,7 +410,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		return s.listBlacklist(ctx, client, peerID, threadID)
 	}
 	if name == "addsudo" || name == "rmsudo" {
-		return s.sudoCommand(ctx, client, peerID, msg, args, name == "addsudo", threadID)
+		return s.sudoCommand(ctx, client, peerID, msg, entities, args, name == "addsudo", threadID)
 	}
 	if name == "save" {
 		return s.saveNoteCommand(ctx, client, peerID, msg, args, threadID)

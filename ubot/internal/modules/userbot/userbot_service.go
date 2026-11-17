@@ -140,6 +140,8 @@ type Service struct {
 	panelBroadcasts     map[int64]*panelBroadcastJob
 	sudoMu              sync.RWMutex
 	sudoCache           map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
+	seenCmdMu           sync.Mutex
+	seenCmds            map[seenCmdKey]seenCmdEntry
 	broadcastSem        chan struct{}             // Semaphore untuk membatasi concurrent gcast
 }
 
@@ -580,6 +582,12 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		dispatcher.OnNewChannelMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateNewChannelMessage) error {
 			return s.processNewChannelMessage(ctx, chatID, client, entities, update)
 		})
+		dispatcher.OnEditMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateEditMessage) error {
+			return s.processEditMessage(ctx, chatID, client, entities, update)
+		})
+		dispatcher.OnEditChannelMessage(func(ctx context.Context, entities tg.Entities, update *tg.UpdateEditChannelMessage) error {
+			return s.processEditChannelMessage(ctx, chatID, client, entities, update)
+		})
 		updateHandler := &userbotUpdateHandler{
 			dispatcher: dispatcher,
 			s:          s,
@@ -774,6 +782,26 @@ func (s *Service) processNewChannelMessage(ctx context.Context, chatID int64, cl
 		s.cacheEntities(entities)
 	}
 	return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: update.Message})
+}
+
+func (s *Service) processEditedMessageClass(ctx context.Context, chatID int64, client *gobot.Client, entities tg.Entities, rawMsg tg.MessageClass) error {
+	msg, ok := rawMsg.(*tg.Message)
+	if !ok || !s.shouldProcessEditedCommand(chatID, msg, time.Now().Unix()) {
+		return nil
+	}
+	if !s.isRelevantMessage(chatID, msg) {
+		return nil
+	}
+	s.cacheEntities(entities)
+	return s.handleUserbotMessage(ctx, chatID, client, entities, &tg.UpdateNewMessage{Message: msg})
+}
+
+func (s *Service) processEditMessage(ctx context.Context, chatID int64, client *gobot.Client, entities tg.Entities, update *tg.UpdateEditMessage) error {
+	return s.processEditedMessageClass(ctx, chatID, client, entities, update.Message)
+}
+
+func (s *Service) processEditChannelMessage(ctx context.Context, chatID int64, client *gobot.Client, entities tg.Entities, update *tg.UpdateEditChannelMessage) error {
+	return s.processEditedMessageClass(ctx, chatID, client, entities, update.Message)
 }
 
 func (s *Service) syncPeersOnReady(ctx context.Context, client *gobot.Client) {

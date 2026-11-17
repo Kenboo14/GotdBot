@@ -2,6 +2,7 @@ package userbot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html"
 	"sort"
@@ -23,19 +24,46 @@ type blacklistRecord struct {
 
 var blacklistFlags = map[string]string{"-pv": "private", "-gc": "group", "-ch": "channel"}
 
-func blacklistTarget(msg *tg.Message, entities tg.Entities, args string) (int64, string, string, error) {
+func (s *Service) blacklistTarget(
+	ctx context.Context,
+	client *gobot.Client,
+	target tg.InputPeerClass,
+	msg *tg.Message,
+	entities tg.Entities,
+	args string,
+) (int64, string, string, error) {
 	parts := strings.Fields(args)
 	kind := ""
+	var userArgs []string
 	for _, part := range parts {
 		if value, ok := blacklistFlags[strings.ToLower(part)]; ok {
 			if kind != "" && kind != value {
-				return 0, "", "", fmt.Errorf("gunakan maksimal satu flag")
+				return 0, "", "", fmt.Errorf("gunakan maksimal satu flag (-pv, -gc, atau -ch)")
 			}
 			kind = value
 		} else {
-			return 0, "", "", fmt.Errorf("target blacklist menggunakan chat saat command dikirim")
+			userArgs = append(userArgs, part)
 		}
 	}
+
+	if kind == "private" {
+		// Jika ada argumen user (mis. !addbl -pv 12345) ATAU dikirim di grup sambil reply pesan user:
+		// ambil User ID target secara otomatis dari argumen atau pesan yang dibalas.
+		_, isPM := msg.PeerID.(*tg.PeerUser)
+		if len(userArgs) > 0 || !isPM {
+			uid, title, err := s.resolveTargetUserID(ctx, client, target, msg, entities, strings.Join(userArgs, " "))
+			if err != nil {
+				if errors.Is(err, errNoTargetUser) {
+					return 0, "", "", fmt.Errorf("balas pesan pengguna atau sertakan user_id setelah -pv")
+				}
+				return 0, "", "", err
+			}
+			return uid, "private", title, nil
+		}
+	} else if len(userArgs) > 0 {
+		return 0, "", "", fmt.Errorf("target blacklist menggunakan chat saat command dikirim (atau gunakan -pv untuk target pengguna)")
+	}
+
 	peer, err := extractPeer(entities, msg.PeerID)
 	if err != nil {
 		return 0, "", "", err
@@ -120,9 +148,9 @@ func (s *Service) blacklistCommand(ctx context.Context, client *gobot.Client, ta
 	if err != nil {
 		return err
 	}
-	chatID, kind, title, err := blacklistTarget(msg, entities, args)
+	chatID, kind, title, err := s.blacklistTarget(ctx, client, target, msg, entities, args)
 	if err != nil {
-		return sendUserText(ctx, client, target, "Format blacklist: !addbl [-pv|-gc|-ch] di chat target.", threadID)
+		return sendUserText(ctx, client, target, "Format blacklist: !addbl [-pv|-gc|-ch] ("+err.Error()+")", threadID)
 	}
 	switch operation {
 	case "add":
