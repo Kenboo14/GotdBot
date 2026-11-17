@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"assterisk/gateway/internal/databases"
+	"assterisk/gateway/internal/models"
 )
 
 func TestGenerateMasterToken(t *testing.T) {
@@ -216,5 +217,23 @@ func TestLicenseExpiryMarksExpiredAndUpdatesMasaAktif(t *testing.T) {
 	cfg := dm.GetUserConfig(ctx, ownerID)
 	if cfg.Status != "Berhenti" || cfg.MasaAktif == "November 29, 2026 at 14:18" || cfg.MasaAktif == "Belum diatur" {
 		t.Fatalf("expected expired MasaAktif and Berhenti status, got status=%q masa_aktif=%q", cfg.Status, cfg.MasaAktif)
+	}
+}
+
+func TestTelemetryTrackerMonotonicStreamID(t *testing.T) {
+	tr := &telemetryTracker{
+		sessionStates: make(map[int64]string),
+		lastEventIDs:  make(map[int64]string),
+		alerts:        make(chan alertEventItem, 10),
+	}
+	chatID := int64(8069246732)
+
+	// Newer CONNECTED arrives first
+	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "CONNECTED"}, "1763361449500-0")
+	// Older CONNECTING arrives late out-of-order and must be ignored
+	tr.recordSessionEvent(models.PFromService{ChatID: chatID, State: "CONNECTING"}, "1763361448390-0")
+
+	if got := tr.sessionStates[chatID]; got != "CONNECTED" {
+		t.Fatalf("expected CONNECTED state to be preserved, got %q", got)
 	}
 }

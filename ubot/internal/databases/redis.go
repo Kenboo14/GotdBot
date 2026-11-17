@@ -28,8 +28,8 @@ func NewRedis(ctx context.Context, addr string, pwd string, useTLS bool) (*Redis
 		Addr:         addr,
 		Password:     pwd,
 		DB:           0,
-		PoolSize:     100,
-		MinIdleConns: 10,
+		PoolSize:     48,
+		MinIdleConns: 2,
 		MaxRetries:   3,
 		TLSConfig:    tlsConfig,
 	})
@@ -66,12 +66,18 @@ func (r *Redis) To(ctx context.Context, stream string, data *models.PFromService
 }
 
 func (r *Redis) Listener(ctx context.Context, group, worker, stream string, callback func(context.Context, redis.XMessage)) {
+	r.ListenerWithWorkers(ctx, group, worker, stream, 16, callback)
+}
+
+func (r *Redis) ListenerWithWorkers(ctx context.Context, group, worker, stream string, workerCount int, callback func(context.Context, redis.XMessage)) {
+	if workerCount <= 0 {
+		workerCount = 1
+	}
 	err := r.Client.XGroupCreateMkStream(ctx, stream, group, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		log.Printf("Error creating group %s on %s: %v", group, stream, err)
 	}
 
-	const workerCount = 16
 	jobQueue := make(chan redis.XMessage, workerCount*4)
 
 	// Bounded Worker Pool untuk concurrency stabil tanpa Head-of-Line Blocking

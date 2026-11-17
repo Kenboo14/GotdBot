@@ -586,7 +586,7 @@ func (m *DataManager) GetLatestUserLicense(ctx context.Context, ownerChatID int6
 	return nil, nil
 }
 
-func (m *DataManager) ListExpiredUserLicenses(ctx context.Context, now time.Time) ([]*UserLicense, error) {
+func (m *DataManager) ListExpiredUserLicenses(ctx context.Context, now time.Time, includeRemote ...bool) ([]*UserLicense, error) {
 	seen := make(map[string]bool)
 	var result []*UserLicense
 	if m.sqlite != nil {
@@ -600,16 +600,19 @@ func (m *DataManager) ListExpiredUserLicenses(ctx context.Context, now time.Time
 			}
 		}
 	}
-	if mg := m.getMongo(); mg != nil {
-		list, err := mg.ListExpiredUserLicenses(ctx, now)
-		if err == nil {
-			for _, ul := range list {
-				if ul != nil && !seen[ul.TokenSHA] {
-					seen[ul.TokenSHA] = true
-					if m.sqlite != nil {
-						_ = m.sqlite.SaveUserLicense(ctx, ul)
+	checkRemote := len(includeRemote) > 0 && includeRemote[0]
+	if checkRemote {
+		if mg := m.getMongo(); mg != nil {
+			list, err := mg.ListExpiredUserLicenses(ctx, now)
+			if err == nil {
+				for _, ul := range list {
+					if ul != nil && !seen[ul.TokenSHA] {
+						seen[ul.TokenSHA] = true
+						if m.sqlite != nil {
+							_ = m.sqlite.SaveUserLicense(ctx, ul)
+						}
+						result = append(result, ul)
 					}
-					result = append(result, ul)
 				}
 			}
 		}

@@ -30,8 +30,8 @@ func NewRedis(ctx context.Context, addr string, pwd string, useTLS bool) (*Redis
 		Addr:         addr,
 		Password:     pwd,
 		DB:           0,
-		PoolSize:     100,
-		MinIdleConns: 10,
+		PoolSize:     32,
+		MinIdleConns: 2,
 		MaxRetries:   3,
 		TLSConfig:    tlsConfig,
 	})
@@ -77,13 +77,19 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 }
 
 func (r *Redis) Listener(ctx context.Context, b *botgotd.Bot, group string, worker string, stream string, callback func(context.Context, *botgotd.Bot, redis.XMessage)) {
+	r.ListenerWithWorkers(ctx, b, group, worker, stream, 16, callback)
+}
+
+func (r *Redis) ListenerWithWorkers(ctx context.Context, b *botgotd.Bot, group string, worker string, stream string, workerCount int, callback func(context.Context, *botgotd.Bot, redis.XMessage)) {
+	if workerCount <= 0 {
+		workerCount = 1
+	}
 	// Buat consumer group jika belum ada
 	err := r.Client.XGroupCreateMkStream(ctx, stream, group, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
 		utils.LogError("Create Group failed", err, map[string]interface{}{"group": group, "stream": stream})
 	}
 
-	const workerCount = 16
 	jobQueue := make(chan redis.XMessage, workerCount*4)
 
 	// Inisialisasi Bounded Worker Pool untuk mencegah Head-of-Line Blocking

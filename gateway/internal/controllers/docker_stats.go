@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -61,7 +60,8 @@ func getDockerClient(socketPath string) *http.Client {
 	dockerClientOnce.Do(func() {
 		dockerHTTPClient = &http.Client{
 			Transport: &http.Transport{
-				DisableKeepAlives: true,
+				MaxIdleConns:    4,
+				IdleConnTimeout: 60 * time.Second,
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 					return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
 				},
@@ -95,13 +95,8 @@ func fetchDockerStackStats(ctx context.Context) (*stackResourceStats, error) {
 		return nil, fmt.Errorf("unexpected status code listing containers: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read containers list: %w", err)
-	}
-
 	var containers []containerBrief
-	if err := json.Unmarshal(body, &containers); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
 		return nil, fmt.Errorf("failed to parse containers list: %w", err)
 	}
 
@@ -172,13 +167,8 @@ func readSingleContainerStats(ctx context.Context, client *http.Client, cid stri
 		return 0, 0, fmt.Errorf("stats status %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, 0, fmt.Errorf("stats read error: %w", err)
-	}
-
 	var s containerStatsPayload
-	if err := json.Unmarshal(body, &s); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
 		return 0, 0, fmt.Errorf("stats unmarshal error: %w", err)
 	}
 

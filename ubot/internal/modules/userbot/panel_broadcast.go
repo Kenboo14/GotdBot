@@ -1250,7 +1250,11 @@ func (s *Service) launchPanelBroadcast(client *gobot.Client, chatID, ownerID int
 	if existing, ok := s.panelBroadcasts[ownerID]; ok && existing != nil {
 		existing.cancel()
 	}
-	bCtx, bCancel := context.WithCancel(context.Background())
+	parentCtx := s.root
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	bCtx, bCancel := context.WithCancel(parentCtx)
 	s.panelBroadcasts[ownerID] = &panelBroadcastJob{cancel: bCancel}
 	s.mu.Unlock()
 

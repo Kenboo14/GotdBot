@@ -47,25 +47,30 @@ func (h *Handler) startLicenseExpiryMonitor(ctx context.Context, b *botgotd.Bot)
 	case <-time.After(3 * time.Second):
 	}
 
-	h.processExpiredLicenses(ctx, b)
+	h.processExpiredLicenses(ctx, b, true)
+	lastRemoteSync := time.Now()
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			h.processExpiredLicenses(ctx, b)
+			includeRemote := time.Since(lastRemoteSync) >= 15*time.Minute
+			if includeRemote {
+				lastRemoteSync = time.Now()
+			}
+			h.processExpiredLicenses(ctx, b, includeRemote)
 		}
 	}
 }
 
-func (h *Handler) processExpiredLicenses(ctx context.Context, b *botgotd.Bot) {
+func (h *Handler) processExpiredLicenses(ctx context.Context, b *botgotd.Bot, includeRemote ...bool) {
 	if h == nil || h.db == nil {
 		return
 	}
-	expired, err := h.db.ListExpiredUserLicenses(ctx, time.Now())
+	expired, err := h.db.ListExpiredUserLicenses(ctx, time.Now(), includeRemote...)
 	if err != nil {
 		log.Printf("⚠️ [license] ListExpiredUserLicenses error: %v", err)
 		return

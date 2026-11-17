@@ -32,7 +32,7 @@ func startSessionEventWebSocket(ctx context.Context, r *broker.Redis) {
 		token:   strings.TrimSpace(os.Getenv("SESSION_WS_TOKEN")),
 	}
 
-	go r.Listener(ctx, nil, "session:events", "session:ws", "session:events", func(_ context.Context, _ *botgotd.Bot, msg redis.XMessage) {
+	go r.ListenerWithWorkers(ctx, nil, "session:events:ws", "session:ws", "session:events", 1, func(_ context.Context, _ *botgotd.Bot, msg redis.XMessage) {
 		payload, ok := msg.Values["payload"].(string)
 		if !ok {
 			return

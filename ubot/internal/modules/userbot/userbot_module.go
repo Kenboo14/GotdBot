@@ -27,7 +27,7 @@ func (m *Init) Register(ctx context.Context, sqlite *databases.SQLiteClient, db 
 	}
 	service := NewService(ctx, sqlite, db, redis, m.Config.Userbot.APIID, m.Config.Userbot.APIHash, key, m.Config.Telegram.BotToken, m.Config.Telegram.LogBotToken, m.Config.OwnerID)
 	go service.Restore(ctx)
-	go redis.Listener(ctx, "to:group:ubot", "to:worker:auth", "to:ubot:auth", service.Handle)
+	go redis.ListenerWithWorkers(ctx, "to:group:ubot", "to:worker:auth", "to:ubot:auth", 4, service.Handle)
 	go redis.Listener(ctx, "to:group:command", "to:worker:command", "to:ubot:command", service.HandleCommand)
 }
 

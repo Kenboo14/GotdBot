@@ -152,6 +152,16 @@ func (s *Service) publishSessionState(chatID, ownerID int64, state AccountSessio
 		return
 	}
 
+	if reason != "periodic_sync" && state != StateSessionInvalid {
+		s.mu.RLock()
+		prevState, ok := s.lastPublishedStates[chatID]
+		lastAt := s.lastPublishedAt[chatID]
+		s.mu.RUnlock()
+		if ok && prevState == state && !lastAt.IsZero() && time.Since(lastAt) < 10*time.Second {
+			return
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := s.redis.To(ctx, "session:events", &models.PFromService{
@@ -524,6 +534,9 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 				delete(s.activeCancels, chatID)
 				delete(s.accountCtxs, chatID)
 				delete(s.accountGens, chatID)
+				delete(s.lastUpdate, chatID)
+				delete(s.lastVerified, chatID)
+				delete(s.reconnectAttempts, chatID)
 			}
 			if client != nil {
 				delete(s.clientOwners, client)

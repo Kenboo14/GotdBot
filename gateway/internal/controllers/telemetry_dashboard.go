@@ -53,6 +53,7 @@ type simulationMetricsDoc struct {
 type telemetryTracker struct {
 	mu                  sync.RWMutex
 	sessionStates       map[int64]string // chatID -> state
+	lastEventIDs        map[int64]string // chatID -> latest Redis stream ID
 	bootTime            time.Time
 	alerts              chan alertEventItem
 	lastDashboardMsgID  int
@@ -69,6 +70,7 @@ var globalTelemetry *telemetryTracker
 func init() {
 	globalTelemetry = &telemetryTracker{
 		sessionStates: make(map[int64]string),
+		lastEventIDs:  make(map[int64]string),
 		bootTime:      time.Now(),
 		alerts:        make(chan alertEventItem, 200),
 	}
@@ -105,9 +107,9 @@ func startTelemetryDashboard(ctx context.Context, b *botgotd.Bot, r *broker.Redi
 	globalTelemetry.rdb = r.Client
 	globalTelemetry.mu.Unlock()
 
-	// 1. Worker Consumer: Listen to session:events stream
+	// 1. Worker Consumer: Listen to session:events stream with dedicated group & 1 ordered worker
 	go func() {
-		r.Listener(ctx, nil, "session:events", "session:telemetry", "session:events", func(_ context.Context, _ *botgotd.Bot, msg redis.XMessage) {
+		r.ListenerWithWorkers(ctx, nil, "session:events:telemetry", "session:telemetry", "session:events", 1, func(_ context.Context, _ *botgotd.Bot, msg redis.XMessage) {
 			payload, ok := msg.Values["payload"].(string)
 			if !ok {
 				return
@@ -117,7 +119,7 @@ func startTelemetryDashboard(ctx context.Context, b *botgotd.Bot, r *broker.Redi
 				return
 			}
 
-			globalTelemetry.recordSessionEvent(event)
+			globalTelemetry.recordSessionEvent(event, msg.ID)
 		})
 	}()
 
@@ -132,10 +134,50 @@ func startTelemetryDashboard(ctx context.Context, b *botgotd.Bot, r *broker.Redi
 	go globalTelemetry.runAlertDigestLoop(ctx, b)
 }
 
-func (t *telemetryTracker) recordSessionEvent(event models.PFromService) {
+func parseRedisStreamID(id string) (int64, int64, bool) {
+	msStr, seqStr, ok := strings.Cut(id, "-")
+	if !ok {
+		return 0, 0, false
+	}
+	ms, err1 := strconv.ParseInt(msStr, 10, 64)
+	seq, err2 := strconv.ParseInt(seqStr, 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return ms, seq, true
+}
+
+func isNewerStreamID(prev, next string) bool {
+	if prev == "" || next == "" {
+		return true
+	}
+	pMs, pSeq, pOk := parseRedisStreamID(prev)
+	nMs, nSeq, nOk := parseRedisStreamID(next)
+	if !pOk || !nOk {
+		return true
+	}
+	if nMs != pMs {
+		return nMs > pMs
+	}
+	return nSeq > pSeq
+}
+
+func (t *telemetryTracker) recordSessionEvent(event models.PFromService, streamID ...string) {
+	msgID := ""
+	if len(streamID) > 0 {
+		msgID = streamID[0]
+	}
 	t.mu.Lock()
 	if event.ChatID != 0 && event.State != "" {
-		t.sessionStates[event.ChatID] = event.State
+		if t.lastEventIDs == nil {
+			t.lastEventIDs = make(map[int64]string)
+		}
+		if isNewerStreamID(t.lastEventIDs[event.ChatID], msgID) {
+			t.sessionStates[event.ChatID] = event.State
+			if msgID != "" {
+				t.lastEventIDs[event.ChatID] = msgID
+			}
+		}
 	}
 	t.mu.Unlock()
 
