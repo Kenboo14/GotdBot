@@ -421,6 +421,15 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if name == "statuslog" {
 		return s.handleStatusLogCommand(ctx, client, peerID, threadID)
 	}
+	if name == "addblock" || name == "rmblock" {
+		return s.handleLogBlockCommand(ctx, client, peerID, msg, entities, args, name == "addblock", threadID)
+	}
+	if name == "lsblock" {
+		return s.handleListLogBlockCommand(ctx, client, peerID, threadID)
+	}
+	if name == "rmallblock" {
+		return s.handleClearLogBlockCommand(ctx, client, peerID, threadID)
+	}
 	if name == "get" {
 		fields := strings.Fields(args)
 		if len(fields) == 0 {

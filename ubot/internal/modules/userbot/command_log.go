@@ -330,6 +330,22 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
+	// Filter pengirim sebelum evaluasi lanjutan:
+	// 1) Akun resmi Telegram (777000)
+	// 2) Daftar blokir manual (!addblock)
+	// 3) Akun bot / username *bot yang sudah diketahui di entities/cache
+	senderUserID := extractLogSenderUserID(msg)
+	if senderUserID == telegramServiceUserID {
+		return
+	}
+	if senderUserID > 0 && s.isUserLogBlocked(ctx, ownerID, senderUserID) {
+		return
+	}
+	knownSender, senderIsBot := s.isKnownBotEntity(entities, senderUserID)
+	if knownSender && senderIsBot {
+		return
+	}
+
 	// Evaluasi apakah pesan harus di-log:
 	// 1. Private Chat (PM) -> Selalu di-log
 	// 2. Grup / Channel -> HANYA jika pesan me-reply userbot ATAU me-mention userbot
@@ -377,12 +393,9 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 					}
 				case *tg.MessageEntityMention:
 					if ownerUsername != "" {
-						msgRunes := []rune(msg.Message)
-						if e.Offset >= 0 && e.Offset+e.Length <= len(msgRunes) {
-							mentionStr := strings.ToLower(string(msgRunes[e.Offset : e.Offset+e.Length]))
-							if strings.TrimPrefix(mentionStr, "@") == ownerUsername {
-								shouldLog = true
-							}
+						mentionStr := strings.ToLower(extractUTF16EntityText(msg.Message, e.Offset, e.Length))
+						if mentionStr != "" && strings.TrimPrefix(mentionStr, "@") == ownerUsername {
+							shouldLog = true
 						}
 					}
 				}
@@ -397,17 +410,43 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return
 	}
 
+	now := time.Now()
+	// Anti-spam log: deteksi userbot Tag-All / mass-mention & burst mention di grup/channel
+	if !isPrivate {
+		if isMassMentionOrTagAll(msg) {
+			return
+		}
+		if mentionCount := countUniqueMentionTargets(msg); mentionCount > 0 {
+			if s.recordAndCheckMentionBurst(ownerID, sourceChatID, senderUserID, mentionCount, now) {
+				return
+			}
+		}
+	}
+
+	// Anti-spam log: deteksi auto-reply / AFK template berulang yang identik dari pengirim sama
+	if senderUserID > 0 && s.isDuplicateAutoReply(ownerID, senderUserID, msg.Message, now) {
+		return
+	}
+
 	// Salin data dan jalankan forwarding secara async
 	msgCopy := *msg
+	confirmedHuman := knownSender && !senderIsBot
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		s.forwardLogs(bgCtx, client, ownerID, entities, &msgCopy, chatType, chatTitle, sourceChatID)
+		s.forwardLogs(bgCtx, client, ownerID, entities, &msgCopy, chatType, chatTitle, sourceChatID, confirmedHuman)
 	}()
 }
 
 // forwardLogs memformat dan mengirim log (teks + media) ke pemilik via Bot API
-func (s *Service) forwardLogs(ctx context.Context, client *gobot.Client, ownerID int64, entities tg.Entities, msg *tg.Message, chatType, chatTitle string, sourceChatID int64) {
+func (s *Service) forwardLogs(ctx context.Context, client *gobot.Client, ownerID int64, entities tg.Entities, msg *tg.Message, chatType, chatTitle string, sourceChatID int64, confirmedHuman bool) {
+	if !confirmedHuman {
+		if senderUserID := extractLogSenderUserID(msg); senderUserID > 0 {
+			if s.isUserBotMTProto(ctx, client, entities, senderUserID) {
+				return
+			}
+		}
+	}
 	logBotID, _, err := s.resolveLogBotInfo(ctx)
 	if err != nil {
 		log.Printf("[LogBot] resolveLogBotInfo gagal: %v", err)

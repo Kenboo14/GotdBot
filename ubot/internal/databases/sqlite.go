@@ -42,6 +42,13 @@ type BlacklistRecord struct {
 	CreatedAt time.Time
 }
 
+type LogBlockRecord struct {
+	OwnerID   int64
+	UserID    int64
+	Label     string
+	CreatedAt time.Time
+}
+
 type NoteRecord struct {
 	OwnerID        int64     `json:"owner_id"`
 	Name           string    `json:"name"`
@@ -162,6 +169,15 @@ func (s *SQLiteClient) initTables() error {
 			enabled INTEGER DEFAULT 0,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS log_blocked_users (
+			owner_id INTEGER NOT NULL,
+			user_id INTEGER NOT NULL,
+			label TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (owner_id, user_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_log_blocked_owner ON log_blocked_users(owner_id);`,
 
 		`CREATE TABLE IF NOT EXISTS log_routes (
 			log_bot_id INTEGER NOT NULL,
@@ -436,6 +452,9 @@ func (s *SQLiteClient) RelinkUserbotData(ctx context.Context, oldChatID, newChat
 		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO userbot_logs (owner_id, enabled, updated_at) SELECT ?, enabled, updated_at FROM userbot_logs WHERE owner_id = ?;`, toID, fromID)
 		_, _ = tx.ExecContext(ctx, `DELETE FROM userbot_logs WHERE owner_id = ?;`, fromID)
 
+		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO log_blocked_users (owner_id, user_id, label, created_at) SELECT ?, user_id, label, created_at FROM log_blocked_users WHERE owner_id = ?;`, toID, fromID)
+		_, _ = tx.ExecContext(ctx, `DELETE FROM log_blocked_users WHERE owner_id = ?;`, fromID)
+
 		_, _ = tx.ExecContext(ctx, `UPDATE log_routes SET user_id = ? WHERE user_id = ?;`, toID, fromID)
 	}
 
@@ -578,6 +597,52 @@ func (s *SQLiteClient) IsBlacklisted(ctx context.Context, ownerID int64, chatTyp
 	var count int
 	query := `SELECT COUNT(1) FROM broadcast_blacklist WHERE owner_id = ? AND chat_type = ? AND chat_id = ?;`
 	err := s.DB.QueryRowContext(ctx, query, ownerID, chatType, chatID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *SQLiteClient) AddLogBlock(ctx context.Context, ownerID, userID int64, label string) error {
+	query := `INSERT INTO log_blocked_users (owner_id, user_id, label)
+		VALUES (?, ?, ?)
+		ON CONFLICT(owner_id, user_id) DO UPDATE SET
+			label = CASE WHEN excluded.label != '' THEN excluded.label ELSE log_blocked_users.label END;`
+	_, err := s.DB.ExecContext(ctx, query, ownerID, userID, label)
+	return err
+}
+
+func (s *SQLiteClient) RemoveLogBlock(ctx context.Context, ownerID, userID int64) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM log_blocked_users WHERE owner_id = ? AND user_id = ?;`, ownerID, userID)
+	return err
+}
+
+func (s *SQLiteClient) ClearLogBlocks(ctx context.Context, ownerID int64) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM log_blocked_users WHERE owner_id = ?;`, ownerID)
+	return err
+}
+
+func (s *SQLiteClient) ListLogBlocks(ctx context.Context, ownerID int64) ([]LogBlockRecord, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT owner_id, user_id, label, created_at FROM log_blocked_users WHERE owner_id = ? ORDER BY user_id ASC;`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []LogBlockRecord
+	for rows.Next() {
+		var r LogBlockRecord
+		if err := rows.Scan(&r.OwnerID, &r.UserID, &r.Label, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
+func (s *SQLiteClient) IsLogBlocked(ctx context.Context, ownerID, userID int64) (bool, error) {
+	var count int
+	err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM log_blocked_users WHERE owner_id = ? AND user_id = ?;`, ownerID, userID).Scan(&count)
 	if err != nil {
 		return false, err
 	}

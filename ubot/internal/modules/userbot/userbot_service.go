@@ -105,7 +105,12 @@ type Service struct {
 	logBotUsername      string
 	startedLogBots      sync.Map // key: [2]int64{userbotID, logBotID} -> true
 	logStatusCache      sync.Map // key: int64 (ownerID) -> bool
+	logBlockCache       sync.Map // key: "ownerID:userID" -> bool
+	botUserCache        sync.Map // key: int64 (userID) -> botCacheEntry
 	ownerUsernames      sync.Map // key: int64 (ownerID) -> lowercase username without @
+	logFilterMu         sync.Mutex
+	mentionBursts       map[mentionBurstKey][]time.Time
+	autoReplyHist       map[autoReplyKey]autoReplyEntry
 	peers               *gobot.PeerStorage
 	lastLogBotMsgID     sync.Map      // key: int64 (ownerID) -> int (MTProto msg ID terbaru dari LogBot)
 	floodCooldowns      sync.Map      // key: int64 (chatID) -> time.Time (cooldownUntil)
@@ -396,6 +401,9 @@ func (s *Service) Restore(ctx context.Context) {
 
 		// 5. Sinkronisasi Riwayat Rute Balasan Log dari MongoDB Cloud Atlas ke SQLite lokal
 		s.logLoadRoutesFromMongo(ctx)
+
+		// 5b. Sinkronisasi Daftar Block Log dari MongoDB Cloud Atlas ke SQLite lokal
+		s.logLoadBlocksFromMongo(ctx)
 
 		// 6. Sinkronisasi Pengaturan Userbot (prefix) dari MongoDB ke SQLite lokal
 		if curSet, err := s.db.Collection("userbot_settings").Find(ctx, bson.M{"prefix_configured": true}); err == nil {
