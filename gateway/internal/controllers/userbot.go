@@ -182,13 +182,16 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				})
 				return
 			}
-			if lic.Status != "active" || time.Now().After(lic.ExpiresAt) {
+			if lic.Status != "active" || !lic.ExpiresAt.After(time.Now()) {
+				if lic.Status == "active" {
+					h.expireSingleLicense(ctx, b, lic)
+				}
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID: chatID,
 					Text: fmt.Sprintf(`<h1>❌ Token SHA Kedaluwarsa</h1>
-<blockquote expandable>Masa aktif token lisensi ini telah habis pada <b>%s</b>.</blockquote>
+<blockquote expandable>Masa aktif token lisensi ini telah habis pada <b>%s</b> dan tidak dapat digunakan kembali.</blockquote>
 <hr/>
-<p>Silakan hubungi Owner untuk memperpanjang lisensi Anda.</p>`, lic.ExpiresAt.Format("02-01-2006 15:04")),
+<p>Silakan hubungi Owner untuk mendapatkan token lisensi baru.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -240,19 +243,60 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			if tm.Status != "active" {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        `<h1>❌ Token Tidak Aktif</h1><blockquote expandable>Token voucher ini telah dinonaktifkan oleh Owner.</blockquote><hr/><p>Silakan hubungi Owner untuk konfirmasi status token lisensi.</p>`,
+					Text:        `<h1>❌ Token Tidak Aktif / Kedaluwarsa</h1><blockquote expandable>Token voucher ini sudah kedaluwarsa atau dinonaktifkan oleh Owner dan tidak dapat digunakan kembali.</blockquote><hr/><p>Silakan hubungi Owner untuk mendapatkan token lisensi baru.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
 				return
 			}
 
-			if !tm.IsShared && tm.ClaimCount >= 1 {
+			if !tm.IsShared {
+				used, _ := h.db.HasUsedMasterToken(ctx, tm.Token)
+				if tm.ClaimCount >= 1 || used {
+					b.SendMessage(ctx, &botgotd.SendMessageParams{
+						ChatID:      chatID,
+						Text:        `<h1>❌ Token Sudah Digunakan</h1><blockquote expandable>Token voucher personal ini sudah pernah diklaim sebelumnya dan tidak dapat digunakan ulang.</blockquote><hr/><p>Voucher personal hanya dapat diklaim satu kali.</p>`,
+						ParseMode:   "HTML",
+						ReplyMarkup: assets.CancelOnlyMarkup,
+					})
+					return
+				}
+			}
+
+			existingSHA := ComputeTokenSHA(tm.Token, chatID)
+			if prevLic, _ := h.db.GetUserLicenseBySHA(ctx, existingSHA); prevLic != nil {
+				if prevLic.Status != "active" || !prevLic.ExpiresAt.After(time.Now()) {
+					if prevLic.Status == "active" {
+						h.expireSingleLicense(ctx, b, prevLic)
+					}
+					b.SendMessage(ctx, &botgotd.SendMessageParams{
+						ChatID: chatID,
+						Text: fmt.Sprintf(`<h1>❌ Token Sudah Kedaluwarsa</h1>
+<blockquote expandable>Token ini pernah digunakan pada akun Anda dan masa aktifnya telah berakhir pada <b>%s</b>. Token tidak dapat digunakan kembali.</blockquote>
+<hr/>
+<p>Silakan masukkan token baru dari Owner.</p>`, prevLic.ExpiresAt.Local().Format("02-01-2006 15:04")),
+						ParseMode:   "HTML",
+						ReplyMarkup: assets.CancelOnlyMarkup,
+					})
+					return
+				}
+
+				sisaDur := FormatDurationID(time.Until(prevLic.ExpiresAt))
+				h.Sessions.mu.Lock()
+				session.ClaimedLicense = prevLic
+				session.PendingTokenSHA = prevLic.TokenSHA
+				session.PendingMasterToken = prevLic.MasterToken
+				session.PendingTier = prevLic.Tier
+				session.PendingDuration = int64(time.Until(prevLic.ExpiresAt).Seconds())
+				session.OldOwnerID = prevLic.OwnerChatID
+				session.State = "waiting_phone"
+				h.Sessions.mu.Unlock()
+
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        `<h1>❌ Token Sudah Digunakan</h1><blockquote expandable>Token voucher personal ini sudah pernah diklaim sebelumnya.</blockquote><hr/><p>Voucher personal hanya dapat diklaim satu kali per akun.</p>`,
+					Text:        assets.TxtTokenDetected(prevLic.Tier, sisaDur),
 					ParseMode:   "HTML",
-					ReplyMarkup: assets.CancelOnlyMarkup,
+					ReplyMarkup: assets.InstallPhoneMarkup,
 				})
 				return
 			}

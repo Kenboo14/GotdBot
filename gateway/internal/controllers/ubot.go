@@ -110,12 +110,19 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		var expiresAt time.Time
 		var masterToken string
 
+		userbotID := data.OwnerID
+		if userbotID == 0 {
+			userbotID = data.ChatID
+		}
+
 		if pendingSess != nil && pendingSess.PendingTokenSHA != "" {
 			tokenSHA = pendingSess.PendingTokenSHA
 			tier = pendingSess.PendingTier
 			masterToken = pendingSess.PendingMasterToken
+			var oldUserbotID int64
 			if pendingSess.ClaimedLicense != nil {
 				expiresAt = pendingSess.ClaimedLicense.ExpiresAt
+				oldUserbotID = pendingSess.ClaimedLicense.UserbotID
 			} else if pendingSess.PendingDuration > 0 {
 				expiresAt = time.Now().Add(time.Duration(pendingSess.PendingDuration) * time.Second)
 			} else {
@@ -123,6 +130,17 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			}
 			if pendingSess.OldOwnerID > 0 && pendingSess.OldOwnerID != data.ChatID {
 				_ = h.db.RelinkUserData(ctx, pendingSess.OldOwnerID, data.ChatID)
+			}
+			if pendingSess.OldOwnerID > 0 && (pendingSess.OldOwnerID != data.ChatID || (oldUserbotID > 0 && oldUserbotID != userbotID)) {
+				if h.broker != nil {
+					_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
+						ChatID:       data.ChatID,
+						UserID:       userbotID,
+						OwnerID:      pendingSess.OldOwnerID,
+						OldUserbotID: oldUserbotID,
+						Type:         "relink_user_data",
+					})
+				}
 			}
 		} else if pendingSess != nil && pendingSess.PendingMasterToken != "" {
 			masterToken = pendingSess.PendingMasterToken
@@ -152,11 +170,6 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 				expiresAt = time.Now().Add(time.Duration(durSec) * time.Second)
 			}
 		}
-
-		userbotID := data.OwnerID
-		if userbotID == 0 {
-			userbotID = data.ChatID
-		}
 		canCustomWM := (tier == "Pro++" || tier == "Vip")
 
 		lic := &databases.UserLicense{
@@ -173,9 +186,12 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		if saveErr := h.db.SaveUserLicense(ctx, lic); saveErr != nil {
 			log.Printf("[license] failed saving user license for chat %d: %v", data.ChatID, saveErr)
 		}
+		cfg := h.db.GetUserConfig(ctx, data.ChatID)
+		cfg.MasaAktif = formatLicenseMasaAktif(lic)
+		_ = h.db.SaveUserConfig(ctx, cfg)
 
 		sisaDur := FormatDurationID(time.Until(expiresAt))
-		expFormatted := expiresAt.Format("02-01-2006 15:04:05")
+		expFormatted := expiresAt.Local().Format("02-01-2006 15:04:05")
 
 		params.Text = assets.RichInstallSuccess(tier, expFormatted, sisaDur, tokenSHA)
 		params.ParseMode = "HTML"

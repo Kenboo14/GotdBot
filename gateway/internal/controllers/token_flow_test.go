@@ -153,3 +153,68 @@ func TestTokenDatabaseOperations(t *testing.T) {
 		t.Fatalf("RelinkUserData err: %v", err)
 	}
 }
+
+func TestLicenseExpiryMarksExpiredAndUpdatesMasaAktif(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "test_expiry.db")
+	dm, err := databases.NewDataManager(ctx, ctx, "", "", dbPath)
+	if err != nil {
+		t.Fatalf("NewDataManager failed: %v", err)
+	}
+	defer dm.Close()
+
+	masterTok := GenerateMasterToken()
+	tm := &databases.TokenMaster{
+		Token:           masterTok,
+		Tier:            "Pro",
+		DurationSeconds: 60,
+		IsShared:        false,
+		ClaimCount:      1,
+		CreatedBy:       1,
+		CreatedAt:       time.Now().Add(-2 * time.Hour),
+		Status:          "active",
+	}
+	if err := dm.SaveTokenMaster(ctx, tm); err != nil {
+		t.Fatalf("SaveTokenMaster failed: %v", err)
+	}
+
+	ownerID := int64(554433)
+	sha := ComputeTokenSHA(masterTok, ownerID)
+	expTime := time.Now().Add(-5 * time.Minute)
+	lic := &databases.UserLicense{
+		TokenSHA:    sha,
+		MasterToken: masterTok,
+		OwnerChatID: ownerID,
+		UserbotID:   ownerID,
+		Tier:        "Pro",
+		ExpiresAt:   expTime,
+		CreatedAt:   time.Now().Add(-2 * time.Hour),
+		Status:      "active",
+	}
+	if err := dm.SaveUserLicense(ctx, lic); err != nil {
+		t.Fatalf("SaveUserLicense failed: %v", err)
+	}
+
+	h := NewHandler(nil, dm)
+	h.processExpiredLicenses(ctx, nil)
+
+	gotLic, err := dm.GetUserLicenseBySHA(ctx, sha)
+	if err != nil || gotLic == nil || gotLic.Status != "expired" {
+		t.Fatalf("expected license status 'expired', got %+v (err=%v)", gotLic, err)
+	}
+	gotTM, err := dm.GetTokenMaster(ctx, masterTok)
+	if err != nil || gotTM == nil || gotTM.Status != "expired" {
+		t.Fatalf("expected personal master token status 'expired', got %+v (err=%v)", gotTM, err)
+	}
+	if active, _ := dm.GetActiveUserLicense(ctx, ownerID); active != nil {
+		t.Fatalf("expected no active license after expiry, got %+v", active)
+	}
+	if used, _ := dm.HasUsedMasterToken(ctx, masterTok); !used {
+		t.Fatalf("expected HasUsedMasterToken=true for expired token")
+	}
+
+	cfg := dm.GetUserConfig(ctx, ownerID)
+	if cfg.Status != "Berhenti" || cfg.MasaAktif == "November 29, 2026 at 14:18" || cfg.MasaAktif == "Belum diatur" {
+		t.Fatalf("expected expired MasaAktif and Berhenti status, got status=%q masa_aktif=%q", cfg.Status, cfg.MasaAktif)
+	}
+}

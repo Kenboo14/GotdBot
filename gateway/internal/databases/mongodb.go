@@ -417,6 +417,80 @@ func (m *MongoClient) GetActiveUserLicense(ctx context.Context, ownerChatID int6
 	return &ul, nil
 }
 
+func (m *MongoClient) GetLatestUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("user_licenses")
+	filter := bson.M{
+		"$or": []bson.M{
+			{"owner_chat_id": ownerChatID},
+			{"userbot_id": ownerChatID},
+		},
+	}
+	opts := options.FindOne().SetSort(bson.M{"expires_at": -1})
+	var ul UserLicense
+	err := col.FindOne(ctx, filter, opts).Decode(&ul)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ul, nil
+}
+
+func (m *MongoClient) ListExpiredUserLicenses(ctx context.Context, now time.Time) ([]*UserLicense, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("user_licenses")
+	cur, err := col.Find(ctx, bson.M{
+		"status":     "active",
+		"expires_at": bson.M{"$lte": now},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var list []*UserLicense
+	for cur.Next(ctx) {
+		var ul UserLicense
+		if cur.Decode(&ul) == nil {
+			copyUL := ul
+			list = append(list, &copyUL)
+		}
+	}
+	return list, cur.Err()
+}
+
+func (m *MongoClient) MarkUserLicenseExpired(ctx context.Context, tokenSHA string) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	_, err := m.Database.Collection("user_licenses").UpdateOne(ctx, bson.M{"_id": tokenSHA}, bson.M{"$set": bson.M{"status": "expired"}})
+	return err
+}
+
+func (m *MongoClient) MarkTokenMasterExpired(ctx context.Context, token string) error {
+	if m == nil || m.Database == nil {
+		return nil
+	}
+	_, err := m.Database.Collection("tokens_master").UpdateOne(ctx, bson.M{"_id": token, "is_shared": false}, bson.M{"$set": bson.M{"status": "expired"}})
+	return err
+}
+
+func (m *MongoClient) HasUsedMasterToken(ctx context.Context, masterToken string) (bool, error) {
+	if m == nil || m.Database == nil {
+		return false, nil
+	}
+	count, err := m.Database.Collection("user_licenses").CountDocuments(ctx, bson.M{"master_token": masterToken})
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (m *MongoClient) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID int64) error {
 	if m == nil || m.Database == nil {
 		return nil

@@ -209,7 +209,7 @@ func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebCo
 		Mode:             "Normal",
 		Safemode:         false,
 		Status:           "Berhenti",
-		MasaAktif:        "November 29, 2026 at 14:18",
+		MasaAktif:        "Belum diatur",
 		Notifikasi:       "Aktif · Kirim ke Saya",
 		Email:            "Belum diatur",
 		Admin:            "Belum diatur",
@@ -565,6 +565,93 @@ func (m *DataManager) GetActiveUserLicense(ctx context.Context, ownerChatID int6
 		}
 	}
 	return nil, nil
+}
+
+func (m *DataManager) GetLatestUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
+	if m.sqlite != nil {
+		ul, err := m.sqlite.GetLatestUserLicense(ctx, ownerChatID)
+		if err == nil && ul != nil {
+			return ul, nil
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		ul, err := mg.GetLatestUserLicense(ctx, ownerChatID)
+		if err == nil && ul != nil {
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveUserLicense(ctx, ul)
+			}
+			return ul, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *DataManager) ListExpiredUserLicenses(ctx context.Context, now time.Time) ([]*UserLicense, error) {
+	seen := make(map[string]bool)
+	var result []*UserLicense
+	if m.sqlite != nil {
+		list, err := m.sqlite.ListExpiredUserLicenses(ctx, now)
+		if err == nil {
+			for _, ul := range list {
+				if ul != nil && !seen[ul.TokenSHA] {
+					seen[ul.TokenSHA] = true
+					result = append(result, ul)
+				}
+			}
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		list, err := mg.ListExpiredUserLicenses(ctx, now)
+		if err == nil {
+			for _, ul := range list {
+				if ul != nil && !seen[ul.TokenSHA] {
+					seen[ul.TokenSHA] = true
+					if m.sqlite != nil {
+						_ = m.sqlite.SaveUserLicense(ctx, ul)
+					}
+					result = append(result, ul)
+				}
+			}
+		}
+	}
+	return result, nil
+}
+
+func (m *DataManager) MarkUserLicenseExpired(ctx context.Context, tokenSHA string) error {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.MarkUserLicenseExpired(ctx, tokenSHA); err != nil {
+			log.Printf("⚠️ MarkUserLicenseExpired MongoDB err: %v", err)
+		}
+	}
+	if m.sqlite != nil {
+		return m.sqlite.MarkUserLicenseExpired(ctx, tokenSHA)
+	}
+	return nil
+}
+
+func (m *DataManager) MarkTokenMasterExpired(ctx context.Context, token string) error {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.MarkTokenMasterExpired(ctx, token); err != nil {
+			log.Printf("⚠️ MarkTokenMasterExpired MongoDB err: %v", err)
+		}
+	}
+	if m.sqlite != nil {
+		return m.sqlite.MarkTokenMasterExpired(ctx, token)
+	}
+	return nil
+}
+
+func (m *DataManager) HasUsedMasterToken(ctx context.Context, masterToken string) (bool, error) {
+	if m.sqlite != nil {
+		used, err := m.sqlite.HasUsedMasterToken(ctx, masterToken)
+		if err == nil && used {
+			return true, nil
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		return mg.HasUsedMasterToken(ctx, masterToken)
+	}
+	return false, nil
 }
 
 func (m *DataManager) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID int64) error {

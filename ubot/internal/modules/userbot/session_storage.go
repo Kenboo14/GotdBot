@@ -13,11 +13,21 @@ import (
 )
 
 type sqliteStorage struct {
-	sqlite  *databases.SQLiteClient
-	db      *mongo.Database // optional remote backup
-	chatID  int64
-	ownerID int64
-	key     []byte
+	sqlite    *databases.SQLiteClient
+	db        *mongo.Database // optional remote backup
+	chatID    int64
+	ownerID   int64
+	accountID int64
+	key       []byte
+}
+
+type settingsRecord struct {
+	ChatID    int64     `bson:"_id"`
+	OwnerID   int64     `bson:"owner_id,omitempty"`
+	AccountID int64     `bson:"account_id,omitempty"`
+	Prefix    string    `bson:"prefix,omitempty"`
+	PrefixSet bool      `bson:"prefix_configured"`
+	UpdatedAt time.Time `bson:"updated_at"`
 }
 
 func (s *sqliteStorage) LoadSession(ctx context.Context) ([]byte, error) {
@@ -78,38 +88,112 @@ func (s *sqliteStorage) StoreSession(ctx context.Context, data []byte) error {
 }
 
 func (s *sqliteStorage) setAccount(ctx context.Context, id int64) error {
+	s.accountID = id
 	if s.sqlite != nil {
 		row, err := s.sqlite.GetSessionByChat(ctx, s.chatID)
 		if err == nil && row != nil {
 			_ = s.sqlite.SaveSession(ctx, s.chatID, row.OwnerID, id, row.Blob, row.Prefix, row.PrefixSet)
 		}
+		_ = s.sqlite.SaveUserbotPrefix(ctx, s.chatID, s.ownerID, id, "!", false)
 	}
 	if s.db != nil {
-		go func(cid, accID int64) {
+		go func(cid, oid, accID int64) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			_, _ = s.db.Collection("userbot_sessions").UpdateByID(bgCtx, cid, bson.M{
 				"$set": bson.M{"account_id": accID, "updated_at": time.Now().UTC()},
 			})
-		}(s.chatID, id)
+			_, _ = s.db.Collection("userbot_settings").UpdateByID(bgCtx, cid, bson.M{
+				"$set": bson.M{"owner_id": oid, "account_id": accID, "updated_at": time.Now().UTC()},
+			}, options.Update().SetUpsert(true))
+		}(s.chatID, s.ownerID, id)
 	}
 	return nil
 }
 
-func (s *sqliteStorage) setPrefix(ctx context.Context, prefix string, configured bool) error {
+func (s *sqliteStorage) loadUserbotPrefix(ctx context.Context, accountID int64) (string, bool) {
 	if s.sqlite != nil {
-		if err := s.sqlite.UpdatePrefix(ctx, s.chatID, prefix); err != nil {
-			return err
+		if st, err := s.sqlite.GetUserbotSettings(ctx, s.chatID); err == nil && st != nil && st.PrefixSet {
+			return st.Prefix, true
+		}
+		if accountID > 0 {
+			if st, err := s.sqlite.GetUserbotSettingsByAccount(ctx, accountID); err == nil && st != nil && st.PrefixSet {
+				return st.Prefix, true
+			}
+		}
+		if row, err := s.sqlite.GetSessionByChat(ctx, s.chatID); err == nil && row != nil && row.PrefixSet {
+			return row.Prefix, true
 		}
 	}
 	if s.db != nil {
-		go func(cid int64, pfx string, conf bool) {
+		var mSet settingsRecord
+		filter := bson.M{"_id": s.chatID, "prefix_configured": true}
+		if err := s.db.Collection("userbot_settings").FindOne(ctx, filter).Decode(&mSet); err == nil && mSet.PrefixSet {
+			if s.sqlite != nil {
+				_ = s.sqlite.SaveUserbotPrefix(ctx, s.chatID, s.ownerID, accountID, mSet.Prefix, true)
+			}
+			return mSet.Prefix, true
+		}
+		if accountID > 0 {
+			if err := s.db.Collection("userbot_settings").FindOne(ctx, bson.M{"account_id": accountID, "prefix_configured": true}).Decode(&mSet); err == nil && mSet.PrefixSet {
+				if s.sqlite != nil {
+					_ = s.sqlite.SaveUserbotPrefix(ctx, s.chatID, s.ownerID, accountID, mSet.Prefix, true)
+				}
+				return mSet.Prefix, true
+			}
+		}
+		var mRow record
+		if err := s.db.Collection("userbot_sessions").FindOne(ctx, bson.M{"_id": s.chatID, "prefix_configured": true}).Decode(&mRow); err == nil && mRow.PrefixSet {
+			if s.sqlite != nil {
+				_ = s.sqlite.SaveUserbotPrefix(ctx, s.chatID, s.ownerID, accountID, mRow.Prefix, true)
+			}
+			return mRow.Prefix, true
+		}
+	}
+	return "!", false
+}
+
+func (s *sqliteStorage) setPrefix(ctx context.Context, prefix string, configured bool) error {
+	accID := s.accountID
+	ownerID := s.ownerID
+	if ownerID == 0 {
+		ownerID = s.chatID
+	}
+	if s.sqlite != nil {
+		if accID == 0 {
+			if row, err := s.sqlite.GetSessionByChat(ctx, s.chatID); err == nil && row != nil {
+				accID = row.AccountID
+			}
+		}
+		if err := s.sqlite.SaveUserbotPrefix(ctx, s.chatID, ownerID, accID, prefix, configured); err != nil {
+			return err
+		}
+		if configured {
+			if err := s.sqlite.UpdatePrefix(ctx, s.chatID, prefix); err != nil {
+				return err
+			}
+		}
+	}
+	if s.db != nil {
+		go func(cid, oid, aid int64, pfx string, conf bool) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			setFields := bson.M{
+				"owner_id":          oid,
+				"prefix":            pfx,
+				"prefix_configured": conf,
+				"updated_at":        time.Now().UTC(),
+			}
+			if aid > 0 {
+				setFields["account_id"] = aid
+			}
+			_, _ = s.db.Collection("userbot_settings").UpdateByID(bgCtx, cid, bson.M{
+				"$set": setFields,
+			}, options.Update().SetUpsert(true))
 			_, _ = s.db.Collection("userbot_sessions").UpdateByID(bgCtx, cid, bson.M{
 				"$set": bson.M{"prefix": pfx, "prefix_configured": conf, "updated_at": time.Now().UTC()},
 			})
-		}(s.chatID, prefix, configured)
+		}(s.chatID, ownerID, accID, prefix, configured)
 	}
 	return nil
 }

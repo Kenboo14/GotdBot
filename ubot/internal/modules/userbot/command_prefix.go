@@ -49,7 +49,10 @@ func (s *Service) handleSetPrefix(ctx context.Context, client *gobot.Client, cha
 		err := sendUserText(ctx, client, target, "Gunakan: !setp <prefix> atau !setp none", threadID)
 		return err
 	}
-	store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, key: s.key}
+	s.mu.RLock()
+	accountID := s.owners[chatID]
+	s.mu.RUnlock()
+	store := &sqliteStorage{sqlite: s.sqlite, db: s.db, chatID: chatID, ownerID: chatID, accountID: accountID, key: s.key}
 	if err := store.setPrefix(ctx, value, true); err != nil {
 		return err
 	}

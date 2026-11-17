@@ -17,6 +17,7 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 	h.setPanelState(chatID, "")
 
 	cfg := h.db.GetUserConfig(ctx, userID)
+	h.syncConfigMasaAktif(ctx, userID, cfg)
 	gCount, lCount := h.db.CountGroupsAndLists(ctx, userID)
 
 	skipFw := "Mati"
@@ -136,6 +137,15 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, user
 	cfg := h.db.GetUserConfig(ctx, userID)
 	var text string
 	if strings.HasPrefix(cfg.Status, "Berhenti") {
+		if ok, expAt := h.ensureActiveLicenseOrExpire(ctx, b, userID); !ok {
+			b.SendMessage(ctx, &botgotd.SendMessageParams{
+				ChatID:      chatID,
+				Text:        fmt.Sprintf("❌ <b>Masa aktif token telah habis (%s).</b>\nSilakan /start dan masukkan token baru untuk mengaktifkan kembali userbot Anda.", expAt),
+				ParseMode:   "HTML",
+				ReplyMarkup: assets.RemoveKeyboard,
+			})
+			return
+		}
 		cfg.Status = "Berjalan"
 		cfg.TindakanTerkini = "Siaran otomatis diaktifkan"
 		cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")

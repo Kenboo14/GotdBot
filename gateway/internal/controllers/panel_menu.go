@@ -423,7 +423,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 			Mode:             "Normal",
 			Safemode:         false,
 			Status:           "Berhenti",
-			MasaAktif:        "November 29, 2026 at 14:18",
+			MasaAktif:        "Belum diatur",
 			Notifikasi:       "Aktif · Kirim ke Saya",
 			Email:            "Belum diatur",
 			Admin:            "Belum diatur",
@@ -433,6 +433,7 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 			TindakanTerakhir: "-",
 			UpdatedAt:        time.Now(),
 		}
+		h.syncConfigMasaAktif(ctx, effectiveUserID, defaultCfg)
 		_ = h.db.SaveUserConfig(ctx, defaultCfg)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,

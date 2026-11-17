@@ -83,6 +83,14 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		}
 		return
 	}
+	if job.Type == "relink_user_data" {
+		s.relinkUserData(ctx, job.OwnerID, job.ChatID, job.OldUserbotID, job.UserID)
+		return
+	}
+	if job.Type == "revoke_expired_session" {
+		s.revokeExpiredSession(ctx, job.ChatID, job.UserID, job.Text)
+		return
+	}
 	targetOwner := job.OwnerID
 	if targetOwner == 0 {
 		targetOwner = job.UserID
@@ -313,6 +321,176 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 <hr/>
 <p>GotdBot • Group Target Manager</p>`, len(allGroups), len(allGroups))
 	s.reply(ctx, chatID, 0, report, "panel_notice")
+}
+
+func (s *Service) revokeExpiredSession(ctx context.Context, chatID, userbotID int64, expiredAt string) {
+	var targetChatIDs []int64
+	seen := make(map[int64]bool)
+	addTarget := func(cid int64) {
+		if cid != 0 && !seen[cid] {
+			seen[cid] = true
+			targetChatIDs = append(targetChatIDs, cid)
+		}
+	}
+	addTarget(chatID)
+
+	s.mu.RLock()
+	for cid, oid := range s.owners {
+		if (chatID != 0 && cid == chatID) || (userbotID != 0 && oid == userbotID) {
+			addTarget(cid)
+		}
+	}
+	s.mu.RUnlock()
+
+	if s.sqlite != nil && userbotID != 0 {
+		if row, err := s.sqlite.GetSessionByAccount(ctx, userbotID); err == nil && row != nil {
+			addTarget(row.ChatID)
+		}
+	}
+
+	reason := "Masa aktif token berakhir"
+	if expiredAt != "" {
+		reason = "Masa aktif token berakhir pada " + expiredAt
+	}
+
+	for _, uid := range []int64{chatID, userbotID} {
+		if uid == 0 {
+			continue
+		}
+		s.mu.Lock()
+		pJob := s.panelBroadcasts[uid]
+		if pJob != nil {
+			delete(s.panelBroadcasts, uid)
+		}
+		bJob := s.broadcasts[uid]
+		if bJob != nil {
+			delete(s.broadcasts, uid)
+		}
+		s.mu.Unlock()
+		if pJob != nil {
+			pJob.cancel()
+		}
+		if bJob != nil {
+			bJob.cancel()
+		}
+	}
+
+	for _, cid := range targetChatIDs {
+		s.mu.Lock()
+		client := s.active[cid]
+		oid := s.owners[cid]
+		if oid == 0 {
+			oid = userbotID
+		}
+		delete(s.accountGens, cid)
+		delete(s.connecting, cid)
+		delete(s.active, cid)
+		delete(s.owners, cid)
+		delete(s.lastActive, cid)
+		delete(s.lastUpdate, cid)
+		delete(s.lastVerified, cid)
+		delete(s.verifying, cid)
+		delete(s.lastPublishedStates, cid)
+		delete(s.lastPublishedAt, cid)
+		delete(s.reconnectAttempts, cid)
+		if client != nil {
+			delete(s.clientOwners, client)
+		}
+		cancel := s.activeCancels[cid]
+		delete(s.activeCancels, cid)
+		delete(s.accountCtxs, cid)
+		s.accountStates[cid] = StateSessionInvalid
+		s.mu.Unlock()
+
+		if client != nil {
+			s.evictInlineBot(client)
+		}
+		if cancel != nil {
+			cancel()
+		}
+		s.publishSessionState(cid, oid, StateSessionInvalid, reason)
+
+		if s.sqlite != nil {
+			_ = s.sqlite.DeleteSession(context.Background(), cid)
+		}
+		if s.db != nil {
+			_, _ = s.db.Collection("userbot_sessions").DeleteOne(context.Background(), bson.M{"_id": cid})
+		}
+
+		s.mu.Lock()
+		s.accountStates[cid] = StateStopped
+		s.mu.Unlock()
+	}
+}
+
+func (s *Service) relinkUserData(ctx context.Context, oldChatID, newChatID, oldAccountID, newAccountID int64) {
+	if s.sqlite != nil {
+		if err := s.sqlite.RelinkUserbotData(ctx, oldChatID, newChatID, oldAccountID, newAccountID); err != nil {
+			slog.Warn("relink userbot sqlite failed", slog.Int64("old_chat_id", oldChatID), slog.Int64("new_chat_id", newChatID), slog.String("error", err.Error()))
+		}
+		if newChatID != 0 {
+			if st, err := s.sqlite.GetUserbotSettings(ctx, newChatID); err == nil && st != nil && st.PrefixSet {
+				s.mu.Lock()
+				s.prefixes[newChatID] = st.Prefix
+				s.mu.Unlock()
+			}
+		}
+	}
+
+	if s.db != nil {
+		if newChatID != 0 && oldChatID != 0 && oldChatID != newChatID {
+			var src settingsRecord
+			if err := s.db.Collection("userbot_settings").FindOne(ctx, bson.M{"_id": oldChatID, "prefix_configured": true}).Decode(&src); err == nil && src.PrefixSet {
+				accID := newAccountID
+				if accID == 0 {
+					accID = src.AccountID
+				}
+				_, _ = s.db.Collection("userbot_settings").UpdateByID(ctx, newChatID, bson.M{
+					"$set": bson.M{
+						"owner_id":          newChatID,
+						"account_id":        accID,
+						"prefix":            src.Prefix,
+						"prefix_configured": true,
+						"updated_at":        time.Now().UTC(),
+					},
+				}, options.Update().SetUpsert(true))
+				_, _ = s.db.Collection("userbot_sessions").UpdateByID(ctx, newChatID, bson.M{
+					"$set": bson.M{"prefix": src.Prefix, "prefix_configured": true, "updated_at": time.Now().UTC()},
+				})
+				_, _ = s.db.Collection("userbot_settings").DeleteOne(ctx, bson.M{"_id": oldChatID})
+				if s.sqlite != nil {
+					_ = s.sqlite.SaveUserbotPrefix(ctx, newChatID, newChatID, accID, src.Prefix, true)
+					_ = s.sqlite.UpdatePrefix(ctx, newChatID, src.Prefix)
+				}
+				s.mu.Lock()
+				s.prefixes[newChatID] = src.Prefix
+				s.mu.Unlock()
+			}
+		}
+
+		fromAccount := oldAccountID
+		if fromAccount == 0 {
+			fromAccount = oldChatID
+		}
+		if fromAccount != 0 && newAccountID != 0 && fromAccount != newAccountID {
+			_, _ = s.db.Collection("userbot_sudo").UpdateMany(ctx, bson.M{"owner_id": fromAccount}, bson.M{"$set": bson.M{"owner_id": newAccountID}})
+			_, _ = s.db.Collection("userbot_broadcast_blacklist").UpdateMany(ctx, bson.M{"owner_id": fromAccount}, bson.M{"$set": bson.M{"owner_id": newAccountID}})
+			_, _ = s.db.Collection("userbot_notes").UpdateMany(ctx, bson.M{"owner_id": fromAccount}, bson.M{"$set": bson.M{"owner_id": newAccountID}})
+			_, _ = s.db.Collection("userbot_log_status").UpdateMany(ctx, bson.M{"owner_id": fromAccount}, bson.M{"$set": bson.M{"owner_id": newAccountID}})
+			_, _ = s.db.Collection("userbot_log_routes").UpdateMany(ctx, bson.M{"user_id": fromAccount}, bson.M{"$set": bson.M{"user_id": newAccountID}})
+		}
+	}
+
+	if oldAccountID != 0 {
+		s.logStatusCache.Delete(oldAccountID)
+	}
+	if newAccountID != 0 {
+		s.logStatusCache.Delete(newAccountID)
+	}
+	s.sudoMu.Lock()
+	s.sudoCache = make(map[string]sudoCacheEntry)
+	s.sudoMu.Unlock()
+	s.syncAllNotesToRedis(ctx)
 }
 
 func (s *Service) syncAllNotesToRedis(ctx context.Context) {

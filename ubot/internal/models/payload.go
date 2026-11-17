@@ -6,6 +6,7 @@ type PToService struct {
 	ThreadID         int             `json:"thread_id,omitempty"`
 	UserID           int64           `json:"user_id"`
 	OwnerID          int64           `json:"owner_id,omitempty"`
+	OldUserbotID     int64           `json:"old_userbot_id,omitempty"`
 	Username         string          `json:"username"`
 	Text             string          `json:"text"`
 	IsBot            bool            `json:"is_bot"`

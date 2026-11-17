@@ -369,10 +369,38 @@ func (s *Service) Restore(ctx context.Context) {
 
 		// 5. Sinkronisasi Riwayat Rute Balasan Log dari MongoDB Cloud Atlas ke SQLite lokal
 		s.logLoadRoutesFromMongo(ctx)
+
+		// 6. Sinkronisasi Pengaturan Userbot (prefix) dari MongoDB ke SQLite lokal
+		if curSet, err := s.db.Collection("userbot_settings").Find(ctx, bson.M{"prefix_configured": true}); err == nil {
+			defer curSet.Close(ctx)
+			syncedSet := 0
+			for curSet.Next(ctx) {
+				var st settingsRecord
+				if curSet.Decode(&st) == nil && st.ChatID != 0 && st.PrefixSet {
+					if s.sqlite.SaveUserbotPrefix(ctx, st.ChatID, st.OwnerID, st.AccountID, st.Prefix, true) == nil {
+						syncedSet++
+					}
+				}
+			}
+			if syncedSet > 0 {
+				log.Printf("✅ Sinkronisasi Startup: %d pengaturan prefix dipulihkan dari MongoDB ke SQLite", syncedSet)
+			}
+		}
 	}
 
 	if s.sqlite == nil {
 		return
+	}
+
+	// Muat peer access hash tersimpan dari SQLite ke GoBot peer cache
+	if uHashes, cHashes, pErr := s.sqlite.LoadAllPeers(ctx); pErr == nil {
+		cache := s.peerCache()
+		for uid, h := range uHashes {
+			cache.SaveUser(uid, h)
+		}
+		for cid, h := range cHashes {
+			cache.SaveChannel(cid, h)
+		}
 	}
 
 	// Muat seluruh catatan dari SQLite ke Redis cache untuk navigasi inline instan
@@ -389,9 +417,11 @@ func (s *Service) Restore(ctx context.Context) {
 	}
 
 	for _, row := range sessions {
-		prefix := row.Prefix
-		if !row.PrefixSet {
-			prefix = "!"
+		prefix := "!"
+		if st, stErr := s.sqlite.GetUserbotSettings(ctx, row.ChatID); stErr == nil && st != nil && st.PrefixSet {
+			prefix = st.Prefix
+		} else if row.PrefixSet {
+			prefix = row.Prefix
 		}
 		accID := row.AccountID
 		if accID == 0 {
@@ -587,6 +617,15 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 			if err != nil {
 				return err
 			}
+			if self.AccessHash != 0 {
+				s.peerCache().SaveUser(self.ID, self.AccessHash)
+			}
+			// Inisialisasi update sequence MTProto segera setelah koneksi/instalasi
+			// agar Telegram langsung mendorong UpdateShortMessage / update chat pribadi.
+			stateCtx, stateCancel := context.WithTimeout(ctx, 5*time.Second)
+			_, _ = client.API().UpdatesGetState(stateCtx)
+			stateCancel()
+
 			s.mu.Lock()
 			if s.reconnectAttempts != nil {
 				delete(s.reconnectAttempts, chatID)
@@ -718,15 +757,40 @@ func (s *Service) syncPeersOnReady(ctx context.Context, client *gobot.Client) {
 	if contacts, err := client.API().ContactsGetContacts(syncCtx, 0); err == nil {
 		if c, ok := contacts.(*tg.ContactsContacts); ok {
 			s.peerCache().ApplyUsersChats(c.Users, nil)
+			s.persistUsersChatsToSQLite(syncCtx, c.Users, nil)
 		}
 	}
 
-	if dialogs, err := client.API().MessagesGetDialogs(syncCtx, &tg.MessagesGetDialogsRequest{
-		Limit:      30,
-		OffsetPeer: &tg.InputPeerEmpty{},
-	}); err == nil {
-		if mod, ok := dialogs.AsModified(); ok {
-			s.peerCache().ApplyUsersChats(mod.GetUsers(), mod.GetChats())
+	for _, folderID := range []int{0, 1} {
+		limit := 100
+		if folderID == 1 {
+			limit = 50
+		}
+		if dialogs, err := client.API().MessagesGetDialogs(syncCtx, &tg.MessagesGetDialogsRequest{
+			FolderID:   folderID,
+			Limit:      limit,
+			OffsetPeer: &tg.InputPeerEmpty{},
+		}); err == nil {
+			if mod, ok := dialogs.AsModified(); ok {
+				s.peerCache().ApplyUsersChats(mod.GetUsers(), mod.GetChats())
+				s.persistUsersChatsToSQLite(syncCtx, mod.GetUsers(), mod.GetChats())
+			}
+		}
+	}
+}
+
+func (s *Service) persistUsersChatsToSQLite(ctx context.Context, users []tg.UserClass, chats []tg.ChatClass) {
+	if s.sqlite == nil {
+		return
+	}
+	for _, item := range users {
+		if u, ok := item.(*tg.User); ok && u != nil && !u.Min && u.ID != 0 && u.AccessHash != 0 {
+			_ = s.sqlite.SavePeer(ctx, u.ID, "user", u.AccessHash)
+		}
+	}
+	for _, item := range chats {
+		if ch, ok := item.(*tg.Channel); ok && ch != nil && !ch.Min && ch.ID != 0 && ch.AccessHash != 0 {
+			_ = s.sqlite.SavePeer(ctx, ch.ID, "channel", ch.AccessHash)
 		}
 	}
 }

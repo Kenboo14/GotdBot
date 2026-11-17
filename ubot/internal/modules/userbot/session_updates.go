@@ -2,6 +2,7 @@ package userbot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	gobot "github.com/Kenboo14/GoBot"
 	gobotsession "github.com/Kenboo14/GoBot/session"
 	"github.com/Kenboo14/GoBot/types"
+	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -93,9 +95,21 @@ func (s *Service) resolvePeer(ctx context.Context, client *gobot.Client, chatID 
 	}
 	s.mu.RUnlock()
 
+	if ownerID == 0 && client != nil {
+		if self, err := client.Self(ctx); err == nil && self != nil {
+			ownerID = self.ID
+			s.mu.Lock()
+			if chatID != 0 {
+				s.owners[chatID] = self.ID
+			}
+			s.clientOwners[client] = self.ID
+			s.mu.Unlock()
+		}
+	}
+
 	cache := s.peerCache()
 	if peerUser, ok := p.(*tg.PeerUser); ok {
-		if peerUser.UserID == 0 || peerUser.UserID == chatID || (ownerID > 0 && peerUser.UserID == ownerID) {
+		if peerUser.UserID == 0 || (ownerID > 0 && peerUser.UserID == ownerID) {
 			return &tg.InputPeerSelf{}, nil
 		}
 	}
@@ -108,7 +122,119 @@ func (s *Service) resolvePeer(ctx context.Context, client *gobot.Client, chatID 
 	if msg != nil {
 		msgID = msg.ID
 	}
-	return cache.ResolvePeer(ctx, api, ownerID, entities, p, msgID)
+
+	resolved, err := cache.ResolvePeer(ctx, api, ownerID, entities, p, msgID)
+	if err == nil {
+		s.saveResolvedPeerToSQLite(resolved)
+		return resolved, nil
+	}
+
+	// Fallback tambahan untuk private chat / channel ketika entitas UpdateShortMessage kosong
+	// dan 100 dialog pertama belum memuat chat target (mis. chat lama atau diarsipkan).
+	switch peerObj := p.(type) {
+	case *tg.PeerUser:
+		if s.sqlite != nil {
+			if hash, pType, dbErr := s.sqlite.GetPeerAccessHash(ctx, peerObj.UserID); dbErr == nil && hash != 0 && pType != "channel" {
+				cache.SaveUser(peerObj.UserID, hash)
+				return &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}, nil
+			}
+		}
+		if api != nil {
+			if users, uErr := api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUser{UserID: peerObj.UserID}}); uErr == nil {
+				cache.ApplyUsersChats(users, nil)
+				if hash, ok := cache.UserHash(peerObj.UserID); ok && hash != 0 {
+					ip := &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}
+					s.saveResolvedPeerToSQLite(ip)
+					return ip, nil
+				}
+			}
+			// Cari bertahap di seluruh dialog (maks 500 dialog) dan folder arsip
+			if hash := s.findUserHashInDialogs(ctx, api, cache, peerObj.UserID); hash != 0 {
+				ip := &tg.InputPeerUser{UserID: peerObj.UserID, AccessHash: hash}
+				s.saveResolvedPeerToSQLite(ip)
+				return ip, nil
+			}
+		}
+	case *tg.PeerChannel:
+		if s.sqlite != nil {
+			if hash, pType, dbErr := s.sqlite.GetPeerAccessHash(ctx, peerObj.ChannelID); dbErr == nil && hash != 0 && pType == "channel" {
+				cache.SaveChannel(peerObj.ChannelID, hash)
+				return &tg.InputPeerChannel{ChannelID: peerObj.ChannelID, AccessHash: hash}, nil
+			}
+		}
+	}
+
+	return nil, err
+}
+
+func (s *Service) saveResolvedPeerToSQLite(p tg.InputPeerClass) {
+	if s.sqlite == nil || p == nil {
+		return
+	}
+	switch v := p.(type) {
+	case *tg.InputPeerUser:
+		if v.UserID > 0 && v.AccessHash != 0 {
+			go func(id, hash int64) {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = s.sqlite.SavePeer(bgCtx, id, "user", hash)
+			}(v.UserID, v.AccessHash)
+		}
+	case *tg.InputPeerChannel:
+		if v.ChannelID > 0 && v.AccessHash != 0 {
+			go func(id, hash int64) {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				_ = s.sqlite.SavePeer(bgCtx, id, "channel", hash)
+			}(v.ChannelID, v.AccessHash)
+		}
+	}
+}
+
+func (s *Service) findUserHashInDialogs(ctx context.Context, api *tg.Client, cache *gobot.PeerStorage, targetUserID int64) int64 {
+	if api == nil || targetUserID <= 0 {
+		return 0
+	}
+	errFound := errors.New("peer found")
+	errLimit := errors.New("dialog scan limit")
+	scanned := 0
+
+	_ = dialogs.NewQueryBuilder(api).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
+		scanned++
+		cache.CacheEntities(tg.Entities{
+			Users:    item.Entities.Users(),
+			Chats:    item.Entities.Chats(),
+			Channels: item.Entities.Channels(),
+		})
+		if u, ok := item.Peer.(*tg.InputPeerUser); ok && u.UserID == targetUserID && u.AccessHash != 0 {
+			cache.SaveUser(u.UserID, u.AccessHash)
+			return errFound
+		}
+		if hash, ok := cache.UserHash(targetUserID); ok && hash != 0 {
+			return errFound
+		}
+		if scanned >= 500 {
+			return errLimit
+		}
+		return nil
+	})
+	if hash, ok := cache.UserHash(targetUserID); ok && hash != 0 {
+		return hash
+	}
+
+	if archived, err := api.MessagesGetDialogs(ctx, &tg.MessagesGetDialogsRequest{
+		FolderID:   1,
+		Limit:      100,
+		OffsetPeer: &tg.InputPeerEmpty{},
+	}); err == nil {
+		if mod, ok := archived.AsModified(); ok {
+			cache.ApplyUsersChats(mod.GetUsers(), mod.GetChats())
+			if hash, ok := cache.UserHash(targetUserID); ok && hash != 0 {
+				return hash
+			}
+		}
+	}
+	return 0
 }
 
 func extractThreadID(msg *tg.Message) int {

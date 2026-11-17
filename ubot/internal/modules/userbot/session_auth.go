@@ -230,11 +230,12 @@ Perhatikan huruf besar/kecil pada password akun Anda.</blockquote>
 		if err := store.setAccount(ctx, self.ID); err != nil {
 			return err
 		}
+		prefix, prefixSet := store.loadUserbotPrefix(ctx, self.ID)
 		s.mu.Lock()
-		s.prefixes[chatID] = "!"
+		s.prefixes[chatID] = prefix
 		s.owners[chatID] = self.ID
 		s.mu.Unlock()
-		if err := store.setPrefix(ctx, "!", true); err != nil {
+		if err := store.setPrefix(ctx, prefix, prefixSet); err != nil {
 			return err
 		}
 		s.replyWithOwner(ctx, chatID, 0, self.ID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")

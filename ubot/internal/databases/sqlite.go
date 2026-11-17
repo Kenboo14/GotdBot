@@ -26,6 +26,15 @@ type SessionRecord struct {
 	UpdatedAt time.Time
 }
 
+type UserbotSettings struct {
+	ChatID    int64
+	OwnerID   int64
+	AccountID int64
+	Prefix    string
+	PrefixSet bool
+	UpdatedAt time.Time
+}
+
 type BlacklistRecord struct {
 	OwnerID   int64
 	ChatType  string
@@ -106,6 +115,16 @@ func (s *SQLiteClient) initTables() error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_id);`,
+
+		`CREATE TABLE IF NOT EXISTS userbot_settings (
+			chat_id INTEGER PRIMARY KEY,
+			owner_id INTEGER DEFAULT 0,
+			account_id INTEGER DEFAULT 0,
+			prefix TEXT DEFAULT '!',
+			prefix_set INTEGER DEFAULT 0,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_userbot_settings_account ON userbot_settings(account_id);`,
 
 		`CREATE TABLE IF NOT EXISTS sudo_users (
 			owner_id INTEGER NOT NULL,
@@ -264,6 +283,8 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec(`ALTER TABLE log_routes ADD COLUMN access_hash INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_index INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_next_at INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`INSERT OR IGNORE INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
+		SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM sessions WHERE prefix_set = 1;`)
 
 	return nil
 }
@@ -298,6 +319,133 @@ func (s *SQLiteClient) UpdatePrefix(ctx context.Context, chatID int64, prefix st
 	query := `UPDATE sessions SET prefix = ?, prefix_set = 1, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?;`
 	_, err := s.DB.ExecContext(ctx, query, prefix, chatID)
 	return err
+}
+
+func (s *SQLiteClient) GetUserbotSettings(ctx context.Context, chatID int64) (*UserbotSettings, error) {
+	query := `SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM userbot_settings WHERE chat_id = ? LIMIT 1;`
+	var r UserbotSettings
+	var pset int
+	err := s.DB.QueryRowContext(ctx, query, chatID).Scan(&r.ChatID, &r.OwnerID, &r.AccountID, &r.Prefix, &pset, &r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	r.PrefixSet = pset == 1
+	return &r, nil
+}
+
+func (s *SQLiteClient) GetUserbotSettingsByAccount(ctx context.Context, accountID int64) (*UserbotSettings, error) {
+	if accountID == 0 {
+		return nil, sql.ErrNoRows
+	}
+	query := `SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM userbot_settings WHERE account_id = ? AND prefix_set = 1 ORDER BY updated_at DESC LIMIT 1;`
+	var r UserbotSettings
+	var pset int
+	err := s.DB.QueryRowContext(ctx, query, accountID).Scan(&r.ChatID, &r.OwnerID, &r.AccountID, &r.Prefix, &pset, &r.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	r.PrefixSet = pset == 1
+	return &r, nil
+}
+
+func (s *SQLiteClient) SaveUserbotPrefix(ctx context.Context, chatID, ownerID, accountID int64, prefix string, prefixSet bool) error {
+	if chatID == 0 {
+		return nil
+	}
+	pset := 0
+	if prefixSet {
+		pset = 1
+	}
+	query := `INSERT INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(chat_id) DO UPDATE SET
+			owner_id = CASE WHEN excluded.owner_id > 0 THEN excluded.owner_id ELSE userbot_settings.owner_id END,
+			account_id = CASE WHEN excluded.account_id > 0 THEN excluded.account_id ELSE userbot_settings.account_id END,
+			prefix = CASE WHEN excluded.prefix_set = 1 OR userbot_settings.prefix_set = 0 THEN excluded.prefix ELSE userbot_settings.prefix END,
+			prefix_set = CASE WHEN excluded.prefix_set = 1 THEN 1 ELSE userbot_settings.prefix_set END,
+			updated_at = CURRENT_TIMESTAMP;`
+	_, err := s.DB.ExecContext(ctx, query, chatID, ownerID, accountID, prefix, pset)
+	return err
+}
+
+func (s *SQLiteClient) RelinkUserbotData(ctx context.Context, oldChatID, newChatID, oldAccountID, newAccountID int64) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if newChatID != 0 {
+		var src *UserbotSettings
+		for _, candidate := range []int64{oldChatID, oldAccountID} {
+			if candidate == 0 || candidate == newChatID {
+				continue
+			}
+			var r UserbotSettings
+			var pset int
+			q := `SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM userbot_settings WHERE chat_id = ? LIMIT 1;`
+			if scanErr := tx.QueryRowContext(ctx, q, candidate).Scan(&r.ChatID, &r.OwnerID, &r.AccountID, &r.Prefix, &pset, &r.UpdatedAt); scanErr == nil && pset == 1 {
+				r.PrefixSet = true
+				src = &r
+				break
+			}
+		}
+		if src == nil && oldAccountID != 0 {
+			var r UserbotSettings
+			var pset int
+			q := `SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM userbot_settings WHERE account_id = ? AND prefix_set = 1 ORDER BY updated_at DESC LIMIT 1;`
+			if scanErr := tx.QueryRowContext(ctx, q, oldAccountID).Scan(&r.ChatID, &r.OwnerID, &r.AccountID, &r.Prefix, &pset, &r.UpdatedAt); scanErr == nil && pset == 1 {
+				r.PrefixSet = true
+				src = &r
+			}
+		}
+		if src != nil {
+			accID := newAccountID
+			if accID == 0 {
+				accID = src.AccountID
+			}
+			_, _ = tx.ExecContext(ctx, `INSERT INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
+				VALUES (?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+				ON CONFLICT(chat_id) DO UPDATE SET
+					owner_id = excluded.owner_id,
+					account_id = CASE WHEN excluded.account_id > 0 THEN excluded.account_id ELSE userbot_settings.account_id END,
+					prefix = excluded.prefix,
+					prefix_set = 1,
+					updated_at = CURRENT_TIMESTAMP;`, newChatID, newChatID, accID, src.Prefix)
+			_, _ = tx.ExecContext(ctx, `UPDATE sessions SET prefix = ?, prefix_set = 1, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?;`, src.Prefix, newChatID)
+			if src.ChatID != 0 && src.ChatID != newChatID {
+				_, _ = tx.ExecContext(ctx, `DELETE FROM userbot_settings WHERE chat_id = ?;`, src.ChatID)
+			}
+		}
+	}
+
+	moveOwnerData := func(fromID, toID int64) {
+		if fromID == 0 || toID == 0 || fromID == toID {
+			return
+		}
+		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO sudo_users (owner_id, user_id, created_at) SELECT ?, user_id, created_at FROM sudo_users WHERE owner_id = ?;`, toID, fromID)
+		_, _ = tx.ExecContext(ctx, `DELETE FROM sudo_users WHERE owner_id = ?;`, fromID)
+
+		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO broadcast_blacklist (owner_id, chat_type, chat_id, created_at) SELECT ?, chat_type, chat_id, created_at FROM broadcast_blacklist WHERE owner_id = ?;`, toID, fromID)
+		_, _ = tx.ExecContext(ctx, `DELETE FROM broadcast_blacklist WHERE owner_id = ?;`, fromID)
+
+		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO userbot_notes (owner_id, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at)
+			SELECT ?, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at FROM userbot_notes WHERE owner_id = ?;`, toID, fromID)
+		_, _ = tx.ExecContext(ctx, `DELETE FROM userbot_notes WHERE owner_id = ?;`, fromID)
+
+		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO userbot_logs (owner_id, enabled, updated_at) SELECT ?, enabled, updated_at FROM userbot_logs WHERE owner_id = ?;`, toID, fromID)
+		_, _ = tx.ExecContext(ctx, `DELETE FROM userbot_logs WHERE owner_id = ?;`, fromID)
+
+		_, _ = tx.ExecContext(ctx, `UPDATE log_routes SET user_id = ? WHERE user_id = ?;`, toID, fromID)
+	}
+
+	if oldAccountID != 0 && newAccountID != 0 && oldAccountID != newAccountID {
+		moveOwnerData(oldAccountID, newAccountID)
+	} else if oldAccountID == 0 && oldChatID != 0 && newAccountID != 0 && oldChatID != newAccountID {
+		moveOwnerData(oldChatID, newAccountID)
+	}
+
+	return tx.Commit()
 }
 
 func (s *SQLiteClient) GetSessionByChat(ctx context.Context, chatID int64) (*SessionRecord, error) {

@@ -360,11 +360,42 @@ func (s *SQLiteClient) GetUserLicenseBySHA(ctx context.Context, tokenSHA string)
 
 func (s *SQLiteClient) GetActiveUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
 	query := `SELECT token_sha, master_token, owner_chat_id, userbot_id, tier, can_custom_watermark, expires_at, created_at, status
-		FROM user_licenses WHERE owner_chat_id = ? AND status = 'active' AND expires_at > CURRENT_TIMESTAMP
+		FROM user_licenses WHERE (owner_chat_id = ? OR userbot_id = ?) AND status = 'active'
+		ORDER BY expires_at DESC;`
+	rows, err := s.DB.QueryContext(ctx, query, ownerChatID, ownerChatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var best *UserLicense
+	for rows.Next() {
+		var ul UserLicense
+		var canWM int
+		if scanErr := rows.Scan(
+			&ul.TokenSHA, &ul.MasterToken, &ul.OwnerChatID, &ul.UserbotID, &ul.Tier, &canWM, &ul.ExpiresAt, &ul.CreatedAt, &ul.Status,
+		); scanErr != nil {
+			continue
+		}
+		ul.CanCustomWatermark = canWM == 1
+		if ul.ExpiresAt.After(now) {
+			if best == nil || ul.ExpiresAt.After(best.ExpiresAt) {
+				copyUL := ul
+				best = &copyUL
+			}
+		}
+	}
+	return best, rows.Err()
+}
+
+func (s *SQLiteClient) GetLatestUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
+	query := `SELECT token_sha, master_token, owner_chat_id, userbot_id, tier, can_custom_watermark, expires_at, created_at, status
+		FROM user_licenses WHERE owner_chat_id = ? OR userbot_id = ?
 		ORDER BY expires_at DESC LIMIT 1;`
 	var ul UserLicense
 	var canWM int
-	err := s.DB.QueryRowContext(ctx, query, ownerChatID).Scan(
+	err := s.DB.QueryRowContext(ctx, query, ownerChatID, ownerChatID).Scan(
 		&ul.TokenSHA, &ul.MasterToken, &ul.OwnerChatID, &ul.UserbotID, &ul.Tier, &canWM, &ul.ExpiresAt, &ul.CreatedAt, &ul.Status,
 	)
 	if err == sql.ErrNoRows {
@@ -375,6 +406,52 @@ func (s *SQLiteClient) GetActiveUserLicense(ctx context.Context, ownerChatID int
 	}
 	ul.CanCustomWatermark = canWM == 1
 	return &ul, nil
+}
+
+func (s *SQLiteClient) ListExpiredUserLicenses(ctx context.Context, now time.Time) ([]*UserLicense, error) {
+	query := `SELECT token_sha, master_token, owner_chat_id, userbot_id, tier, can_custom_watermark, expires_at, created_at, status
+		FROM user_licenses WHERE status = 'active';`
+	rows, err := s.DB.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var expired []*UserLicense
+	for rows.Next() {
+		var ul UserLicense
+		var canWM int
+		if scanErr := rows.Scan(
+			&ul.TokenSHA, &ul.MasterToken, &ul.OwnerChatID, &ul.UserbotID, &ul.Tier, &canWM, &ul.ExpiresAt, &ul.CreatedAt, &ul.Status,
+		); scanErr != nil {
+			continue
+		}
+		ul.CanCustomWatermark = canWM == 1
+		if !now.Before(ul.ExpiresAt) {
+			copyUL := ul
+			expired = append(expired, &copyUL)
+		}
+	}
+	return expired, rows.Err()
+}
+
+func (s *SQLiteClient) MarkUserLicenseExpired(ctx context.Context, tokenSHA string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE user_licenses SET status = 'expired' WHERE token_sha = ?;`, tokenSHA)
+	return err
+}
+
+func (s *SQLiteClient) MarkTokenMasterExpired(ctx context.Context, token string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE tokens_master SET status = 'expired' WHERE token = ? AND is_shared = 0;`, token)
+	return err
+}
+
+func (s *SQLiteClient) HasUsedMasterToken(ctx context.Context, masterToken string) (bool, error) {
+	var count int
+	err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM user_licenses WHERE master_token = ?;`, masterToken).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (s *SQLiteClient) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID int64) error {

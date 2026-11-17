@@ -144,6 +144,7 @@ func (h *Handler) RenderControlStatus(ctx context.Context, b *botgotd.Bot, chatI
 	h.setPanelState(chatID, "")
 
 	cfg := h.db.GetUserConfig(ctx, targetID)
+	h.syncConfigMasaAktif(ctx, targetID, cfg)
 	gCount, lCount := h.db.CountGroupsAndLists(ctx, targetID)
 
 	skipFw := "Mati"
