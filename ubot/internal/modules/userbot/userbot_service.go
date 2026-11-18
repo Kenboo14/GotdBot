@@ -147,6 +147,7 @@ type Service struct {
 	sudoCache           map[string]sudoCacheEntry // "ownerID:userID" -> sudoCacheEntry dengan TTL
 	seenCmdMu           sync.Mutex
 	seenCmds            map[seenCmdKey]seenCmdEntry
+	pluginState         pluginRegistry
 	broadcastSem        chan struct{}             // Semaphore untuk membatasi concurrent gcast
 }
 

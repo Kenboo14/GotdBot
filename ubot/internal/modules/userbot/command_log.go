@@ -257,8 +257,8 @@ func (s *Service) interceptLogMessage(ctx context.Context, chatID int64, client 
 		return // Semua pesan keluar (outgoing) tidak di-log
 	}
 
-	// Cek status aktif fitur log lebih awal sebelum memanggil API / cache lain
-	if !s.isLogEnabled(ctx, ownerID) {
+	// Cek status plugin logger & log user lebih awal sebelum memanggil API / cache lain
+	if !s.IsPluginEnabled(PluginLogger) || !s.isLogEnabled(ctx, ownerID) {
 		return
 	}
 

@@ -52,7 +52,6 @@ func (s *Service) handleAliveCommand(ctx context.Context, client *gobot.Client, 
 		}
 	}
 
-	// Fallback teks jika inline mode bot tidak aktif
 	started := time.Now()
 	pingStr := "Timeout"
 	pingCtx, pingCancel := context.WithTimeout(ctx, 3*time.Second)

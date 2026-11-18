@@ -575,87 +575,7 @@ func (h *Handler) PingCommand(ctx context.Context, b *botgotd.Bot, update *botgo
 }
 
 func (h *Handler) HelpCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
-	if update.Message == nil {
-		return
-	}
-	text := `<h1>📖 Panduan Perintah GotdBot</h1>
-<blockquote expandable>Daftar shortcut dan perintah esensial untuk kontrol userbot MTProto.</blockquote>
-<table border="1">
-  <tr><th>Perintah</th><th>Fungsi</th></tr>
-  <tr><td><code>!ping</code> / <code>!p</code></td><td>Ukur latency koneksi MTProto</td></tr>
-  <tr><td><code>!help</code></td><td>Buka menu bantuan interaktif</td></tr>
-  <tr><td><code>!code [lang]</code></td><td>Format kode pesan reply</td></tr>
-  <tr><td><code>!eval</code> / <code>!sh</code></td><td>Eksekusi command runtime</td></tr>
-  <tr><td><code>!setp none</code></td><td>Nonaktifkan prefix command</td></tr>
-  <tr><td><code>/start</code></td><td>Menu utama &amp; Setup userbot</td></tr>
-</table>
-<hr/>
-<p>GotdBot • Interactive Assistance</p>`
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, MessageThreadID: update.Message.MessageThreadID, Text: text, ParseMode: "HTML"})
-}
-
-var (
-	cachedHelpHomeMarkup = buildHelpHomeKeyboard()
-	cachedHelpBackMarkup = &botgotd.InlineKeyboardMarkup{
-		InlineKeyboard: [][]botgotd.InlineKeyboardButton{{{Text: "‹ Kembali", CallbackData: "assist_help:home"}}},
-	}
-)
-
-type helpPageSnapshot struct {
-	text   string
-	markup *botgotd.InlineKeyboardMarkup
-}
-
-var cachedHelpPages = map[string]helpPageSnapshot{
-	"assist_help:home": {
-		text: `<h1>🤖 Asisten Pribadi Userbot</h1>
-<blockquote expandable>Pilih kategori bantuan di bawah untuk melihat dokumentasi perintah dan fitur userbot.</blockquote>
-<hr/>
-<p>Sentuh salah satu tombol kategori:</p>`,
-		markup: cachedHelpHomeMarkup,
-	},
-	"assist_help:ping": {
-		text: `<h1>⚡ Ping &amp; Latency</h1>
-<blockquote expandable>Mengukur kecepatan respons koneksi jaringan MTProto userbot ke server Telegram.</blockquote>
-<table border="1">
-  <tr><th>Perintah</th><th>Keterangan</th></tr>
-  <tr><td><code>!ping</code></td><td>Ukur latency lengkap</td></tr>
-  <tr><td><code>!p</code></td><td>Alias cepat</td></tr>
-</table>
-<hr/>
-<p>Gunakan perintah di atas pada chat Telegram Anda.</p>`,
-		markup: cachedHelpBackMarkup,
-	},
-	"assist_help:notes": {
-		text: `<h1>📝 Manajemen Catatan</h1>
-<blockquote expandable>Kelola catatan atau template teks cepat yang tersimpan di cloud database.</blockquote>
-<table border="1">
-  <tr><th>Perintah</th><th>Fungsi</th></tr>
-  <tr><td><code>!save &lt;nama&gt;</code></td><td>Simpan catatan</td></tr>
-  <tr><td><code>!get &lt;nama&gt;</code> / <code>#&lt;nama&gt;</code></td><td>Ambil catatan</td></tr>
-  <tr><td><code>!lsnote</code></td><td>Daftar semua catatan</td></tr>
-  <tr><td><code>!delnote &lt;nama&gt;</code></td><td>Hapus catatan</td></tr>
-  <tr><td><code>!clearnote</code></td><td>Hapus semua catatan</td></tr>
-  <tr><td><code>!exportnote</code> / <code>!importnote</code></td><td>Backup / Restore</td></tr>
-</table>
-<hr/>
-<p>Gunakan perintah di atas pada chat Telegram Anda.</p>`,
-		markup: cachedHelpBackMarkup,
-	},
-	"assist_help:code": {
-		text: `<h1>💻 Format Kode &amp; Syntax</h1>
-<blockquote expandable>Format cuplikan kode pemrograman dengan penyorotan sintaks (syntax highlighting).</blockquote>
-<hr/>
-<p>Reply pesan apapun dengan <code>!code</code> atau <code>!code go</code> untuk memformat via inline query.</p>`,
-		markup: cachedHelpBackMarkup,
-	},
-	"assist_help:server": {
-		text: `<h1>🖥 Status Server</h1>
-<blockquote expandable>Menampilkan beban resource CPU, RAM, Uptime, dan performa Gateway MTProto.</blockquote>
-<hr/>
-<p>Ketik <code>!server</code> pada chat untuk memeriksa statistik sistem secara real-time.</p>`,
-		markup: cachedHelpBackMarkup,
-	},
+	h.sendHelpInitialPrompt(ctx, b, update)
 }
 
 func isMessageNotModifiedErr(err error) bool {
@@ -666,23 +586,6 @@ func isMessageNotModifiedErr(err error) bool {
 	return strings.Contains(msg, "message is not modified") ||
 		strings.Contains(msg, "message_not_modified") ||
 		strings.Contains(msg, "cannot unmarshal bool into go value of type models.message")
-}
-
-func buildHelpHomeKeyboard() *botgotd.InlineKeyboardMarkup {
-	labels := []string{"Admin", "Broadcast", "Code", "Extra", "Global", "Info", "Logs", "Notes", "Ping", "PM Permit", "Prefixes", "Profile", "Server", "Sticker", "Sudo", "VC Tools"}
-	keys := []string{"admin", "broadcast", "code", "extra", "globalz", "info", "logs", "notes", "ping", "pmpermit", "prefixes", "profile", "server", "sticker", "sudo", "vctools"}
-	rows := make([][]botgotd.InlineKeyboardButton, 0, (len(labels)+2)/3)
-	for i := range labels {
-		if i%3 == 0 {
-			rows = append(rows, []botgotd.InlineKeyboardButton{})
-		}
-		rows[len(rows)-1] = append(rows[len(rows)-1], botgotd.InlineKeyboardButton{Text: labels[i], CallbackData: "assist_help:" + keys[i]})
-	}
-	return &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
-func helpHomeKeyboard() *botgotd.InlineKeyboardMarkup {
-	return cachedHelpHomeMarkup
 }
 
 func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
@@ -875,10 +778,7 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 }
 
 func (h *Handler) HelpCommandMenu(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
-	if update.Message == nil {
-		return
-	}
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: update.Message.Chat.ID, MessageThreadID: update.Message.MessageThreadID, Text: "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.", ParseMode: "HTML", ReplyMarkup: helpHomeKeyboard()})
+	h.sendHelpInitialPrompt(ctx, b, update)
 }
 
 func (h *Handler) ServerCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
@@ -1052,10 +952,10 @@ func HandleInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	}
 	result := &botgotd.InlineQueryResultArticle{
 		ID:                  "assist_help",
-		Title:               "Bantuan userbot",
-		Description:         "Pilih kategori untuk melihat bantuan userbot.",
-		InputMessageContent: &botgotd.InputTextMessageContent{MessageText: "<b>Saya adalah asisten pribadi userbot Anda.</b>\n\nPilih kategori untuk melihat bantuan userbot.", ParseMode: "HTML"},
-		ReplyMarkup:         helpHomeKeyboard(),
+		Title:               "Asisten Go Userbot",
+		Description:         "Muat menu bantuan perintah Go Userbot.",
+		InputMessageContent: &botgotd.InputTextMessageContent{MessageText: helpInitialPromptText, ParseMode: "HTML"},
+		ReplyMarkup:         helpInitialKeyboard(),
 	}
 	_, _ = b.AnswerInlineQuery(ctx, &botgotd.AnswerInlineQueryParams{InlineQueryID: update.InlineQuery.ID, Results: []botgotd.InlineQueryResult{result}, CacheTime: 0, IsPersonal: true})
 }
