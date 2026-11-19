@@ -9,6 +9,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -149,6 +150,9 @@ type Service struct {
 	seenCmds            map[seenCmdKey]seenCmdEntry
 	pluginState         pluginRegistry
 	broadcastSem        chan struct{}             // Semaphore untuk membatasi concurrent gcast
+	monitorSem          chan struct{}
+	monitorDedupMu      sync.Mutex
+	monitorDedup        map[string]time.Time
 }
 
 // publishSessionState mengirimkan perubahan lifecycle akun sebagai event
@@ -200,9 +204,85 @@ func (s *Service) publishSessionState(chatID, ownerID int64, state AccountSessio
 	}
 }
 
+func (s *Service) shouldEmitMonitorEvent(key string, cooldown time.Duration) bool {
+	if key == "" || cooldown <= 0 {
+		return true
+	}
+	now := time.Now()
+	s.monitorDedupMu.Lock()
+	defer s.monitorDedupMu.Unlock()
+	if s.monitorDedup == nil {
+		s.monitorDedup = make(map[string]time.Time)
+	}
+	if until, ok := s.monitorDedup[key]; ok && now.Before(until) {
+		return false
+	}
+	if len(s.monitorDedup) >= 512 {
+		for k, ts := range s.monitorDedup {
+			if !now.Before(ts) {
+				delete(s.monitorDedup, k)
+			}
+		}
+		if len(s.monitorDedup) >= 512 {
+			type dedupItem struct {
+				k  string
+				ts time.Time
+			}
+			items := make([]dedupItem, 0, len(s.monitorDedup))
+			for k, ts := range s.monitorDedup {
+				items = append(items, dedupItem{k: k, ts: ts})
+			}
+			sort.Slice(items, func(i, j int) bool {
+				return items[i].ts.Before(items[j].ts)
+			})
+			excess := len(s.monitorDedup) - 384
+			for i := 0; i < excess && i < len(items); i++ {
+				delete(s.monitorDedup, items[i].k)
+			}
+		}
+	}
+	s.monitorDedup[key] = now.Add(cooldown)
+	return true
+}
+
 func (s *Service) emitMonitorEvent(eventType, text string, chatID, ownerID int64) {
 	if s.redis == nil || eventType == "" || text == "" {
 		return
+	}
+	var dedupKey string
+	var cooldown time.Duration
+	switch eventType {
+	case "traceback":
+		dedupKey = fmt.Sprintf("tb:%d", chatID)
+		cooldown = 30 * time.Second
+	case "db_health":
+		dedupKey = "db:" + text
+		cooldown = 60 * time.Second
+	case "bot_loader":
+		dedupKey = "loader:" + text
+		cooldown = 15 * time.Second
+	}
+	if !s.shouldEmitMonitorEvent(dedupKey, cooldown) {
+		return
+	}
+	if s.monitorSem != nil {
+		if eventType == "traceback" {
+			select {
+			case s.monitorSem <- struct{}{}:
+			default:
+				return
+			}
+		} else {
+			semCtx, semCancel := context.WithTimeout(context.Background(), time.Second)
+			select {
+			case s.monitorSem <- struct{}{}:
+				semCancel()
+			case <-semCtx.Done():
+				semCancel()
+				return
+			}
+		}
+		defer func() { <-s.monitorSem }()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -288,6 +368,8 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		sudoCache:           make(map[string]sudoCacheEntry),
 		broadcastSem:        make(chan struct{}, 32), // batas concurrent gcast untuk kapasitas 1000 akun
 		cmdSem:              make(chan struct{}, 32), // batas concurrency perintah background
+		monitorSem:          make(chan struct{}, 4),
+		monitorDedup:        make(map[string]time.Time),
 		peers:               gobot.DefaultPool().Peers,
 	}
 }

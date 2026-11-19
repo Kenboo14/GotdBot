@@ -5,10 +5,11 @@ import (
 	"assterisk/gateway/internal/databases"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"html"
-	"log"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,22 +19,32 @@ import (
 	"github.com/shirou/gopsutil/v3/mem"
 )
 
-type devMonitorMsg struct {
-	topicID int
-	text    string
-}
+const (
+	maxDedupEntries = 512
+	dedupPruneTo    = 384
+)
 
 type devMonitor struct {
-	mu          sync.Mutex
-	chatTarget  any
-	fallbackTop int
-	topics      map[string]int
-	queue       chan devMonitorMsg
-	dedup       map[string]time.Time
-	started     bool
-	b           *botgotd.Bot
-	db          *databases.DataManager
-	rdb         *redis.Client
+	mu                sync.Mutex
+	chatTarget        any
+	fallbackTop       int
+	topics            map[string]int
+	dispatcher        *monitorDispatcher
+	dedup             map[string]time.Time
+	lastHealthSummary string
+	started           bool
+	b                 *botgotd.Bot
+	db                *databases.DataManager
+	rdb               *redis.Client
+}
+
+type infraHealthSnapshot struct {
+	dbHealth        databases.DBHealth
+	mongoConfigured bool
+	redisOK         bool
+	redisErr        string
+	memDetail       string
+	ramPercent      float64
 }
 
 var globalDevMonitor = &devMonitor{
@@ -65,6 +76,12 @@ func parseTopicEnv(key string) int {
 		return 0
 	}
 	return id
+}
+
+func hashDedup(s string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 func startDevMonitor(ctx context.Context, b *botgotd.Bot, rdb *redis.Client, db *databases.DataManager) {
@@ -99,12 +116,15 @@ func startDevMonitor(ctx context.Context, b *botgotd.Bot, rdb *redis.Client, db 
 		globalDevMonitor.topics[k] = parseTopicEnv(k)
 	}
 	if !globalDevMonitor.started {
-		globalDevMonitor.queue = make(chan devMonitorMsg, 128)
+		disp := newMonitorDispatcher(defaultMonitorDispatcherConfig(), b, target, fallback)
+		globalDevMonitor.dispatcher = disp
 		globalDevMonitor.started = true
-		go globalDevMonitor.worker(ctx)
+		go disp.run(ctx, globalDevMonitor.resolveTopic)
 		if target != nil {
 			go globalDevMonitor.runStartupAndDBHealthLoop(ctx)
 		}
+	} else if globalDevMonitor.dispatcher != nil {
+		globalDevMonitor.dispatcher.updateTarget(b, target, fallback)
 	}
 	globalDevMonitor.mu.Unlock()
 }
@@ -125,93 +145,97 @@ func (m *devMonitor) shouldSendDedup(dedupKey string, cooldown time.Duration) bo
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.dedup) > 512 {
-		for k, ts := range m.dedup {
-			if now.After(ts) {
-				delete(m.dedup, k)
-			}
-		}
+	if m.dedup == nil {
+		m.dedup = make(map[string]time.Time)
 	}
 	if until, ok := m.dedup[dedupKey]; ok && now.Before(until) {
 		return false
+	}
+	if len(m.dedup) >= maxDedupEntries {
+		for k, ts := range m.dedup {
+			if !now.Before(ts) {
+				delete(m.dedup, k)
+			}
+		}
+		if len(m.dedup) >= maxDedupEntries {
+			type dedupEntry struct {
+				k  string
+				ts time.Time
+			}
+			entries := make([]dedupEntry, 0, len(m.dedup))
+			for k, ts := range m.dedup {
+				entries = append(entries, dedupEntry{k: k, ts: ts})
+			}
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].ts.Before(entries[j].ts)
+			})
+			excess := len(m.dedup) - dedupPruneTo
+			for i := 0; i < excess && i < len(entries); i++ {
+				delete(m.dedup, entries[i].k)
+			}
+		}
 	}
 	m.dedup[dedupKey] = now.Add(cooldown)
 	return true
 }
 
-func (m *devMonitor) enqueue(topicKey, dedupKey string, cooldown time.Duration, text string) {
+func (m *devMonitor) activeDispatcher() (*monitorDispatcher, bool) {
+	m.mu.Lock()
+	target := m.chatTarget
+	disp := m.dispatcher
+	m.mu.Unlock()
+	if target == nil || disp == nil {
+		return nil, false
+	}
+	return disp, true
+}
+
+func (m *devMonitor) enqueue(topicKey, dedupKey string, cooldown time.Duration, priority monitorPriority, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	m.mu.Lock()
-	target := m.chatTarget
-	q := m.queue
-	m.mu.Unlock()
-	if target == nil || q == nil {
+	disp, ok := m.activeDispatcher()
+	if !ok || !m.shouldSendDedup(dedupKey, cooldown) {
 		return
 	}
-	if !m.shouldSendDedup(dedupKey, cooldown) {
-		return
-	}
-	topicID := m.resolveTopic(topicKey)
-	select {
-	case q <- devMonitorMsg{topicID: topicID, text: text}:
-	default:
-		log.Printf("⚠️ [DevMonitor] queue full, dropping event for %s", topicKey)
-	}
+	disp.Enqueue(monitorJob{
+		topicKey:   topicKey,
+		topicID:    m.resolveTopic(topicKey),
+		text:       text,
+		priority:   priority,
+		allowRetry: priority == monitorPriorityHigh,
+	})
 }
 
-func (m *devMonitor) worker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case item := <-m.queue:
-			m.deliver(ctx, item)
-		}
+func (m *devMonitor) enqueueBatched(topicKey, header, dedupKey string, cooldown time.Duration, priority monitorPriority, entry, singleText string) {
+	if strings.TrimSpace(entry) == "" {
+		return
 	}
+	disp, ok := m.activeDispatcher()
+	if !ok || !m.shouldSendDedup(dedupKey, cooldown) {
+		return
+	}
+	disp.EnqueueBatchEntry(topicKey, header, priority, entry, singleText)
 }
 
-func (m *devMonitor) deliver(ctx context.Context, item devMonitorMsg) {
-	m.mu.Lock()
-	target := m.chatTarget
-	fallback := m.fallbackTop
-	b := m.b
-	m.mu.Unlock()
-	if target == nil || b == nil {
+func (m *devMonitor) EnqueueDashboardEdit(msgID int, htmlContent string, onMsgID func(int)) {
+	if strings.TrimSpace(htmlContent) == "" {
 		return
 	}
-
-	sendAttempt := func(threadID int) error {
-		sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		_, err := b.SendMessage(sendCtx, &botgotd.SendMessageParams{
-			ChatID:          target,
-			MessageThreadID: threadID,
-			Text:            item.text,
-			ParseMode:       botgotd.ParseModeHTML,
-		})
-		return err
-	}
-
-	err := sendAttempt(item.topicID)
-	if err == nil {
+	disp, ok := m.activeDispatcher()
+	if !ok {
 		return
 	}
+	disp.EnqueueDashboard(dashboardEditJob{
+		topicID: m.resolveTopic("MONITOR_TOPIC"),
+		msgID:   msgID,
+		text:    htmlContent,
+		onMsgID: onMsgID,
+	})
+}
 
-	// Fallback berjenjang jika topic spesifik invalid/tertutup:
-	// topic spesifik -> MONITOR_TOPIC -> GROUP_DEV utama (threadID=0)
-	if item.topicID != 0 && fallback != 0 && item.topicID != fallback {
-		if fbErr := sendAttempt(fallback); fbErr == nil {
-			return
-		}
-	}
-	if item.topicID != 0 {
-		if rootErr := sendAttempt(0); rootErr == nil {
-			return
-		}
-	}
-	log.Printf("⚠️ [DevMonitor] gagal kirim ke GROUP_DEV (topic=%d): %v", item.topicID, err)
+func (m *devMonitor) EnqueueAlertDigest(text string) {
+	m.enqueue("MONITOR_TOPIC", "alertdigest:"+hashDedup(text), 10*time.Second, monitorPriorityNormal, text)
 }
 
 func (m *devMonitor) runStartupAndDBHealthLoop(ctx context.Context) {
@@ -236,39 +260,52 @@ func (m *devMonitor) runStartupAndDBHealthLoop(ctx context.Context) {
 	}
 }
 
-func (m *devMonitor) notifyStartupStatus(ctx context.Context) {
-	mongoConfigured := strings.TrimSpace(os.Getenv("MONGO_URI")) != "" || strings.TrimSpace(os.Getenv("MONGO_BACKUP_URI")) != ""
-	var dbHealth databases.DBHealth
-	if m.db != nil {
-		dbHealth = m.db.CheckHealth(ctx, mongoConfigured)
+func (m *devMonitor) collectInfraHealth(ctx context.Context) infraHealthSnapshot {
+	m.mu.Lock()
+	db := m.db
+	rdb := m.rdb
+	m.mu.Unlock()
+
+	snap := infraHealthSnapshot{
+		mongoConfigured: strings.TrimSpace(os.Getenv("MONGO_URI")) != "" || strings.TrimSpace(os.Getenv("MONGO_BACKUP_URI")) != "",
+		redisOK:         true,
+		memDetail:       "N/A",
 	}
-	redisOK := false
-	if m.rdb != nil {
+	if db != nil {
+		snap.dbHealth = db.CheckHealth(ctx, snap.mongoConfigured)
+	}
+	if rdb != nil {
 		rCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		redisOK = m.rdb.Ping(rCtx).Err() == nil
+		if err := rdb.Ping(rCtx).Err(); err != nil {
+			snap.redisOK = false
+			snap.redisErr = err.Error()
+		}
 		cancel()
 	}
-	var memStr string
 	if vm, err := mem.VirtualMemory(); err == nil && vm != nil {
-		memStr = fmt.Sprintf("%.1f / %.1f MiB (%.1f%%)", float64(vm.Used)/(1024*1024), float64(vm.Total)/(1024*1024), vm.UsedPercent)
-	} else {
-		memStr = "N/A"
+		snap.ramPercent = vm.UsedPercent
+		snap.memDetail = fmt.Sprintf("%.1f / %.1f MiB (%.1f%%)", float64(vm.Used)/(1024*1024), float64(vm.Total)/(1024*1024), vm.UsedPercent)
 	}
+	return snap
+}
+
+func (m *devMonitor) notifyStartupStatus(ctx context.Context) {
+	snap := m.collectInfraHealth(ctx)
 
 	sqliteStatus := "❌ Error"
-	if dbHealth.SQLiteOK {
+	if snap.dbHealth.SQLiteOK {
 		sqliteStatus = "🟢 OK (WAL)"
 	}
 	mongoStatus := "⚪ Nonaktif"
-	if mongoConfigured {
-		if dbHealth.MongoOK {
+	if snap.mongoConfigured {
+		if snap.dbHealth.MongoOK {
 			mongoStatus = "🟢 Connected"
 		} else {
 			mongoStatus = "🟡 Fallback SQLite"
 		}
 	}
 	redisStatus := "❌ Error"
-	if redisOK {
+	if snap.redisOK {
 		redisStatus = "🟢 Connected"
 	}
 
@@ -284,73 +321,47 @@ func (m *devMonitor) notifyStartupStatus(ctx context.Context) {
 </table>
 <hr/>
 <p>🕒 %s WIB</p>`,
-		sqliteStatus, mongoStatus, redisStatus, html.EscapeString(memStr),
+		sqliteStatus, mongoStatus, redisStatus, html.EscapeString(snap.memDetail),
 		runtime.NumCPU(), html.EscapeString(runtime.Version()),
 		time.Now().Format("15:04:05"),
 	)
-	m.enqueue("MONITOR_BOT_LOADER", "", 0, text)
+	m.enqueue("MONITOR_BOT_LOADER", "loader:gateway:startup", 30*time.Second, monitorPriorityHigh, text)
 }
 
-var (
-	lastHealthMu      sync.Mutex
-	lastHealthSummary string
-)
-
 func (m *devMonitor) checkAndReportHealth(ctx context.Context, forceStartup bool) {
-	mongoConfigured := strings.TrimSpace(os.Getenv("MONGO_URI")) != "" || strings.TrimSpace(os.Getenv("MONGO_BACKUP_URI")) != ""
-	var dbHealth databases.DBHealth
-	if m.db != nil {
-		dbHealth = m.db.CheckHealth(ctx, mongoConfigured)
-	}
-	redisOK := true
-	redisErr := ""
-	if m.rdb != nil {
-		rCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		if err := m.rdb.Ping(rCtx).Err(); err != nil {
-			redisOK = false
-			redisErr = err.Error()
-		}
-		cancel()
-	}
+	snap := m.collectInfraHealth(ctx)
 
-	ramPercent := 0.0
-	ramDetail := "N/A"
-	if vm, err := mem.VirtualMemory(); err == nil && vm != nil {
-		ramPercent = vm.UsedPercent
-		ramDetail = fmt.Sprintf("%.1f / %.1f MiB (%.1f%%)", float64(vm.Used)/(1024*1024), float64(vm.Total)/(1024*1024), vm.UsedPercent)
-	}
+	highRAM := snap.ramPercent >= 85.0
+	summary := fmt.Sprintf("sq=%v|mg=%v|rd=%v|hr=%v", snap.dbHealth.SQLiteOK, snap.dbHealth.MongoOK, snap.redisOK, highRAM)
 
-	highRAM := ramPercent >= 85.0
-	summary := fmt.Sprintf("sq=%v|mg=%v|rd=%v|hr=%v", dbHealth.SQLiteOK, dbHealth.MongoOK, redisOK, highRAM)
+	m.mu.Lock()
+	changed := summary != m.lastHealthSummary
+	m.lastHealthSummary = summary
+	m.mu.Unlock()
 
-	lastHealthMu.Lock()
-	changed := summary != lastHealthSummary
-	lastHealthSummary = summary
-	lastHealthMu.Unlock()
-
-	if !forceStartup && !changed && dbHealth.SQLiteOK && redisOK && (!mongoConfigured || dbHealth.MongoOK) && !highRAM {
+	if !forceStartup && !changed && snap.dbHealth.SQLiteOK && snap.redisOK && (!snap.mongoConfigured || snap.dbHealth.MongoOK) && !highRAM {
 		return
 	}
 
 	icon := "🟢"
 	title := "DATABASE & VPS HEALTH"
-	if !dbHealth.SQLiteOK || !redisOK || highRAM {
+	if !snap.dbHealth.SQLiteOK || !snap.redisOK || highRAM {
 		icon = "🔴"
 		title = "DATABASE / VPS WARNING"
-	} else if mongoConfigured && !dbHealth.MongoOK {
+	} else if snap.mongoConfigured && !snap.dbHealth.MongoOK {
 		icon = "🟡"
 		title = "MONGODB FALLBACK ACTIVE"
 	}
 
 	extraErr := ""
-	if dbHealth.SQLiteErr != "" {
-		extraErr += "\n• SQLite: <code>" + html.EscapeString(dbHealth.SQLiteErr) + "</code>"
+	if snap.dbHealth.SQLiteErr != "" {
+		extraErr += "\n• SQLite: <code>" + html.EscapeString(snap.dbHealth.SQLiteErr) + "</code>"
 	}
-	if dbHealth.MongoErr != "" {
-		extraErr += "\n• MongoDB: <code>" + html.EscapeString(dbHealth.MongoErr) + "</code>"
+	if snap.dbHealth.MongoErr != "" {
+		extraErr += "\n• MongoDB: <code>" + html.EscapeString(snap.dbHealth.MongoErr) + "</code>"
 	}
-	if redisErr != "" {
-		extraErr += "\n• Redis: <code>" + html.EscapeString(redisErr) + "</code>"
+	if snap.redisErr != "" {
+		extraErr += "\n• Redis: <code>" + html.EscapeString(snap.redisErr) + "</code>"
 	}
 
 	text := fmt.Sprintf(`%s <b>[%s]</b>
@@ -364,172 +375,9 @@ func (m *devMonitor) checkAndReportHealth(ctx context.Context, forceStartup bool
 <hr/>
 <p>🕒 %s WIB</p>`,
 		icon, title,
-		dbHealth.SQLiteOK, dbHealth.MongoOK, mongoConfigured, redisOK,
-		html.EscapeString(ramDetail), extraErr,
+		snap.dbHealth.SQLiteOK, snap.dbHealth.MongoOK, snap.mongoConfigured, snap.redisOK,
+		html.EscapeString(snap.memDetail), extraErr,
 		time.Now().Format("15:04:05"),
 	)
-	m.enqueue("MONITOR_DATABASE", "dbhealth:"+summary, 5*time.Minute, text)
-}
-
-func (m *devMonitor) NotifyUserStart(userID int64, username, fullName string, hasActive bool) {
-	uStr := "-"
-	if username != "" {
-		uStr = "@" + html.EscapeString(username)
-	}
-	status := "Belum terpasang"
-	if hasActive {
-		status = "Sudah aktif"
-	}
-	text := fmt.Sprintf(`👤 <b>[USER START]</b>
-• <b>Nama:</b> %s
-• <b>Username:</b> %s
-• <b>User ID:</b> <code>%d</code>
-• <b>Status Sesi:</b> <code>%s</code>
-• 🕒 %s WIB`,
-		html.EscapeString(fullName), uStr, userID, status, time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_USER_START", fmt.Sprintf("start:%d", userID), 30*time.Second, text)
-}
-
-func (m *devMonitor) NotifyUserbotConnected(chatID, userbotID int64, reason string) {
-	text := fmt.Sprintf(`🟢 <b>[USERBOT CONNECTED]</b>
-• <b>Chat ID:</b> <code>%d</code>
-• <b>Userbot ID:</b> <code>%d</code>
-• <b>Keterangan:</b> %s
-• 🕒 %s WIB`,
-		chatID, userbotID, html.EscapeString(reason), time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_USERBOT_CONNECTED", fmt.Sprintf("conn:%d:%s", chatID, reason), 20*time.Second, text)
-}
-
-func (m *devMonitor) NotifySessionTrack(chatID, ownerID int64, state, reason string) {
-	icon := "🟡"
-	switch strings.ToUpper(state) {
-	case "SESSION_INVALID":
-		icon = "🔴"
-	case "RECONNECTING", "SUSPECTED":
-		icon = "🟠"
-	case "CONNECTED":
-		icon = "🟢"
-	}
-	text := fmt.Sprintf(`%s <b>[SESSION TRACK • %s]</b>
-• <b>Chat ID:</b> <code>%d</code>
-• <b>Userbot ID:</b> <code>%d</code>
-• <b>Detail:</b> <code>%s</code>
-• 🕒 %s WIB`,
-		icon, html.EscapeString(strings.ToUpper(state)), chatID, ownerID, html.EscapeString(reason), time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_SESSION_TRACK", fmt.Sprintf("track:%d:%s", chatID, state), 45*time.Second, text)
-}
-
-func (m *devMonitor) NotifyTokenCreated(creatorID int64, tier, token, durStr string, isShared bool) {
-	mode := "Personal (1x)"
-	if isShared {
-		mode = "Shared Free"
-	}
-	text := fmt.Sprintf(`🎫 <b>[TOKEN CREATED]</b>
-• <b>Owner:</b> <code>%d</code>
-• <b>Tier:</b> <code>%s</code> (%s)
-• <b>Durasi:</b> <code>%s</code>
-• <b>Token:</b> <code>%s</code>
-• 🕒 %s WIB`,
-		creatorID, html.EscapeString(tier), mode, html.EscapeString(durStr), html.EscapeString(token), time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_TOKEN_CREATED", "", 0, text)
-}
-
-func (m *devMonitor) NotifyTokenCollected(chatID, userbotID int64, tier, masterToken, tokenSHA string, isRecovery bool) {
-	kind := "Aktivasi Baru"
-	if isRecovery {
-		kind = "Pemulihan / Relink SHA"
-	}
-	userbotIDStr := "Belum terpasang"
-	if userbotID != 0 {
-		userbotIDStr = strconv.FormatInt(userbotID, 10)
-	}
-	text := fmt.Sprintf(`🎟️ <b>[TOKEN COLLECTED • %s]</b>
-• <b>Chat ID:</b> <code>%d</code>
-• <b>Userbot ID:</b> <code>%s</code>
-• <b>Tier:</b> <code>%s</code>
-• <b>Master:</b> <code>%s</code>
-• <b>SHA:</b> <code>%s</code>
-• 🕒 %s WIB`,
-		kind, chatID, userbotIDStr, html.EscapeString(tier), html.EscapeString(masterToken), html.EscapeString(tokenSHA), time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_TOKEN_COLLECTED", "", 0, text)
-}
-
-func (m *devMonitor) NotifyBackupToken(lic *databases.UserLicense) {
-	if lic == nil {
-		return
-	}
-	text := fmt.Sprintf(`🔐 <b>[BACKUP TOKEN VAULT]</b>
-• <b>Owner ChatID:</b> <code>%d</code>
-• <b>Userbot ID:</b> <code>%d</code>
-• <b>Tier:</b> <code>%s</code>
-• <b>Expires:</b> <code>%s</code>
-• <b>Master:</b> <code>%s</code>
-• <b>Token SHA:</b> <code>%s</code>`,
-		lic.OwnerChatID, lic.UserbotID, html.EscapeString(lic.Tier),
-		lic.ExpiresAt.Local().Format("02-01-2006 15:04:05"),
-		html.EscapeString(lic.MasterToken), html.EscapeString(lic.TokenSHA),
-	)
-	m.enqueue("MONITOR_BACKUP_TOKEN", "", 0, text)
-}
-
-func (m *devMonitor) NotifyTokenExpired(lic *databases.UserLicense) {
-	if lic == nil {
-		return
-	}
-	text := fmt.Sprintf(`⏳ <b>[TOKEN EXPIRED &amp; SESSION REVOKED]</b>
-• <b>Owner ChatID:</b> <code>%d</code>
-• <b>Userbot ID:</b> <code>%d</code>
-• <b>Tier:</b> <code>%s</code>
-• <b>Expired At:</b> <code>%s</code>
-• <b>Token SHA:</b> <code>%s</code>`,
-		lic.OwnerChatID, lic.UserbotID, html.EscapeString(lic.Tier),
-		lic.ExpiresAt.Local().Format("02-01-2006 15:04:05"),
-		html.EscapeString(lic.TokenSHA),
-	)
-	m.enqueue("MONITOR_TOKEN_EXPIRED", "", 0, text)
-}
-
-func (m *devMonitor) NotifyTraceback(source, title, detail string) {
-	if len(detail) > 2500 {
-		detail = detail[:2500] + "..."
-	}
-	text := fmt.Sprintf(`🐞 <b>[TRACEBACK • %s]</b>
-<b>%s</b>
-<pre>%s</pre>
-• 🕒 %s WIB`,
-		html.EscapeString(source), html.EscapeString(title), html.EscapeString(detail), time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_TRACEBACK", "tb:"+source+":"+title, 30*time.Second, text)
-}
-
-func (m *devMonitor) NotifyBotLoader(source, detail string) {
-	text := fmt.Sprintf(`⚙️ <b>[BOT LOADER • %s]</b>
-%s
-• 🕒 %s WIB`,
-		html.EscapeString(source), detail, time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_BOT_LOADER", "", 0, text)
-}
-
-func (m *devMonitor) NotifyDatabase(source, detail string) {
-	text := fmt.Sprintf(`🗄️ <b>[DATABASE • %s]</b>
-%s
-• 🕒 %s WIB`,
-		html.EscapeString(source), detail, time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_DATABASE", "db:"+source+":"+detail, 2*time.Minute, text)
-}
-
-func (m *devMonitor) NotifyInvoice(detail string) {
-	text := fmt.Sprintf(`🧾 <b>[INVOICE]</b>
-%s
-• 🕒 %s WIB`,
-		detail, time.Now().Format("15:04:05"),
-	)
-	m.enqueue("MONITOR_INVOICE", "", 0, text)
+	m.enqueue("MONITOR_DATABASE", "dbhealth:"+summary, 5*time.Minute, monitorPriorityHigh, text)
 }

@@ -239,9 +239,10 @@ func (t *telemetryTracker) updateSystemResourceStats(ctx context.Context) {
 
 	t.mu.RLock()
 	ubotSysMB := float64(t.simulasiMetrics.RAMSysMB)
+	rdb := t.rdb
 	t.mu.RUnlock()
 
-	redisMB := parseRedisMemoryMB(ctx, t.rdb)
+	redisMB := parseRedisMemoryMB(ctx, rdb)
 	totalMem := gwSysMB + ubotSysMB + redisMB
 
 	t.mu.Lock()
