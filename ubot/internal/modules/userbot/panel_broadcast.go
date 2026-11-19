@@ -21,7 +21,6 @@ import (
 	"github.com/gotd/td/telegram/message/rich"
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
-	"github.com/gotd/td/tgerr"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -834,39 +833,56 @@ type jasebGroupDoc struct {
 	ChatID     int64  `bson:"chat_id" json:"chat_id"`
 	AccessHash int64  `bson:"access_hash" json:"access_hash"`
 	PeerType   string `bson:"peer_type" json:"peer_type"`
+	IsForum    bool   `bson:"is_forum,omitempty" json:"is_forum,omitempty"`
 }
 
 type jasebTopicDoc struct {
-	ChatID  int64  `bson:"chat_id" json:"chat_id"`
-	TopicID int    `bson:"topic_id" json:"topic_id"`
-	Title   string `bson:"title" json:"title"`
+	ChatID     int64  `bson:"chat_id" json:"chat_id"`
+	GroupTitle string `bson:"group_title,omitempty" json:"group_title,omitempty"`
+	TopicID    int    `bson:"topic_id" json:"topic_id"`
+	Title      string `bson:"title" json:"title"`
+}
+
+type jasebTopicLinkDoc struct {
+	ChatID     int64  `bson:"chat_id" json:"chat_id"`
+	GroupTitle string `bson:"group_title,omitempty" json:"group_title,omitempty"`
+	TopicID    int    `bson:"topic_id" json:"topic_id"`
+	TopicTitle string `bson:"topic_title,omitempty" json:"topic_title,omitempty"`
+}
+
+type jasebTopicListDoc struct {
+	Name         string              `bson:"name" json:"name"`
+	Posts        []int               `bson:"posts" json:"posts"`
+	PlayMode     string              `bson:"play_mode" json:"play_mode"`
+	LinkedTopics []jasebTopicLinkDoc `bson:"linked_topics" json:"linked_topics"`
 }
 
 type jasebConfigDoc struct {
-	OwnerID          int64           `bson:"_id" json:"owner_id"`
-	Type             string          `bson:"type" json:"type"`
-	Delay            int             `bson:"delay" json:"delay"`
-	SkipFloodWait    bool            `bson:"skip_floodwait" json:"skip_floodwait"`
-	Timer            string          `bson:"timer" json:"timer"`
-	Extra            int             `bson:"extra" json:"extra"`
-	Mode             string          `bson:"mode" json:"mode"`
-	Safemode         bool            `bson:"safemode" json:"safemode"`
-	Status           string          `bson:"status" json:"status"`
-	MasaAktif        string          `bson:"masa_aktif" json:"masa_aktif"`
-	Notifikasi       string          `bson:"notifikasi" json:"notifikasi"`
-	Email            string          `bson:"email" json:"email"`
-	Admin            string          `bson:"admin" json:"admin"`
-	Watermark        string          `bson:"watermark" json:"watermark"`
-	WatermarkCacheID int             `bson:"watermark_cache_id" json:"watermark_cache_id"`
-	TopicEnabled     bool            `bson:"topic_enabled" json:"topic_enabled"`
-	TindakanTerkini  string          `bson:"tindakan_terkini" json:"tindakan_terkini"`
-	TindakanTerakhir string          `bson:"tindakan_terakhir" json:"tindakan_terakhir"`
-	Lists            []int           `bson:"lists" json:"lists"`
-	Groups           []jasebGroupDoc `bson:"groups" json:"groups"`
-	Topics           []jasebTopicDoc `bson:"topics" json:"topics"`
-	BroadcastIndex   int             `bson:"broadcast_index" json:"broadcast_index"`
-	BroadcastNextAt  int64           `bson:"broadcast_next_at" json:"broadcast_next_at"`
-	UpdatedAt        time.Time       `bson:"updated_at" json:"updated_at"`
+	OwnerID          int64               `bson:"_id" json:"owner_id"`
+	Type             string              `bson:"type" json:"type"`
+	Delay            int                 `bson:"delay" json:"delay"`
+	SkipFloodWait    bool                `bson:"skip_floodwait" json:"skip_floodwait"`
+	Timer            string              `bson:"timer" json:"timer"`
+	Extra            int                 `bson:"extra" json:"extra"`
+	Mode             string              `bson:"mode" json:"mode"`
+	Safemode         bool                `bson:"safemode" json:"safemode"`
+	Status           string              `bson:"status" json:"status"`
+	MasaAktif        string              `bson:"masa_aktif" json:"masa_aktif"`
+	Notifikasi       string              `bson:"notifikasi" json:"notifikasi"`
+	Email            string              `bson:"email" json:"email"`
+	Admin            string              `bson:"admin" json:"admin"`
+	Watermark        string              `bson:"watermark" json:"watermark"`
+	WatermarkCacheID int                 `bson:"watermark_cache_id" json:"watermark_cache_id"`
+	TopicEnabled     bool                `bson:"topic_enabled" json:"topic_enabled"`
+	TindakanTerkini  string              `bson:"tindakan_terkini" json:"tindakan_terkini"`
+	TindakanTerakhir string              `bson:"tindakan_terakhir" json:"tindakan_terakhir"`
+	Lists            []int               `bson:"lists" json:"lists"`
+	Groups           []jasebGroupDoc     `bson:"groups" json:"groups"`
+	Topics           []jasebTopicDoc     `bson:"topics" json:"topics"`
+	TopicLists       []jasebTopicListDoc `bson:"topic_lists" json:"topic_lists"`
+	BroadcastIndex   int                 `bson:"broadcast_index" json:"broadcast_index"`
+	BroadcastNextAt  int64               `bson:"broadcast_next_at" json:"broadcast_next_at"`
+	UpdatedAt        time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
 func (s *Service) syncAddListToSQLite(ctx context.Context, ownerID int64, cacheMsgID int) {
@@ -906,6 +922,7 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 	lists, _ := json.Marshal(doc.Lists)
 	groups, _ := json.Marshal(doc.Groups)
 	topics, _ := json.Marshal(doc.Topics)
+	topicLists, _ := json.Marshal(doc.TopicLists)
 	updatedAt := doc.UpdatedAt
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()
@@ -914,9 +931,9 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 		INSERT INTO jaseb_configurasi (
 			owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode,
 			status, masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id,
-			topic_enabled, tindakan_terkini, tindakan_terakhir, lists, groups, topics,
+			topic_enabled, tindakan_terkini, tindakan_terakhir, lists, groups, topics, topic_lists,
 			broadcast_index, broadcast_next_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner_id) DO UPDATE SET
 			type=excluded.type, delay=excluded.delay, skip_floodwait=excluded.skip_floodwait,
 			timer=excluded.timer, extra=excluded.extra, mode=excluded.mode, safemode=excluded.safemode,
@@ -924,13 +941,13 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 			email=excluded.email, admin=excluded.admin, watermark=excluded.watermark,
 			watermark_cache_id=excluded.watermark_cache_id, topic_enabled=excluded.topic_enabled,
 			tindakan_terkini=excluded.tindakan_terkini, tindakan_terakhir=excluded.tindakan_terakhir,
-			lists=excluded.lists, groups=excluded.groups, topics=excluded.topics,
+			lists=excluded.lists, groups=excluded.groups, topics=excluded.topics, topic_lists=excluded.topic_lists,
 			broadcast_index=excluded.broadcast_index, broadcast_next_at=excluded.broadcast_next_at,
 			updated_at=excluded.updated_at`,
 		doc.OwnerID, doc.Type, doc.Delay, boolInt(doc.SkipFloodWait), doc.Timer, doc.Extra,
 		doc.Mode, boolInt(doc.Safemode), doc.Status, doc.MasaAktif, doc.Notifikasi, doc.Email,
 		doc.Admin, doc.Watermark, doc.WatermarkCacheID, boolInt(doc.TopicEnabled),
-		doc.TindakanTerkini, doc.TindakanTerakhir, string(lists), string(groups), string(topics),
+		doc.TindakanTerkini, doc.TindakanTerakhir, string(lists), string(groups), string(topics), string(topicLists),
 		doc.BroadcastIndex, doc.BroadcastNextAt, updatedAt)
 }
 
@@ -947,7 +964,7 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 
 	// Fallback dari SQLite jika MongoDB tidak tersedia.
 	if s.sqlite != nil {
-		var listsJSON, groupsJSON, topicsJSON string
+		var listsJSON, groupsJSON, topicsJSON, topicListsJSON string
 		var delay, sfw, sfm, tpe, extra, wmCacheID int
 		var typ, timer, mode, status, masaAktif, notif, email, admin, watermark, tTerkini, tTerakhir string
 		var broadcastIndex int
@@ -956,14 +973,14 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 
 		query := `SELECT type, delay, skip_floodwait, timer, extra, mode, safemode, status,
 			masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
-			tindakan_terkini, tindakan_terakhir, lists, groups, topics,
+			tindakan_terkini, tindakan_terakhir, lists, groups, topics, COALESCE(topic_lists, '[]'),
 			broadcast_index, broadcast_next_at, updated_at
 			FROM jaseb_configurasi WHERE owner_id = ? LIMIT 1;`
 
 		err := s.sqlite.DB.QueryRowContext(ctx, query, ownerID).Scan(
 			&typ, &delay, &sfw, &timer, &extra, &mode, &sfm, &status,
 			&masaAktif, &notif, &email, &admin, &watermark, &wmCacheID, &tpe,
-			&tTerkini, &tTerakhir, &listsJSON, &groupsJSON, &topicsJSON,
+			&tTerkini, &tTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON,
 			&broadcastIndex, &broadcastNextAt, &updatedAt,
 		)
 		if err == nil {
@@ -997,6 +1014,9 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 			}
 			if topicsJSON != "" {
 				_ = json.Unmarshal([]byte(topicsJSON), &doc.Topics)
+			}
+			if topicListsJSON != "" {
+				_ = json.Unmarshal([]byte(topicListsJSON), &doc.TopicLists)
 			}
 			return doc
 		}
@@ -1322,8 +1342,8 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(cfg.Groups)))
 	}
 
-	// Pre-warm seluruh dialog channel/supergroup access hash agar kirim pesan tidak CHAT_ID_INVALID
 	s.preWarmDialogAccessHashes(ctx, client, ownerID)
+	topicRotator := newTopicPlayTracker()
 
 	for {
 		cfg = s.getJasebConfig(ctx, ownerID)
@@ -1338,8 +1358,6 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		if delaySec <= 0 {
 			delaySec = 5
 		}
-		// Broadcast berjalan per putaran list: List A ke semua grup,
-		// kemudian List B ke semua grup, dan seterusnya.
 		totalWork := len(cfg.Lists) * len(cfg.Groups)
 		workIndex := cfg.BroadcastIndex
 		if workIndex < 0 || workIndex >= totalWork {
@@ -1366,49 +1384,8 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		}
 
 		msgID := cfg.Lists[listIndex]
-
-		forwardIDs := s.cacheForwardIDs(ctx, client, cachePeer, msgID)
-		randomIDs := make([]int64, len(forwardIDs))
-		for i := range randomIDs {
-			randomIDs[i] = time.Now().UnixNano() + int64(i)
-		}
-		req := &tg.MessagesForwardMessagesRequest{
-			FromPeer:   cachePeer,
-			ID:         forwardIDs,
-			RandomID:   randomIDs,
-			ToPeer:     targetPeer,
-			DropAuthor: true,
-		}
-		if cfg.Mode == "Silent" {
-			req.Silent = true
-		}
-
-		_, err = client.API().MessagesForwardMessages(ctx, req)
-		if err != nil {
-			log.Printf("[panelBroadcast] forward to %s (%d) error: %v", grp.Title, grp.ChatID, err)
-			if flood, ok := tgerr.AsFloodWait(err); ok && !cfg.SkipFloodWait {
-				sleepDur := flood + time.Second
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(sleepDur):
-				}
-				_, err = client.API().MessagesForwardMessages(ctx, req)
-			}
-			if err != nil {
-				if flood, ok := tgerr.AsFloodWait(err); ok && cfg.SkipFloodWait {
-					log.Printf("[panelBroadcast] FloodWait %v skipped for %s", flood, grp.Title)
-					// SkipFloodWait memang mengizinkan target dilewati.
-					nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
-					s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
-					continue
-				}
-				// Checkpoint selalu maju, termasuk saat pengiriman gagal, agar
-				// worker tidak berhenti di satu target bermasalah.
-				nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
-				s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
-				continue
-			}
+		if !s.deliverGroupBroadcast(ctx, client, cachePeer, targetPeer, cfg, grp, msgID, topicRotator) {
+			return
 		}
 
 		nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)

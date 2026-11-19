@@ -222,6 +222,32 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		dispatch(func(c context.Context) { s.handleTestRCBroadcast(c, client, job.ChatID, ownerID) })
 		return
 	}
+	if job.Type == "clear_watermark" {
+		dispatch(func(c context.Context) { s.clearPanelWatermark(c, ownerID) })
+		return
+	}
+	if job.Type == "fetch_forum_groups" {
+		dispatch(func(c context.Context) { s.handleFetchForumGroups(c, client, job.ChatID, ownerID, job.TaskID) })
+		return
+	}
+	if job.Type == "fetch_group_topics" {
+		dispatch(func(c context.Context) { s.handleFetchGroupTopics(c, client, job.ChatID, ownerID, job.TaskID, job.Text) })
+		return
+	}
+	if job.Type == "cache_topic_list_post" {
+		dispatch(func(c context.Context) {
+			s.handleCacheTopicListPost(c, client, job.ChatID, ownerID, job.TaskID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
+		})
+		return
+	}
+	if job.Type == "get_topic_list_posts" {
+		dispatch(func(c context.Context) { s.handleTopicListPosts(c, client, job.ChatID, ownerID, job.TaskID) })
+		return
+	}
+	if job.Type == "get_topic_list_post_detail" {
+		dispatch(func(c context.Context) { s.handleTopicListPostDetail(c, client, job.ChatID, ownerID, job.TaskID, job.Text) })
+		return
+	}
 	started := time.Now()
 	pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer pingCancel()
@@ -261,6 +287,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 
 		var accessHash int64
 		peerType := "channel"
+		isForum := false
 
 		switch p := item.Peer.(type) {
 		case *tg.InputPeerChannel:
@@ -275,6 +302,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 			if ch.AccessHash != 0 {
 				accessHash = ch.AccessHash
 			}
+			isForum = ch.Forum
 			peerType = "channel"
 			s.peerCache().SaveChannel(id, accessHash)
 		}
@@ -285,6 +313,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 			ChatID:     id,
 			AccessHash: accessHash,
 			PeerType:   peerType,
+			IsForum:    isForum,
 		})
 		return nil
 	})

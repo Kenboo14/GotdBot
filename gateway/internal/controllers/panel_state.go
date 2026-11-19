@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/gotd/td/tg"
 )
 
 type cachedMediaFile struct {
@@ -98,6 +100,43 @@ func (h *Handler) GetAccountName(userID int64) string {
 	return ""
 }
 
+func (h *Handler) deleteBotMessages(ctx context.Context, b *botgotd.Bot, chatID int64, msgIDs []int) {
+	if b == nil || len(msgIDs) == 0 {
+		return
+	}
+	seen := make(map[int]bool, len(msgIDs))
+	clean := make([]int, 0, len(msgIDs))
+	for _, id := range msgIDs {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			clean = append(clean, id)
+		}
+	}
+	if len(clean) == 0 {
+		return
+	}
+	if b.API != nil {
+		isChannel := false
+		if b.Peers != nil {
+			if _, ok := b.Peers.GetInputPeer(chatID).(*tg.InputPeerChannel); ok {
+				isChannel = true
+			}
+		}
+		if !isChannel {
+			if _, err := b.API.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
+				Revoke: true,
+				ID:     clean,
+			}); err == nil {
+				return
+			}
+		}
+	}
+	_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{
+		ChatID:     chatID,
+		MessageIDs: clean,
+	})
+}
+
 // sendProgress updates the single progress message in a chat, deleting the previous one
 func (h *Handler) sendProgress(ctx context.Context, b *botgotd.Bot, chatID int64, params *botgotd.SendMessageParams) {
 	h.progressMu.Lock()
@@ -105,7 +144,7 @@ func (h *Handler) sendProgress(ctx context.Context, b *botgotd.Bot, chatID int64
 	delete(h.progressMessages, chatID)
 	h.progressMu.Unlock()
 	if oldID > 0 {
-		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: oldID})
+		h.deleteBotMessages(ctx, b, chatID, []int{oldID})
 	}
 	message, err := b.SendMessage(ctx, params)
 	if err == nil && message != nil {
@@ -122,7 +161,7 @@ func (h *Handler) clearProgress(ctx context.Context, b *botgotd.Bot, chatID int6
 	delete(h.progressMessages, chatID)
 	h.progressMu.Unlock()
 	if id > 0 {
-		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: id})
+		h.deleteBotMessages(ctx, b, chatID, []int{id})
 	}
 }
 
@@ -140,7 +179,7 @@ func (h *Handler) clearPanelPrompt(ctx context.Context, b *botgotd.Bot, chatID i
 	delete(h.promptMessages, chatID)
 	h.promptMu.Unlock()
 	if id > 0 {
-		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: id})
+		h.deleteBotMessages(ctx, b, chatID, []int{id})
 	}
 }
 

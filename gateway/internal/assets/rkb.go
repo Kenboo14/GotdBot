@@ -36,6 +36,8 @@ const (
 	BtnCekTopic   = "🧑‍💻 Cek Topic 🧑‍💻"
 	BtnTopic      = "🧑‍💻 Topic 🧑‍💻"
 	BtnListTopic  = "📌 List Topic"
+	BtnSemuaTopic = "📂 Semua Topic"
+	BtnHapusTopic = "🗑️ Hapus Topic"
 	BtnCekList    = "📁 Cek List 📁"
 	BtnCekGrup    = "📚 Cek Grup 📚"
 	BtnTambahList = "📝 Tambah List 📝"
@@ -136,6 +138,8 @@ var (
 
 	// InstallPhoneMarkup asks the user to share their contact.
 	InstallPhoneMarkup *botgotd.ReplyKeyboardMarkup
+
+	WatermarkPromptMarkup *botgotd.ReplyKeyboardMarkup
 
 	// RemoveKeyboard removes the reply keyboard.
 	RemoveKeyboard *botgotd.ReplyKeyboardRemove
@@ -254,6 +258,14 @@ func init() {
 		},
 		ResizeKeyboard:  true,
 		OneTimeKeyboard: true,
+	}
+
+	WatermarkPromptMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard: [][]botgotd.KeyboardButton{
+			{{Text: BtnHapusWatermark}},
+			{{Text: BtnBatal}},
+		},
+		ResizeKeyboard: true,
 	}
 
 	RemoveKeyboard = &botgotd.ReplyKeyboardRemove{RemoveKeyboard: true}

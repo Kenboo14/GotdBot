@@ -39,6 +39,21 @@ func cloneJasebConfig(cfg *JasebConfig) *JasebConfig {
 		cp.Topics = make([]TopicEntry, len(cfg.Topics))
 		copy(cp.Topics, cfg.Topics)
 	}
+	if cfg.TopicLists != nil {
+		cp.TopicLists = make([]TopicListEntry, len(cfg.TopicLists))
+		for i, tl := range cfg.TopicLists {
+			cpTL := tl
+			if tl.Posts != nil {
+				cpTL.Posts = make([]int, len(tl.Posts))
+				copy(cpTL.Posts, tl.Posts)
+			}
+			if tl.LinkedTopics != nil {
+				cpTL.LinkedTopics = make([]TopicLink, len(tl.LinkedTopics))
+				copy(cpTL.LinkedTopics, tl.LinkedTopics)
+			}
+			cp.TopicLists[i] = cpTL
+		}
+	}
 	return &cp
 }
 
@@ -277,6 +292,7 @@ func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebCo
 		Lists:            []int{},
 		Groups:           []GroupEntry{},
 		Topics:           []TopicEntry{},
+		TopicLists:       []TopicListEntry{},
 		UpdatedAt:        time.Now(),
 	}
 

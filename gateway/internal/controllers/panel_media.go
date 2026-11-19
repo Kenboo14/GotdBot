@@ -70,7 +70,8 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 	}
 	message := update.Message
 	state := h.getPanelState(message.Chat.ID)
-	if state != "waiting_add_list" && state != "waiting_add_watermark" && !strings.HasPrefix(state, "ctrl_add_list:") {
+	isTopicListPost := strings.HasPrefix(state, "tlist_add_post:")
+	if state != "waiting_add_list" && state != "waiting_add_watermark" && state != "waiting_set_watermark" && !isTopicListPost && !strings.HasPrefix(state, "ctrl_add_list:") {
 		return
 	}
 	if message.MediaGroupID != "" {
@@ -184,14 +185,22 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 	}
 
 	jobType := "cache_list"
-	if state == "waiting_add_watermark" {
+	taskID := ""
+	replyMarkup := grupListMenuMarkup
+	if state == "waiting_add_watermark" || state == "waiting_set_watermark" {
 		jobType = "cache_watermark"
+		replyMarkup = assets.StatusMenuMarkup
+	} else if strings.HasPrefix(state, "tlist_add_post:") {
+		jobType = "cache_topic_list_post"
+		taskID = strings.TrimPrefix(state, "tlist_add_post:")
 	}
 	h.setPanelState(chatID, "")
 	payload := models.PToService{
 		ChatID:           chatID,
 		UserID:           userID,
+		OwnerID:          userID,
 		Type:             jobType,
+		TaskID:           taskID,
 		MediaSourceCount: len(sourceIDs),
 		Text:             caption,
 		Entities:         entities,
@@ -204,7 +213,7 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 		ChatID:      chatID,
 		Text:        "⏳ <b>Mengamankan media ke cache...</b>",
 		ParseMode:   "HTML",
-		ReplyMarkup: grupListMenuMarkup,
+		ReplyMarkup: replyMarkup,
 	})
 }
 

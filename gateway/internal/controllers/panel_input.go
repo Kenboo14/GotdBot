@@ -157,9 +157,10 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 	}
 
-	if text == assets.BtnBatal || strings.EqualFold(text, "batal") || text == "/cancel" {
+	if text == assets.BtnBatal || text == "🔙 Batal 🔙" || strings.EqualFold(text, "batal") || text == "/cancel" {
 		h.clearPanelPrompt(ctx, b, chatID)
 		h.clearProgress(ctx, b, chatID)
+		h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 		h.setPanelState(chatID, "")
 		hasActive := false
 		if h.db != nil {
@@ -167,19 +168,27 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		}
 		if hasActive {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "<p>↩️ <b>Tindakan dibatalkan.</b></p>",
+				ChatID: chatID,
+				Text: `<h1>↩️ Proses Dibatalkan</h1>
+<blockquote expandable>Tindakan dibatalkan dan Anda dikembalikan ke menu panel.</blockquote>
+<hr/>
+<p>GotdBot • Control Panel</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: mainMenuMarkup,
 			})
 		} else {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "<p>↩️ <b>Tindakan dibatalkan.</b></p>",
+				ChatID: chatID,
+				Text: `<h1>↩️ Proses Dibatalkan</h1>
+<blockquote expandable>Tindakan telah dibatalkan.</blockquote>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: assets.RemoveKeyboard,
 			})
 		}
+		return true
+	}
+
+	if h.handleTopicPanelInput(ctx, b, chatID, userID, state, text, message) {
 		return true
 	}
 
@@ -260,25 +269,20 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 
 	case "browse_list", "list_detail":
 		if text == "🗑️ Hapus Semua List 🗑️" {
+			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			_ = h.db.ClearLists(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
 			h.DisplayList(ctx, b, chatID, userID)
 			return true
 		}
 		if text == "Kembali" {
-			msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
-			if len(msgIDs) > 0 {
-				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
-			}
+			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			h.ShowGrupList(ctx, b, chatID, userID)
 			return true
 		}
 		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
 			if state == "list_detail" {
-				msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
-				if len(msgIDs) > 0 {
-					_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
-				}
+				h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			}
 			h.showListDetail(ctx, b, chatID, userID, idx-1)
 			return true
@@ -287,24 +291,19 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 
 	case "browse_group":
 		if text == "🗑️ Hapus Semua Grup 🗑️" {
+			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			_ = h.db.ClearGroups(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_groups"})
 			h.DisplayGroup(ctx, b, chatID, userID)
 			return true
 		}
 		if text == "Kembali" {
-			msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
-			if len(msgIDs) > 0 {
-				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
-			}
+			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			h.ShowGrupList(ctx, b, chatID, userID)
 			return true
 		}
 		if idx, err := strconv.Atoi(text); err == nil && idx > 0 {
-			msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
-			if len(msgIDs) > 0 {
-				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: msgIDs})
-			}
+			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			h.showGroupDetail(ctx, b, chatID, userID, idx-1)
 			return true
 		}
@@ -458,6 +457,8 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 
 	case "waiting_set_watermark":
+		h.clearPanelPrompt(ctx, b, chatID)
+		h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 		if message == nil || message.MediaGroupID == "" {
 			h.setPanelState(chatID, "")
 		}
@@ -466,9 +467,15 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			cfg.Watermark = ""
 			cfg.WatermarkCacheID = 0
 			_ = h.db.SaveUserConfig(ctx, cfg)
+			if h.broker != nil {
+				_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, OwnerID: userID, Type: "clear_watermark"})
+			}
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        "✅ <b>Watermark dihapus.</b>",
+				ChatID: chatID,
+				Text: `<h1>✅ Watermark Berhasil Dihapus</h1>
+<blockquote expandable>Custom watermark telah dihapus dari konfigurasi siaran Anda.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: statusMenuMarkup,
 			})

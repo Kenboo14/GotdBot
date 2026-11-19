@@ -102,6 +102,7 @@ func (s *SQLiteClient) initTables() error {
 			lists TEXT DEFAULT '[]',
 			groups TEXT DEFAULT '[]',
 			topics TEXT DEFAULT '[]',
+			topic_lists TEXT DEFAULT '[]',
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 
@@ -137,6 +138,7 @@ func (s *SQLiteClient) initTables() error {
 		}
 	}
 	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN account_name TEXT DEFAULT '';")
+	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN topic_lists TEXT DEFAULT '[]';")
 	return nil
 }
 
@@ -153,17 +155,17 @@ func (s *SQLiteClient) HasSession(ctx context.Context, ownerID int64) (bool, err
 func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConfig, error) {
 	query := `SELECT owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode, status,
 		masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
-		tindakan_terkini, tindakan_terakhir, lists, groups, topics, updated_at
+		tindakan_terkini, tindakan_terakhir, lists, groups, topics, COALESCE(topic_lists, '[]'), updated_at
 		FROM jaseb_configurasi WHERE owner_id = ? LIMIT 1;`
 
 	var c JasebConfig
 	var sfw, sfm, tpe int
-	var listsJSON, groupsJSON, topicsJSON string
+	var listsJSON, groupsJSON, topicsJSON, topicListsJSON string
 
 	err := s.DB.QueryRowContext(ctx, query, ownerID).Scan(
 		&c.OwnerID, &c.Type, &c.Delay, &sfw, &c.Timer, &c.Extra, &c.Mode, &sfm, &c.Status,
 		&c.MasaAktif, &c.Notifikasi, &c.Email, &c.Admin, &c.Watermark, &c.WatermarkCacheID, &tpe,
-		&c.TindakanTerkini, &c.TindakanTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &c.UpdatedAt,
+		&c.TindakanTerkini, &c.TindakanTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON, &c.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -185,6 +187,9 @@ func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConf
 	if topicsJSON != "" {
 		_ = json.Unmarshal([]byte(topicsJSON), &c.Topics)
 	}
+	if topicListsJSON != "" {
+		_ = json.Unmarshal([]byte(topicListsJSON), &c.TopicLists)
+	}
 	if c.Lists == nil {
 		c.Lists = []int{}
 	}
@@ -194,6 +199,9 @@ func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConf
 	if c.Topics == nil {
 		c.Topics = []TopicEntry{}
 	}
+	if c.TopicLists == nil {
+		c.TopicLists = []TopicListEntry{}
+	}
 
 	return &c, nil
 }
@@ -202,8 +210,8 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	query := `INSERT INTO jaseb_configurasi (
 		owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode, status,
 		masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
-		tindakan_terkini, tindakan_terakhir, lists, groups, topics, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		tindakan_terkini, tindakan_terakhir, lists, groups, topics, topic_lists, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(owner_id) DO UPDATE SET
 		type = excluded.type,
 		delay = excluded.delay,
@@ -225,6 +233,7 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 		lists = excluded.lists,
 		groups = excluded.groups,
 		topics = excluded.topics,
+		topic_lists = excluded.topic_lists,
 		updated_at = excluded.updated_at;`
 
 	sfw := 0
@@ -246,11 +255,12 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	listsBytes, _ := json.Marshal(c.Lists)
 	groupsBytes, _ := json.Marshal(c.Groups)
 	topicsBytes, _ := json.Marshal(c.Topics)
+	topicListsBytes, _ := json.Marshal(c.TopicLists)
 
 	_, err := s.DB.ExecContext(ctx, query,
 		c.OwnerID, c.Type, c.Delay, sfw, c.Timer, c.Extra, c.Mode, sfm, c.Status,
 		c.MasaAktif, c.Notifikasi, c.Email, c.Admin, c.Watermark, c.WatermarkCacheID, tpe,
-		c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), c.UpdatedAt,
+		c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), c.UpdatedAt,
 	)
 	return err
 }

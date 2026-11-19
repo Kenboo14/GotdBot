@@ -216,14 +216,23 @@ func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, u
 		return
 	}
 
+	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_set_watermark")
 	cfg := h.db.GetUserConfig(ctx, userID)
 
-	wm := cfg.Watermark
-	if wm == "" {
-		wm = "<i>(Belum diatur)</i>"
-	} else {
-		wm = html.EscapeString(wm)
+	hasWM := cfg.Watermark != "" || cfg.WatermarkCacheID > 0
+	wm := "<i>(Belum diatur)</i>"
+	if cfg.Watermark != "" {
+		wm = html.EscapeString(cfg.Watermark)
+	} else if cfg.WatermarkCacheID > 0 {
+		wm = fmt.Sprintf("<code>Media Cache #%d</code>", cfg.WatermarkCacheID)
+	}
+
+	deleteBtn := ""
+	markup := assets.CancelOnlyMarkup
+	if hasWM {
+		deleteBtn = "\n<tg-button-row>\n  <tg-button type=\"callback_data\" data=\"panel:watermark:delete\" style=\"danger\">🗑️ Hapus Watermark</tg-button>\n</tg-button-row>"
+		markup = assets.WatermarkPromptMarkup
 	}
 
 	text := fmt.Sprintf(`<h1>📌 Custom Watermark</h1>
@@ -231,16 +240,20 @@ func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, u
   <tr><th>📌 Parameter</th><th>Nilai</th></tr>
   <tr><td>🏷️ Watermark Saat Ini</td><td>%s</td></tr>
 </table>
-<blockquote expandable>Kirimkan teks watermark baru. Watermark akan disematkan pada baris paling akhir setiap pesan siaran.</blockquote>
+<blockquote expandable>Kirimkan teks atau media watermark baru. Watermark akan disematkan pada pesan siaran Anda.</blockquote>%s
 <hr/>
-<p>Kirimkan teks sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, wm)
+<p>Kirimkan watermark sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`, wm, deleteBtn)
 
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
+	msg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
-		ReplyMarkup: assets.CancelOnlyMarkup,
+		ReplyMarkup: markup,
 	})
+	if err == nil && msg != nil && msg.ID > 0 {
+		h.setPanelPrompt(chatID, msg.ID)
+		h.trackDetailMessageIDs(ctx, chatID, []int{msg.ID})
+	}
 }
 
 // PromptEmail prompts user for email

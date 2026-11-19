@@ -235,6 +235,7 @@ func (s *SQLiteClient) initTables() error {
 			lists TEXT DEFAULT '[]',
 			groups TEXT DEFAULT '[]',
 			topics TEXT DEFAULT '[]',
+			topic_lists TEXT DEFAULT '[]',
 			broadcast_index INTEGER DEFAULT 0,
 			broadcast_next_at INTEGER DEFAULT 0,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -299,6 +300,7 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec(`ALTER TABLE log_routes ADD COLUMN access_hash INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_index INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_next_at INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN topic_lists TEXT DEFAULT '[]';`)
 	_, _ = s.DB.Exec(`INSERT OR IGNORE INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
 		SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM sessions WHERE prefix_set = 1;`)
 

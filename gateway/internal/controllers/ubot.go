@@ -61,6 +61,10 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		h.handleBroadcastMonitor(ctx, b, data)
 		return
 	}
+	if data.Type == "forum_groups" || data.Type == "forum_topics" || data.Type == "tlist_posts" || data.Type == "tlist_post_detail" {
+		h.handleTopicServiceResponse(ctx, b, data)
+		return
+	}
 	if data.State == "panel_notice" {
 		h.clearProgress(ctx, b, data.ChatID)
 	}

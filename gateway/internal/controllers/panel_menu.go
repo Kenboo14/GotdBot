@@ -170,11 +170,12 @@ func isKnownPanelButton(text string) bool {
 		assets.BtnTambahGrupManual,
 		assets.BtnCekTopic, assets.BtnListTopic,
 		assets.BtnTopic,
+		assets.BtnSemuaTopic, assets.BtnHapusTopic,
 		assets.BtnSebarKeRC,
 		assets.BtnHapusSemuaGrup,
 		assets.BtnHapusSemuaList,
 		assets.BtnResetKonfigurasi,
-		assets.BtnBatal:
+		assets.BtnBatal, "🔙 Batal 🔙":
 		return true
 	default:
 		return isRestartBrowseButton(text)
@@ -372,12 +373,16 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		h.PromptTambahGrupManual(ctx, b, chatID)
 		return true
 
-	case assets.BtnCekTopic, assets.BtnListTopic:
+	case assets.BtnCekTopic:
 		h.CekTopic(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case assets.BtnTopic:
-		h.ToggleTopic(ctx, b, chatID, effectiveUserID)
+		h.StartTopicMenu(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnListTopic:
+		h.ShowListTopic(ctx, b, chatID, effectiveUserID, 0)
 		return true
 
 	case assets.BtnSebarKeRC:

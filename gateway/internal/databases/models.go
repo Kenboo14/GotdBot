@@ -8,37 +8,54 @@ type GroupEntry struct {
 	ChatID     int64  `bson:"chat_id" json:"chat_id"`
 	AccessHash int64  `bson:"access_hash" json:"access_hash"`
 	PeerType   string `bson:"peer_type" json:"peer_type"`
+	IsForum    bool   `bson:"is_forum,omitempty" json:"is_forum,omitempty"`
 }
 
 type TopicEntry struct {
-	ChatID  int64  `bson:"chat_id" json:"chat_id"`
-	TopicID int    `bson:"topic_id" json:"topic_id"`
-	Title   string `bson:"title" json:"title"`
+	ChatID     int64  `bson:"chat_id" json:"chat_id"`
+	GroupTitle string `bson:"group_title,omitempty" json:"group_title,omitempty"`
+	TopicID    int    `bson:"topic_id" json:"topic_id"`
+	Title      string `bson:"title" json:"title"`
+}
+
+type TopicLink struct {
+	ChatID     int64  `bson:"chat_id" json:"chat_id"`
+	GroupTitle string `bson:"group_title,omitempty" json:"group_title,omitempty"`
+	TopicID    int    `bson:"topic_id" json:"topic_id"`
+	TopicTitle string `bson:"topic_title,omitempty" json:"topic_title,omitempty"`
+}
+
+type TopicListEntry struct {
+	Name         string      `bson:"name" json:"name"`
+	Posts        []int       `bson:"posts" json:"posts"`
+	PlayMode     string      `bson:"play_mode" json:"play_mode"`
+	LinkedTopics []TopicLink `bson:"linked_topics" json:"linked_topics"`
 }
 
 type JasebConfig struct {
-	OwnerID          int64        `bson:"_id" json:"owner_id"`
-	Type             string       `bson:"type" json:"type"`
-	Delay            int          `bson:"delay" json:"delay"`
-	SkipFloodWait    bool         `bson:"skip_floodwait" json:"skip_floodwait"`
-	Timer            string       `bson:"timer" json:"timer"`
-	Extra            int          `bson:"extra" json:"extra"`
-	Mode             string       `bson:"mode" json:"mode"`
-	Safemode         bool         `bson:"safemode" json:"safemode"`
-	Status           string       `bson:"status" json:"status"`
-	MasaAktif        string       `bson:"masa_aktif" json:"masa_aktif"`
-	Notifikasi       string       `bson:"notifikasi" json:"notifikasi"`
-	Email            string       `bson:"email" json:"email"`
-	Admin            string       `bson:"admin" json:"admin"`
-	Watermark        string       `bson:"watermark" json:"watermark"`
-	WatermarkCacheID int          `bson:"watermark_cache_id" json:"watermark_cache_id"`
-	TopicEnabled     bool         `bson:"topic_enabled" json:"topic_enabled"`
-	TindakanTerkini  string       `bson:"tindakan_terkini" json:"tindakan_terkini"`
-	TindakanTerakhir string       `bson:"tindakan_terakhir" json:"tindakan_terakhir"`
-	Lists            []int        `bson:"lists" json:"lists"` // Array of AiotdCaches message IDs (TEKS_CACHE reply)
-	Groups           []GroupEntry `bson:"groups" json:"groups"`
-	Topics           []TopicEntry `bson:"topics" json:"topics"`
-	UpdatedAt        time.Time    `bson:"updated_at" json:"updated_at"`
+	OwnerID          int64            `bson:"_id" json:"owner_id"`
+	Type             string           `bson:"type" json:"type"`
+	Delay            int              `bson:"delay" json:"delay"`
+	SkipFloodWait    bool             `bson:"skip_floodwait" json:"skip_floodwait"`
+	Timer            string           `bson:"timer" json:"timer"`
+	Extra            int              `bson:"extra" json:"extra"`
+	Mode             string           `bson:"mode" json:"mode"`
+	Safemode         bool             `bson:"safemode" json:"safemode"`
+	Status           string           `bson:"status" json:"status"`
+	MasaAktif        string           `bson:"masa_aktif" json:"masa_aktif"`
+	Notifikasi       string           `bson:"notifikasi" json:"notifikasi"`
+	Email            string           `bson:"email" json:"email"`
+	Admin            string           `bson:"admin" json:"admin"`
+	Watermark        string           `bson:"watermark" json:"watermark"`
+	WatermarkCacheID int              `bson:"watermark_cache_id" json:"watermark_cache_id"`
+	TopicEnabled     bool             `bson:"topic_enabled" json:"topic_enabled"`
+	TindakanTerkini  string           `bson:"tindakan_terkini" json:"tindakan_terkini"`
+	TindakanTerakhir string           `bson:"tindakan_terakhir" json:"tindakan_terakhir"`
+	Lists            []int            `bson:"lists" json:"lists"`
+	Groups           []GroupEntry     `bson:"groups" json:"groups"`
+	Topics           []TopicEntry     `bson:"topics" json:"topics"`
+	TopicLists       []TopicListEntry `bson:"topic_lists" json:"topic_lists"`
+	UpdatedAt        time.Time        `bson:"updated_at" json:"updated_at"`
 }
 
 // UserConfig alias for backward-compatibility

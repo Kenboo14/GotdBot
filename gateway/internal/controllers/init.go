@@ -31,9 +31,11 @@ type Handler struct {
 	promptMu         sync.Mutex
 	promptMessages   map[int64]int
 	remoteMu         sync.RWMutex
-	remoteTargets    map[int64]int64 // chatID -> targetOwnerID
+	remoteTargets    map[int64]int64
 	accountNamesMu   sync.RWMutex
 	accountNames     map[int64]string
+	topicMu          sync.RWMutex
+	topicSessions    map[int64]*topicSessionState
 }
 
 func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
@@ -50,6 +52,7 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 		promptMessages:   make(map[int64]int),
 		remoteTargets:    make(map[int64]int64),
 		accountNames:     make(map[int64]string),
+		topicSessions:    make(map[int64]*topicSessionState),
 	}
 }
 
