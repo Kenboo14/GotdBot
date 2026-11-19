@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -26,11 +27,15 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 
 	const baseDelay = 3 * time.Second
 	const maxDelay = 30 * time.Second
-	const perAttemptTimeout = 10 * time.Second
+	const perAttemptTimeout = 15 * time.Second
 
 	opts := options.Client().ApplyURI(uri)
-	opts.SetServerSelectionTimeout(8 * time.Second)
-	opts.SetConnectTimeout(8 * time.Second)
+	opts.SetMaxPoolSize(10)
+	opts.SetMinPoolSize(1)
+	opts.SetMaxConnIdleTime(2 * time.Minute)
+	opts.SetServerSelectionTimeout(10 * time.Second)
+	opts.SetConnectTimeout(10 * time.Second)
+	opts.SetSocketTimeout(15 * time.Second)
 
 	for attempt := 1; ; attempt++ {
 		if ctx.Err() != nil {
@@ -54,7 +59,7 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 			continue
 		}
 
-		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+		pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
 		pingErr := client.Ping(pingCtx, nil)
 		pingCancel()
 		cancel()
@@ -75,7 +80,12 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 		}
 
 		db := client.Database(dbName)
-		log.Printf("🍃 Gateway MongoDB connected (attempt %d): %s (db: %s)", attempt, uri[:min(len(uri), 25)]+"...", dbName)
+		displayURI := uri
+		if parsed, parseErr := url.Parse(uri); parseErr == nil && parsed.User != nil {
+			parsed.User = url.User(parsed.User.Username())
+			displayURI = parsed.String()
+		}
+		log.Printf("🍃 Gateway MongoDB connected (attempt %d): %s (db: %s)", attempt, displayURI, dbName)
 		mc := &MongoClient{Client: client, Database: db}
 		mc.ensureIndexes(context.Background())
 		return mc, nil

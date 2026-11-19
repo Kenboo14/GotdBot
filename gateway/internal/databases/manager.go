@@ -88,12 +88,30 @@ func (dm *DataManager) CheckHealth(ctx context.Context, mongoConfigured bool) DB
 	}
 
 	if mg := dm.getMongo(); mg != nil && mg.Client != nil {
-		pCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		if err := mg.Client.Ping(pCtx, nil); err != nil {
-			h.MongoErr = err.Error()
-		} else {
-			h.MongoOK = true
+		var lastErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			pCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := mg.Client.Ping(pCtx, nil)
+			cancel()
+			if err == nil {
+				h.MongoOK = true
+				lastErr = nil
+				break
+			}
+			lastErr = err
+			if attempt == 0 {
+				t := time.NewTimer(500 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					h.MongoErr = lastErr.Error()
+					return h
+				case <-t.C:
+				}
+			}
+		}
+		if lastErr != nil {
+			h.MongoErr = lastErr.Error()
 		}
 	} else if mongoConfigured {
 		h.MongoErr = "MongoDB belum terhubung / fallback ke SQLite"
@@ -147,7 +165,7 @@ func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) *J
 	if mg == nil {
 		return nil
 	}
-	mongoCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	mongoCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 
 	cfg, err := mg.GetConfig(mongoCtx, ownerID)
@@ -212,7 +230,7 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 	}
 	// 2. Fallback per-user ke MongoDB jika belum ada di SQLite
 	if mg := m.getMongo(); mg != nil {
-		mongoCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		mongoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		has, err := mg.HasSession(mongoCtx, ownerID)
 		if err == nil && has {
@@ -316,7 +334,7 @@ func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) erro
 					if m.mongoSaveSem != nil {
 						m.mongoSaveSem <- struct{}{}
 					}
-					mongoCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					mongoCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					if err := currentMg.SaveConfig(mongoCtx, curCfg); err != nil {
 						log.Printf("⚠️ MongoDB SaveConfig error (owner=%d): %v", oid, err)
 					}

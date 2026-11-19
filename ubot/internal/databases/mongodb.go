@@ -25,13 +25,15 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 
 	const baseDelay = 3 * time.Second
 	const maxDelay = 30 * time.Second
-	const perAttemptTimeout = 10 * time.Second
+	const perAttemptTimeout = 15 * time.Second
 
 	opt := options.Client().ApplyURI(uri)
 	opt.SetMaxPoolSize(10)
 	opt.SetMinPoolSize(2)
-	opt.SetConnectTimeout(5 * time.Second)
-	opt.SetServerSelectionTimeout(5 * time.Second)
+	opt.SetMaxConnIdleTime(2 * time.Minute)
+	opt.SetConnectTimeout(10 * time.Second)
+	opt.SetServerSelectionTimeout(10 * time.Second)
+	opt.SetSocketTimeout(15 * time.Second)
 
 	for attempt := 1; ; attempt++ {
 		if ctx.Err() != nil {
@@ -55,7 +57,7 @@ func NewMongoClient(ctx context.Context, uri, dbName string) (*MongoClient, erro
 			continue
 		}
 
-		pingCtx, pingCancel := context.WithTimeout(ctx, 5*time.Second)
+		pingCtx, pingCancel := context.WithTimeout(ctx, 10*time.Second)
 		pingErr := c.Ping(pingCtx, nil)
 		pingCancel()
 		cancel()
