@@ -236,16 +236,16 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 	if job.Type == "cache_topic_list_post" {
 		dispatch(func(c context.Context) {
-			s.handleCacheTopicListPost(c, client, job.ChatID, ownerID, job.TaskID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
+			s.handleCacheTopicListPost(c, client, job.ChatID, ownerID, job.ThreadID, job.TaskID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
 		})
 		return
 	}
 	if job.Type == "get_topic_list_posts" {
-		dispatch(func(c context.Context) { s.handleTopicListPosts(c, client, job.ChatID, ownerID, job.TaskID) })
+		dispatch(func(c context.Context) { s.handleTopicListPosts(c, client, job.ChatID, ownerID, job.ThreadID, job.TaskID) })
 		return
 	}
 	if job.Type == "get_topic_list_post_detail" {
-		dispatch(func(c context.Context) { s.handleTopicListPostDetail(c, client, job.ChatID, ownerID, job.TaskID, job.Text) })
+		dispatch(func(c context.Context) { s.handleTopicListPostDetail(c, client, job.ChatID, ownerID, job.ThreadID, job.TaskID, job.Text) })
 		return
 	}
 	started := time.Now()

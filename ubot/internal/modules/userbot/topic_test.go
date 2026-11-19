@@ -1,7 +1,9 @@
 package userbot
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/gotd/td/tg"
 )
@@ -163,5 +165,41 @@ func TestResolveGroupTopicDeliveries(t *testing.T) {
 	}
 	if plan[2].TopicID != 5 || plan[2].TopicList == nil || plan[2].TopicList.Name != "makanan" {
 		t.Fatalf("topic 5 should use makanan list, got %+v", plan[2])
+	}
+}
+
+func TestForumTopicsCacheHitExpiryAndCap(t *testing.T) {
+	s := &Service{
+		forumTopicsCache: make(map[string]cachedForumTopics),
+	}
+
+	s.setCachedForumTopics(100, -100555, "Forum A", []forumTopicInfo{
+		{ID: 1, Title: "General"},
+		{ID: 12, Title: "Promo"},
+	})
+	title, topics, ok := s.getCachedForumTopics(100, 555)
+	if !ok || title != "Forum A" || len(topics) != 2 || topics[1].ID != 12 {
+		t.Fatalf("expected cache hit for normalized chatID, got ok=%v title=%q topics=%+v", ok, title, topics)
+	}
+
+	s.forumTopicsMu.Lock()
+	key := forumTopicsCacheKey(100, 555)
+	entry := s.forumTopicsCache[key]
+	entry.expiresAt = time.Now().Add(-time.Second)
+	s.forumTopicsCache[key] = entry
+	s.forumTopicsMu.Unlock()
+
+	if _, _, ok := s.getCachedForumTopics(100, -100555); ok {
+		t.Fatalf("expected expired cache entry to miss")
+	}
+
+	for i := 0; i < 320; i++ {
+		s.setCachedForumTopics(200, int64(1000+i), fmt.Sprintf("Forum %d", i), []forumTopicInfo{{ID: 1, Title: "General"}})
+	}
+	s.forumTopicsMu.RLock()
+	size := len(s.forumTopicsCache)
+	s.forumTopicsMu.RUnlock()
+	if size > maxForumTopicsCacheEntries {
+		t.Fatalf("expected forumTopicsCache capped <= %d, got %d", maxForumTopicsCacheEntries, size)
 	}
 }

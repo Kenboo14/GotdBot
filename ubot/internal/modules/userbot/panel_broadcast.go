@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -1600,12 +1601,18 @@ func (s *Service) resolveTargetPeer(ctx context.Context, client *gobot.Client, c
 
 	// 4. Jika peerType adalah channel/supergroup atau cleanID besar (supergroup ID biasanya > 1.000.000)
 	if peerType == "channel" || cleanID > 1000000 {
-		_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
+		errPeerFound := errors.New("peer found")
+		scanCtx, scanCancel := context.WithTimeout(ctx, 10*time.Second)
+		_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(scanCtx, func(_ context.Context, item dialogs.Elem) error {
 			if ch, ok := item.Peer.(*tg.InputPeerChannel); ok {
 				cache.SaveChannel(ch.ChannelID, ch.AccessHash)
+				if ch.ChannelID == cleanID && ch.AccessHash != 0 {
+					return errPeerFound
+				}
 			}
 			return nil
 		})
+		scanCancel()
 		if hash, ok := cache.ChannelHash(cleanID); ok && hash != 0 {
 			return &tg.InputPeerChannel{ChannelID: cleanID, AccessHash: hash}, nil
 		}

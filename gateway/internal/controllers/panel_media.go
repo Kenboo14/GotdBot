@@ -6,6 +6,7 @@ import (
 	"assterisk/gateway/internal/models"
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"strconv"
@@ -204,6 +205,22 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 		MediaSourceCount: len(sourceIDs),
 		Text:             caption,
 		Entities:         entities,
+	}
+	if jobType == "cache_topic_list_post" {
+		if h.broker == nil {
+			return
+		}
+		editID := h.getTopicListEditID(chatID)
+		payload.ThreadID = editID
+		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+			log.Printf("media cache broker error: %v", err)
+			return
+		}
+		msgID := h.sendOrEditRich(ctx, b, chatID, editID, fmt.Sprintf("<h1>⏳ Menyimpan Media</h1><blockquote expandable>Mengamankan media ke List Topic <code>%s</code>...</blockquote><hr/><p>GotdBot • Topic List Manager</p>", html.EscapeString(taskID)), nil)
+		if msgID > 0 {
+			h.setTopicPromptMsgID(chatID, msgID)
+		}
+		return
 	}
 	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 		log.Printf("media cache broker error: %v", err)

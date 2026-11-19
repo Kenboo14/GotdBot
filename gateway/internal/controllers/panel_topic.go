@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type topicForumGroup struct {
@@ -41,13 +42,13 @@ type topicSessionState struct {
 	PendingLinks   []databases.TopicLink
 	LinkTargetList string
 	PromptMsgID    int
+	ListMsgID      int
+	LastForumScan  time.Time
 }
 
 var topicListNameRegex = regexp.MustCompile(`^[a-z0-9._-]{1,24}$`)
 
-func (h *Handler) getTopicSession(chatID int64) *topicSessionState {
-	h.topicMu.Lock()
-	defer h.topicMu.Unlock()
+func (h *Handler) ensureTopicSessionLocked(chatID int64) *topicSessionState {
 	if h.topicSessions == nil {
 		h.topicSessions = make(map[int64]*topicSessionState)
 	}
@@ -57,6 +58,119 @@ func (h *Handler) getTopicSession(chatID int64) *topicSessionState {
 		h.topicSessions[chatID] = sess
 	}
 	return sess
+}
+
+func (h *Handler) getTopicSession(chatID int64) *topicSessionState {
+	h.topicMu.Lock()
+	defer h.topicMu.Unlock()
+	return h.ensureTopicSessionLocked(chatID)
+}
+
+func (h *Handler) setTopicListMsgID(chatID int64, msgID int) {
+	if chatID == 0 || msgID <= 0 {
+		return
+	}
+	h.topicMu.Lock()
+	h.ensureTopicSessionLocked(chatID).ListMsgID = msgID
+	h.topicMu.Unlock()
+}
+
+func (h *Handler) setTopicPromptMsgID(chatID int64, msgID int) {
+	if chatID == 0 {
+		return
+	}
+	h.topicMu.Lock()
+	h.ensureTopicSessionLocked(chatID).PromptMsgID = msgID
+	h.topicMu.Unlock()
+}
+
+func (h *Handler) getTopicListEditID(chatID int64) int {
+	h.topicMu.Lock()
+	defer h.topicMu.Unlock()
+	sess := h.ensureTopicSessionLocked(chatID)
+	if sess.PromptMsgID > 0 {
+		return sess.PromptMsgID
+	}
+	return sess.ListMsgID
+}
+
+func (h *Handler) getTopicLastForumScan(chatID int64) time.Time {
+	h.topicMu.Lock()
+	defer h.topicMu.Unlock()
+	return h.ensureTopicSessionLocked(chatID).LastForumScan
+}
+
+func (h *Handler) setTopicLastForumScan(chatID int64, ts time.Time) {
+	h.topicMu.Lock()
+	h.ensureTopicSessionLocked(chatID).LastForumScan = ts
+	h.topicMu.Unlock()
+}
+
+func (h *Handler) resetTopicForumScan(chatID int64) {
+	h.topicMu.Lock()
+	h.ensureTopicSessionLocked(chatID).LastForumScan = time.Time{}
+	h.topicMu.Unlock()
+}
+
+func (h *Handler) deleteOtherDetailMessages(ctx context.Context, b *botgotd.Bot, chatID int64, keepMsgID int) {
+	ids := h.clearAndGetDetailMessageIDs(ctx, chatID)
+	toDelete := make([]int, 0, len(ids))
+	for _, id := range ids {
+		if id > 0 && id != keepMsgID {
+			toDelete = append(toDelete, id)
+		}
+	}
+	if len(toDelete) > 0 {
+		h.deleteBotMessages(ctx, b, chatID, toDelete)
+	}
+}
+
+func (h *Handler) cachedForumGroupsFromDB(ctx context.Context, chatID, userID int64) ([]topicForumGroup, bool, bool, int) {
+	if h.db == nil {
+		return nil, false, false, 0
+	}
+	cfg := h.db.GetUserConfig(ctx, userID)
+	if len(cfg.Groups) == 0 {
+		if refreshed := h.db.SyncOneFromMongoDB(ctx, userID); refreshed != nil {
+			cfg = refreshed
+		}
+	}
+	totalGroups := len(cfg.Groups)
+	forums := make([]topicForumGroup, 0)
+	hasUnprobed := false
+	for _, g := range cfg.Groups {
+		if g.IsForum {
+			title := strings.TrimSpace(g.Title)
+			if title == "" {
+				title = g.Target
+			}
+			forums = append(forums, topicForumGroup{
+				ChatID:     g.ChatID,
+				Title:      title,
+				Target:     g.Target,
+				AccessHash: g.AccessHash,
+			})
+		} else if g.AccessHash == 0 && g.PeerType != "chat" {
+			hasUnprobed = true
+		}
+	}
+	lastScan := h.getTopicLastForumScan(chatID)
+	useFastPath := len(forums) > 0 && (!hasUnprobed || (!lastScan.IsZero() && time.Since(lastScan) < 5*time.Minute))
+	wantsBgRefresh := useFastPath && (lastScan.IsZero() || time.Since(lastScan) >= 5*time.Minute)
+	return forums, useFastPath, wantsBgRefresh, totalGroups
+}
+
+func (h *Handler) triggerBgForumRefresh(ctx context.Context, chatID, userID int64) {
+	if h.broker == nil {
+		return
+	}
+	_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
+		ChatID:  chatID,
+		UserID:  userID,
+		OwnerID: userID,
+		Type:    "fetch_forum_groups",
+		TaskID:  "bg_refresh_forum",
+	})
 }
 
 func topicGroupReplyMarkup(count int) *botgotd.ReplyKeyboardMarkup {
@@ -214,9 +328,65 @@ func (h *Handler) CekTopic(ctx context.Context, b *botgotd.Bot, chatID, userID i
 	})
 }
 
+func (h *Handler) renderTopicGroupSelect(ctx context.Context, b *botgotd.Bot, chatID, effectiveID int64, groups []topicForumGroup) {
+	var activeCount map[int64]int
+	if h.db != nil {
+		cfg := h.db.GetUserConfig(ctx, effectiveID)
+		activeCount = make(map[int64]int, len(cfg.Topics))
+		for _, t := range cfg.Topics {
+			activeCount[t.ChatID]++
+		}
+	} else {
+		activeCount = make(map[int64]int)
+	}
+	var sb strings.Builder
+	sb.WriteString("<h1>🧑‍💻 Topic Grup Forum</h1>\n")
+	sb.WriteString("<p>Pilih grup yang topic tujuannya ingin diatur:</p>\n")
+	sb.WriteString("<table border=\"1\">\n")
+	sb.WriteString("  <tr><th>#</th><th>🏷️ Grup Forum</th><th>🧵 Topic Aktif</th></tr>\n")
+	for i, g := range groups {
+		fmt.Fprintf(&sb, "  <tr><td><code>%d</code></td><td><b>%s</b></td><td><code>%d topic</code></td></tr>\n", i+1, html.EscapeString(g.Title), activeCount[g.ChatID])
+	}
+	sb.WriteString("</table>\n")
+	sb.WriteString("<hr/>\n<p>Pilih nomor grup dari keyboard di bawah atau tekan <b>⬅️ Batal ⬅️</b>.</p>")
+	msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
+		ChatID:      chatID,
+		Text:        sb.String(),
+		ParseMode:   "HTML",
+		ReplyMarkup: topicGroupReplyMarkup(len(groups)),
+	})
+	if msg != nil && msg.ID > 0 {
+		h.setPanelPrompt(chatID, msg.ID)
+	}
+}
+
 func (h *Handler) StartTopicMenu(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "")
+	forums, useFastPath, wantsBg, totalGroups := h.cachedForumGroupsFromDB(ctx, chatID, userID)
+	if h.db != nil && totalGroups == 0 {
+		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID: chatID,
+			Text: `<h1>🧑‍💻 Topic Grup Forum</h1>
+<blockquote expandable>Tidak ditemukan grup bertipe <b>Forum</b> di daftar grup target Anda. Pastikan Anda sudah menambahkan grup forum melalui <b>📝 Tambah Grup 📝</b>.</blockquote>
+<hr/>
+<p>GotdBot • Forum Topic Manager</p>`,
+			ParseMode:   "HTML",
+			ReplyMarkup: assets.GrupListMenuMarkup,
+		})
+		return
+	}
+	if useFastPath {
+		h.topicMu.Lock()
+		h.ensureTopicSessionLocked(chatID).ForumGroups = forums
+		h.topicMu.Unlock()
+		h.setPanelState(chatID, "topic_select_group")
+		h.renderTopicGroupSelect(ctx, b, chatID, userID, forums)
+		if wantsBg {
+			h.triggerBgForumRefresh(ctx, chatID, userID)
+		}
+		return
+	}
 	if h.broker == nil {
 		return
 	}
@@ -240,7 +410,6 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 	if chatID == 0 {
 		return
 	}
-	h.clearProgress(ctx, b, chatID)
 	effectiveID := h.GetEffectiveUserID(chatID, data.OwnerID)
 	if effectiveID == 0 {
 		effectiveID = chatID
@@ -250,6 +419,10 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 	case "forum_groups":
 		var groups []topicForumGroup
 		if err := json.Unmarshal([]byte(data.Text), &groups); err != nil {
+			if data.TaskID == "bg_refresh_forum" {
+				return
+			}
+			h.clearProgress(ctx, b, chatID)
 			_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
 				Text:        `<h1>❌ Gagal Memuat Grup Forum</h1><blockquote expandable>Respon data grup forum tidak valid.</blockquote><hr/><p>GotdBot • Forum Topic Manager</p>`,
@@ -258,6 +431,15 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 			})
 			return
 		}
+		if data.TaskID == "bg_refresh_forum" {
+			h.topicMu.Lock()
+			sess := h.ensureTopicSessionLocked(chatID)
+			sess.ForumGroups = groups
+			sess.LastForumScan = time.Now()
+			h.topicMu.Unlock()
+			return
+		}
+		h.clearProgress(ctx, b, chatID)
 		isLink := strings.HasPrefix(data.TaskID, "link_topic")
 		if len(groups) == 0 {
 			h.setPanelState(chatID, "")
@@ -273,46 +455,28 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 			return
 		}
 
-		sess := h.getTopicSession(chatID)
+		h.topicMu.Lock()
+		sess := h.ensureTopicSessionLocked(chatID)
 		sess.ForumGroups = groups
+		sess.LastForumScan = time.Now()
 		if isLink {
 			targetList := ""
 			if strings.HasPrefix(data.TaskID, "link_topic:") {
 				targetList = strings.TrimPrefix(data.TaskID, "link_topic:")
 			}
 			sess.LinkTargetList = targetList
+			h.topicMu.Unlock()
 			h.setPanelState(chatID, "tlist_link_group")
 			h.renderLinkGroupSelect(ctx, b, chatID, groups)
 			return
 		}
+		h.topicMu.Unlock()
 
 		h.setPanelState(chatID, "topic_select_group")
-		cfg := h.db.GetUserConfig(ctx, effectiveID)
-		activeCount := make(map[int64]int)
-		for _, t := range cfg.Topics {
-			activeCount[t.ChatID]++
-		}
-		var sb strings.Builder
-		sb.WriteString("<h1>🧑‍💻 Topic Grup Forum</h1>\n")
-		sb.WriteString("<p>Pilih grup yang topic tujuannya ingin diatur:</p>\n")
-		sb.WriteString("<table border=\"1\">\n")
-		sb.WriteString("  <tr><th>#</th><th>🏷️ Grup Forum</th><th>🧵 Topic Aktif</th></tr>\n")
-		for i, g := range groups {
-			fmt.Fprintf(&sb, "  <tr><td><code>%d</code></td><td><b>%s</b></td><td><code>%d topic</code></td></tr>\n", i+1, html.EscapeString(g.Title), activeCount[g.ChatID])
-		}
-		sb.WriteString("</table>\n")
-		sb.WriteString("<hr/>\n<p>Pilih nomor grup dari keyboard di bawah atau tekan <b>⬅️ Batal ⬅️</b>.</p>")
-		msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        sb.String(),
-			ParseMode:   "HTML",
-			ReplyMarkup: topicGroupReplyMarkup(len(groups)),
-		})
-		if msg != nil && msg.ID > 0 {
-			h.setPanelPrompt(chatID, msg.ID)
-		}
+		h.renderTopicGroupSelect(ctx, b, chatID, effectiveID, groups)
 
 	case "forum_topics":
+		h.clearProgress(ctx, b, chatID)
 		var payload topicForumResponse
 		if err := json.Unmarshal([]byte(data.Text), &payload); err != nil {
 			_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -337,9 +501,11 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 			return
 		}
 
-		sess := h.getTopicSession(chatID)
+		h.topicMu.Lock()
+		sess := h.ensureTopicSessionLocked(chatID)
 		sess.SelectedGroup = topicForumGroup{ChatID: payload.ChatID, Title: payload.GroupTitle}
 		sess.Topics = payload.Topics
+		h.topicMu.Unlock()
 
 		if strings.HasPrefix(data.TaskID, "link_topic") {
 			h.setPanelState(chatID, "tlist_link_topic")
@@ -383,24 +549,14 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 			h.setPanelPrompt(chatID, msg.ID)
 		}
 
-	case "tlist_posts":
-		msg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      data.Text,
-			ParseMode: "HTML",
-		})
-		if err == nil && msg != nil && msg.ID > 0 {
-			h.trackDetailMessageIDs(ctx, chatID, []int{msg.ID})
+	case "tlist_posts", "tlist_post_detail", "tlist_post_saved":
+		editID := data.ThreadID
+		if editID == 0 {
+			editID = h.getTopicListEditID(chatID)
 		}
-
-	case "tlist_post_detail":
-		msg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      data.Text,
-			ParseMode: "HTML",
-		})
-		if err == nil && msg != nil && msg.ID > 0 {
-			h.trackDetailMessageIDs(ctx, chatID, []int{msg.ID})
+		msgID := h.sendOrEditRich(ctx, b, chatID, editID, data.Text, nil)
+		if msgID > 0 {
+			h.trackDetailMessageIDs(ctx, chatID, []int{msgID})
 		}
 	}
 }
@@ -408,21 +564,26 @@ func (h *Handler) handleTopicServiceResponse(ctx context.Context, b *botgotd.Bot
 func (h *Handler) handleTopicPanelInput(ctx context.Context, b *botgotd.Bot, chatID, userID int64, state, text string, message *botgotd.Message) bool {
 	switch {
 	case state == "topic_select_group":
-		sess := h.getTopicSession(chatID)
+		h.topicMu.Lock()
+		sess := h.ensureTopicSessionLocked(chatID)
+		forumGroups := append([]topicForumGroup(nil), sess.ForumGroups...)
+		h.topicMu.Unlock()
 		idx, err := strconv.Atoi(strings.TrimSpace(text))
-		if err != nil || idx < 1 || idx > len(sess.ForumGroups) {
+		if err != nil || idx < 1 || idx > len(forumGroups) {
 			_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID: chatID,
 				Text: fmt.Sprintf(`<h1>⚠️ Pilihan Tidak Valid</h1>
-<blockquote expandable>Pilih nomor grup antara <code>1</code> sampai <code>%d</code>, atau tekan <b>⬅️ Batal ⬅️</b>.</blockquote>`, len(sess.ForumGroups)),
+<blockquote expandable>Pilih nomor grup antara <code>1</code> sampai <code>%d</code>, atau tekan <b>⬅️ Batal ⬅️</b>.</blockquote>`, len(forumGroups)),
 				ParseMode:   "HTML",
-				ReplyMarkup: topicGroupReplyMarkup(len(sess.ForumGroups)),
+				ReplyMarkup: topicGroupReplyMarkup(len(forumGroups)),
 			})
 			return true
 		}
 		h.clearPanelPrompt(ctx, b, chatID)
-		selected := sess.ForumGroups[idx-1]
-		sess.SelectedGroup = selected
+		selected := forumGroups[idx-1]
+		h.topicMu.Lock()
+		h.ensureTopicSessionLocked(chatID).SelectedGroup = selected
+		h.topicMu.Unlock()
 		h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: fmt.Sprintf(`<h1>🧑‍💻 Pilih Topic</h1>

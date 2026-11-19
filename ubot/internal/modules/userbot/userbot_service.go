@@ -153,6 +153,8 @@ type Service struct {
 	monitorSem          chan struct{}
 	monitorDedupMu      sync.Mutex
 	monitorDedup        map[string]time.Time
+	forumTopicsMu       sync.RWMutex
+	forumTopicsCache    map[string]cachedForumTopics
 }
 
 // publishSessionState mengirimkan perubahan lifecycle akun sebagai event
@@ -370,6 +372,7 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		cmdSem:              make(chan struct{}, 32), // batas concurrency perintah background
 		monitorSem:          make(chan struct{}, 4),
 		monitorDedup:        make(map[string]time.Time),
+		forumTopicsCache:    make(map[string]cachedForumTopics),
 		peers:               gobot.DefaultPool().Peers,
 	}
 }

@@ -249,6 +249,9 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 				}
 			}
 		}
+		if addedCount > 0 {
+			h.resetTopicForumScan(chatID)
+		}
 		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "sync_panel_config"})
 
 		gCount, _ := h.db.CountGroupsAndLists(ctx, userID)

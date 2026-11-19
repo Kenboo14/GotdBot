@@ -34,6 +34,7 @@ func (h *Handler) sendOrEditRich(ctx context.Context, b *botgotd.Bot, chatID int
 			Text:      htmlText,
 			ParseMode: "HTML",
 		}); err == nil {
+			h.setTopicListMsgID(chatID, editMsgID)
 			return editMsgID
 		}
 	}
@@ -47,6 +48,10 @@ func (h *Handler) sendOrEditRich(ctx context.Context, b *botgotd.Bot, chatID int
 	}
 	msg, err := b.SendMessage(ctx, params)
 	if err == nil && msg != nil {
+		if editMsgID > 0 && msg.ID != editMsgID {
+			h.deleteBotMessages(ctx, b, chatID, []int{editMsgID})
+		}
+		h.setTopicListMsgID(chatID, msg.ID)
 		return msg.ID
 	}
 	return 0
@@ -54,6 +59,7 @@ func (h *Handler) sendOrEditRich(ctx context.Context, b *botgotd.Bot, chatID int
 
 func (h *Handler) ShowListTopic(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int) {
 	h.setPanelState(chatID, "")
+	h.setTopicPromptMsgID(chatID, 0)
 	lists := h.db.GetTopicLists(ctx, userID)
 
 	var sb strings.Builder
@@ -94,6 +100,8 @@ func (h *Handler) ShowListTopic(ctx context.Context, b *botgotd.Bot, chatID, use
 }
 
 func (h *Handler) renderTopicListDetail(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int, name string) {
+	h.setPanelState(chatID, "")
+	h.setTopicPromptMsgID(chatID, 0)
 	tl := h.db.GetTopicList(ctx, userID, name)
 	if tl == nil {
 		h.ShowListTopic(ctx, b, chatID, userID, editMsgID)
@@ -201,60 +209,56 @@ func (h *Handler) StartCreateTopicList(ctx context.Context, b *botgotd.Bot, chat
 <p>GotdBot • Topic List Manager</p>`
 	msgID := h.sendOrEditRich(ctx, b, chatID, editMsgID, text, nil)
 	if msgID > 0 {
-		h.getTopicSession(chatID).PromptMsgID = msgID
+		h.setTopicPromptMsgID(chatID, msgID)
 	}
 }
 
 func (h *Handler) handleTopicListCreateInput(ctx context.Context, b *botgotd.Bot, chatID, userID int64, text string) bool {
 	name := strings.TrimSpace(text)
+	editID := h.getTopicListEditID(chatID)
 	if !topicListNameRegex.MatchString(name) {
-		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: `<h1>⚠️ Nama List Tidak Valid</h1>
+		msgID := h.sendOrEditRich(ctx, b, chatID, editID, `<h1>⚠️ Nama List Tidak Valid</h1>
 <blockquote expandable>Gunakan hanya huruf kecil (<code>a-z</code>), angka (<code>0-9</code>), titik (<code>.</code>), minus (<code>-</code>), atau garis bawah (<code>_</code>), tanpa spasi, maksimal 24 karakter.</blockquote>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:tlist:home">◀️ Kembali ◀️</tg-button>
 </tg-button-row>
 <hr/>
-<p>GotdBot • Topic List Manager</p>`,
-			ParseMode: "HTML",
-		})
+<p>GotdBot • Topic List Manager</p>`, nil)
+		if msgID > 0 {
+			h.setTopicPromptMsgID(chatID, msgID)
+		}
 		return true
 	}
 	if err := h.db.CreateTopicList(ctx, userID, name); err != nil {
-		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: fmt.Sprintf(`<h1>⚠️ Gagal Membuat List Topic</h1>
+		msgID := h.sendOrEditRich(ctx, b, chatID, editID, fmt.Sprintf(`<h1>⚠️ Gagal Membuat List Topic</h1>
 <blockquote expandable>%s</blockquote>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:tlist:home">◀️ Kembali ◀️</tg-button>
 </tg-button-row>
 <hr/>
-<p>GotdBot • Topic List Manager</p>`, html.EscapeString(err.Error())),
-			ParseMode: "HTML",
-		})
+<p>GotdBot • Topic List Manager</p>`, html.EscapeString(err.Error())), nil)
+		if msgID > 0 {
+			h.setTopicPromptMsgID(chatID, msgID)
+		}
 		return true
 	}
 	h.setPanelState(chatID, "")
-	sess := h.getTopicSession(chatID)
-	if sess.PromptMsgID > 0 {
-		h.deleteBotMessages(ctx, b, chatID, []int{sess.PromptMsgID})
-		sess.PromptMsgID = 0
-	}
-	h.renderTopicListDetail(ctx, b, chatID, userID, 0, name)
+	h.setTopicPromptMsgID(chatID, 0)
+	h.renderTopicListDetail(ctx, b, chatID, userID, editID, name)
 	return true
 }
 
 func (h *Handler) handleTopicListAddPostText(ctx context.Context, b *botgotd.Bot, chatID, userID int64, listName, text string, message *botgotd.Message) bool {
-	h.clearPanelPrompt(ctx, b, chatID)
 	if message == nil || message.MediaGroupID == "" {
 		h.setPanelState(chatID, "")
 	}
 	if h.broker == nil {
 		return true
 	}
+	editID := h.getTopicListEditID(chatID)
 	payload := models.PToService{
 		ChatID:   chatID,
+		ThreadID: editID,
 		UserID:   userID,
 		OwnerID:  userID,
 		Type:     "cache_topic_list_post",
@@ -263,25 +267,47 @@ func (h *Handler) handleTopicListAddPostText(ctx context.Context, b *botgotd.Bot
 		Entities: panelEntities(message),
 	}
 	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
-		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        `<h1>❌ Gagal Menyimpan Post</h1><blockquote expandable>Broker userbot tidak merespons.</blockquote><hr/><p>GotdBot • Topic List Manager</p>`,
-			ParseMode:   "HTML",
-			ReplyMarkup: assets.GrupListMenuMarkup,
-		})
+		msgID := h.sendOrEditRich(ctx, b, chatID, editID, fmt.Sprintf(`<h1>❌ Gagal Menyimpan Post</h1><blockquote expandable>Broker userbot tidak merespons.</blockquote><tg-button-row><tg-button type="callback_data" data="panel:tlist:open:%s">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, listName), nil)
+		if msgID > 0 {
+			h.setTopicPromptMsgID(chatID, msgID)
+		}
 		return true
 	}
-	h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        fmt.Sprintf(`<h1>⏳ Menyimpan Post</h1><blockquote expandable>Mengamankan post ke List Topic <code>%s</code>...</blockquote>`, html.EscapeString(listName)),
-		ParseMode:   "HTML",
-		ReplyMarkup: assets.GrupListMenuMarkup,
-	})
+	msgID := h.sendOrEditRich(ctx, b, chatID, editID, fmt.Sprintf(`<h1>⏳ Menyimpan Post</h1><blockquote expandable>Mengamankan post ke List Topic <code>%s</code>...</blockquote><hr/><p>GotdBot • Topic List Manager</p>`, html.EscapeString(listName)), nil)
+	if msgID > 0 {
+		h.setTopicPromptMsgID(chatID, msgID)
+	}
 	return true
 }
 
 func (h *Handler) StartLinkTopic(ctx context.Context, b *botgotd.Bot, chatID, userID int64, targetList string) {
 	h.clearPanelPrompt(ctx, b, chatID)
+	forums, useFastPath, wantsBg, totalGroups := h.cachedForumGroupsFromDB(ctx, chatID, userID)
+	if h.db != nil && totalGroups == 0 {
+		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID: chatID,
+			Text: `<h1>🔗 Hubungkan Topic</h1>
+<blockquote expandable>Tidak ditemukan grup bertipe <b>Forum</b> di daftar grup target Anda. Pastikan Anda sudah menambahkan grup forum melalui <b>📝 Tambah Grup 📝</b>.</blockquote>
+<hr/>
+<p>GotdBot • Topic List Manager</p>`,
+			ParseMode:   "HTML",
+			ReplyMarkup: assets.GrupListMenuMarkup,
+		})
+		return
+	}
+	if useFastPath {
+		h.topicMu.Lock()
+		sess := h.ensureTopicSessionLocked(chatID)
+		sess.ForumGroups = forums
+		sess.LinkTargetList = targetList
+		h.topicMu.Unlock()
+		h.setPanelState(chatID, "tlist_link_group")
+		h.renderLinkGroupSelect(ctx, b, chatID, forums)
+		if wantsBg {
+			h.triggerBgForumRefresh(ctx, chatID, userID)
+		}
+		return
+	}
 	if h.broker == nil {
 		return
 	}
@@ -328,24 +354,30 @@ func (h *Handler) renderLinkGroupSelect(ctx context.Context, b *botgotd.Bot, cha
 }
 
 func (h *Handler) handleTopicListLinkGroupInput(ctx context.Context, b *botgotd.Bot, chatID, userID int64, text string) bool {
-	sess := h.getTopicSession(chatID)
+	h.topicMu.Lock()
+	sess := h.ensureTopicSessionLocked(chatID)
+	forumGroups := append([]topicForumGroup(nil), sess.ForumGroups...)
+	targetList := sess.LinkTargetList
+	h.topicMu.Unlock()
 	idx, err := strconv.Atoi(strings.TrimSpace(text))
-	if err != nil || idx < 1 || idx > len(sess.ForumGroups) {
+	if err != nil || idx < 1 || idx > len(forumGroups) {
 		_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: fmt.Sprintf(`<h1>⚠️ Pilihan Grup Tidak Valid</h1>
-<blockquote expandable>Pilih nomor antara <code>1</code> sampai <code>%d</code> atau tekan <b>⬅️ Batal ⬅️</b>.</blockquote>`, len(sess.ForumGroups)),
+<blockquote expandable>Pilih nomor antara <code>1</code> sampai <code>%d</code> atau tekan <b>⬅️ Batal ⬅️</b>.</blockquote>`, len(forumGroups)),
 			ParseMode:   "HTML",
-			ReplyMarkup: topicGroupReplyMarkup(len(sess.ForumGroups)),
+			ReplyMarkup: topicGroupReplyMarkup(len(forumGroups)),
 		})
 		return true
 	}
 	h.clearPanelPrompt(ctx, b, chatID)
-	selected := sess.ForumGroups[idx-1]
-	sess.SelectedGroup = selected
+	selected := forumGroups[idx-1]
+	h.topicMu.Lock()
+	h.ensureTopicSessionLocked(chatID).SelectedGroup = selected
+	h.topicMu.Unlock()
 	taskID := "link_topic"
-	if sess.LinkTargetList != "" {
-		taskID = "link_topic:" + sess.LinkTargetList
+	if targetList != "" {
+		taskID = "link_topic:" + targetList
 	}
 	h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 		ChatID: chatID,
@@ -543,23 +575,21 @@ func (h *Handler) handleTopicListCallback(ctx context.Context, b *botgotd.Bot, c
 			return
 		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "tlist_add_post:"+name)
-		msg, _ := b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: fmt.Sprintf(`<h1>➕ Tambah Post</h1>
+		promptText := fmt.Sprintf(`<h1>➕ Tambah Post</h1>
 <table border="1">
   <tr><th>📂 List Topic</th><td><code>%s</code></td></tr>
   <tr><th>📄 Slot Post</th><td><code>%d/%d</code></td></tr>
 </table>
 <blockquote expandable>Kirim post-nya sekarang (teks, foto, video, dokumen, atau album). Aturannya sama dengan list utama.</blockquote>
+<tg-button-row>
+  <tg-button type="callback_data" data="panel:tlist:open:%s">◀️ Kembali ◀️</tg-button>
+</tg-button-row>
 <hr/>
-<p>Kirim materi sekarang atau tekan <b>⬅️ Batal ⬅️</b> di bawah.</p>`, html.EscapeString(name), len(tl.Posts), databases.MaxTopicListPosts),
-			ParseMode:   "HTML",
-			ReplyMarkup: assets.CancelOnlyMarkup,
-		})
-		if msg != nil && msg.ID > 0 {
-			h.setPanelPrompt(chatID, msg.ID)
+<p>GotdBot • Topic List Manager</p>`, html.EscapeString(name), len(tl.Posts), databases.MaxTopicListPosts, name)
+		msgID := h.sendOrEditRich(ctx, b, chatID, messageID, promptText, nil)
+		if msgID > 0 {
+			h.setTopicPromptMsgID(chatID, msgID)
 		}
 
 	case "posts":
@@ -568,16 +598,15 @@ func (h *Handler) handleTopicListCallback(ctx context.Context, b *botgotd.Bot, c
 			return
 		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		if messageID > 0 {
-			h.deleteBotMessages(ctx, b, chatID, []int{messageID})
-		}
+		h.setTopicListMsgID(chatID, messageID)
 		if h.broker != nil {
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
-				ChatID:  chatID,
-				UserID:  effectiveID,
-				OwnerID: effectiveID,
-				Type:    "get_topic_list_posts",
-				TaskID:  parts[3],
+				ChatID:   chatID,
+				ThreadID: messageID,
+				UserID:   effectiveID,
+				OwnerID:  effectiveID,
+				Type:     "get_topic_list_posts",
+				TaskID:   parts[3],
 			})
 		}
 
@@ -587,14 +616,16 @@ func (h *Handler) handleTopicListCallback(ctx context.Context, b *botgotd.Bot, c
 			return
 		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.setTopicListMsgID(chatID, messageID)
 		if h.broker != nil {
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
-				ChatID:  chatID,
-				UserID:  effectiveID,
-				OwnerID: effectiveID,
-				Type:    "get_topic_list_post_detail",
-				TaskID:  parts[3],
-				Text:    parts[4],
+				ChatID:   chatID,
+				ThreadID: messageID,
+				UserID:   effectiveID,
+				OwnerID:  effectiveID,
+				Type:     "get_topic_list_post_detail",
+				TaskID:   parts[3],
+				Text:     parts[4],
 			})
 		}
 
@@ -614,18 +645,16 @@ func (h *Handler) handleTopicListCallback(ctx context.Context, b *botgotd.Bot, c
 			return
 		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "✅ Post berhasil dihapus"})
-		msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
-		if messageID > 0 {
-			msgIDs = append(msgIDs, messageID)
-		}
-		h.deleteBotMessages(ctx, b, chatID, msgIDs)
+		h.deleteOtherDetailMessages(ctx, b, chatID, messageID)
+		h.setTopicListMsgID(chatID, messageID)
 		if h.broker != nil {
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
-				ChatID:  chatID,
-				UserID:  effectiveID,
-				OwnerID: effectiveID,
-				Type:    "get_topic_list_posts",
-				TaskID:  name,
+				ChatID:   chatID,
+				ThreadID: messageID,
+				UserID:   effectiveID,
+				OwnerID:  effectiveID,
+				Type:     "get_topic_list_posts",
+				TaskID:   name,
 			})
 		}
 
@@ -711,12 +740,8 @@ func (h *Handler) handleTopicListCallback(ctx context.Context, b *botgotd.Bot, c
 			return
 		}
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "✅ List Topic berhasil dihapus"})
-		msgIDs := h.clearAndGetDetailMessageIDs(ctx, chatID)
-		if messageID > 0 {
-			msgIDs = append(msgIDs, messageID)
-		}
-		h.deleteBotMessages(ctx, b, chatID, msgIDs)
-		h.ShowListTopic(ctx, b, chatID, effectiveID, 0)
+		h.deleteOtherDetailMessages(ctx, b, chatID, messageID)
+		h.ShowListTopic(ctx, b, chatID, effectiveID, messageID)
 
 	default:
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})

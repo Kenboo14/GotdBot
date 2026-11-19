@@ -255,6 +255,7 @@ func (h *Handler) SebarKeRC(ctx context.Context, b *botgotd.Bot, chatID, userID 
 
 // FetchAllGroupsFromAccount communicates with ubot via Redis to import all groups
 func (h *Handler) FetchAllGroupsFromAccount(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	h.resetTopicForumScan(chatID)
 	h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        "⏳ <b>Mengimpor semua grup akun...</b>\n\n<i>Proses berjalan di latar belakang. Laporan akan dikirim otomatis setelah selesai.</i>",

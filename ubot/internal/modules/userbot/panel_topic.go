@@ -4,6 +4,7 @@ import (
 	"assterisk/ubot/internal/models"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -22,6 +23,19 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+const (
+	forumTopicsCacheTTL        = 2 * time.Minute
+	maxForumTopicsCacheEntries = 256
+)
+
+type cachedForumTopics struct {
+	groupTitle string
+	topics     []forumTopicInfo
+	expiresAt  time.Time
+}
+
+var errForumGroupsFound = errors.New("forum groups found")
 
 type forumGroupInfo struct {
 	ChatID     int64  `json:"chat_id"`
@@ -94,18 +108,167 @@ func (s *Service) saveTopicLists(ctx context.Context, ownerID int64, lists []jas
 	}
 }
 
+func forumTopicsCacheKey(ownerID, chatID int64) string {
+	return fmt.Sprintf("%d:%d", ownerID, normalizePeerChannelID(chatID))
+}
+
+func (s *Service) getCachedForumTopics(ownerID, chatID int64) (string, []forumTopicInfo, bool) {
+	if s == nil {
+		return "", nil, false
+	}
+	key := forumTopicsCacheKey(ownerID, chatID)
+	now := time.Now()
+	s.forumTopicsMu.RLock()
+	entry, ok := s.forumTopicsCache[key]
+	s.forumTopicsMu.RUnlock()
+	if !ok || !now.Before(entry.expiresAt) {
+		return "", nil, false
+	}
+	copied := make([]forumTopicInfo, len(entry.topics))
+	copy(copied, entry.topics)
+	return entry.groupTitle, copied, true
+}
+
+func (s *Service) setCachedForumTopics(ownerID, chatID int64, groupTitle string, topics []forumTopicInfo) {
+	if s == nil {
+		return
+	}
+	now := time.Now()
+	copied := make([]forumTopicInfo, len(topics))
+	copy(copied, topics)
+	key := forumTopicsCacheKey(ownerID, chatID)
+
+	s.forumTopicsMu.Lock()
+	defer s.forumTopicsMu.Unlock()
+	if s.forumTopicsCache == nil {
+		s.forumTopicsCache = make(map[string]cachedForumTopics)
+	}
+	if len(s.forumTopicsCache) >= maxForumTopicsCacheEntries {
+		for k, v := range s.forumTopicsCache {
+			if !now.Before(v.expiresAt) {
+				delete(s.forumTopicsCache, k)
+			}
+		}
+		if len(s.forumTopicsCache) >= maxForumTopicsCacheEntries {
+			type cacheItem struct {
+				k   string
+				exp time.Time
+			}
+			items := make([]cacheItem, 0, len(s.forumTopicsCache))
+			for k, v := range s.forumTopicsCache {
+				items = append(items, cacheItem{k: k, exp: v.expiresAt})
+			}
+			sort.Slice(items, func(i, j int) bool {
+				return items[i].exp.Before(items[j].exp)
+			})
+			excess := len(s.forumTopicsCache) - 192
+			for i := 0; i < excess && i < len(items); i++ {
+				delete(s.forumTopicsCache, items[i].k)
+			}
+		}
+	}
+	s.forumTopicsCache[key] = cachedForumTopics{
+		groupTitle: groupTitle,
+		topics:     copied,
+		expiresAt:  now.Add(forumTopicsCacheTTL),
+	}
+}
+
 func (s *Service) handleFetchForumGroups(ctx context.Context, client *gobot.Client, chatID, ownerID int64, taskID string) {
 	cfg := s.getJasebConfig(ctx, ownerID)
-	forumByID := make(map[int64]bool)
-	titleByID := make(map[int64]string)
-	hashByID := make(map[int64]int64)
+	if len(cfg.Groups) == 0 {
+		_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
+			ChatID:  chatID,
+			OwnerID: ownerID,
+			Type:    "forum_groups",
+			TaskID:  taskID,
+			Text:    "[]",
+		})
+		return
+	}
 
-	_ = dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(ctx, func(_ context.Context, item dialogs.Elem) error {
-		for cid, ch := range item.Entities.Channels() {
-			if ch == nil {
+	forumByID := make(map[int64]bool, len(cfg.Groups))
+	titleByID := make(map[int64]string, len(cfg.Groups))
+	hashByID := make(map[int64]int64, len(cfg.Groups))
+	resolvedFromTarget := make(map[string]int64)
+	knownChannels := make([]tg.InputChannelClass, 0, len(cfg.Groups))
+	knownSeen := make(map[int64]bool, len(cfg.Groups))
+	missingIDs := make(map[int64]bool)
+
+	for _, g := range cfg.Groups {
+		if g.PeerType == "chat" {
+			continue
+		}
+		norm := normalizePeerChannelID(g.ChatID)
+		if norm == 0 && strings.HasPrefix(strings.TrimSpace(g.Target), "@") {
+			uname := strings.TrimPrefix(strings.TrimSpace(g.Target), "@")
+			resCtx, resCancel := context.WithTimeout(ctx, 5*time.Second)
+			resolved, resErr := client.API().ContactsResolveUsername(resCtx, &tg.ContactsResolveUsernameRequest{Username: uname})
+			resCancel()
+			if resErr == nil && resolved != nil {
+				for _, chRaw := range resolved.Chats {
+					if ch, ok := chRaw.(*tg.Channel); ok && ch != nil {
+						norm = normalizePeerChannelID(ch.ID)
+						resolvedFromTarget[g.Target] = ch.ID
+						forumByID[norm] = ch.Forum
+						if ch.Title != "" {
+							titleByID[norm] = ch.Title
+						}
+						if ch.AccessHash != 0 {
+							hashByID[norm] = ch.AccessHash
+							s.peerCache().SaveChannel(norm, ch.AccessHash)
+						}
+						break
+					}
+				}
+			}
+			continue
+		}
+		if norm == 0 {
+			continue
+		}
+		ah := g.AccessHash
+		if ah == 0 {
+			if cachedHash, ok := s.peerCache().ChannelHash(norm); ok && cachedHash != 0 {
+				ah = cachedHash
+				hashByID[norm] = ah
+			}
+		}
+		if ah != 0 {
+			if !knownSeen[norm] {
+				knownSeen[norm] = true
+				knownChannels = append(knownChannels, &tg.InputChannel{ChannelID: norm, AccessHash: ah})
+			}
+		} else {
+			missingIDs[norm] = true
+		}
+	}
+
+	for start := 0; start < len(knownChannels); start += 50 {
+		end := start + 50
+		if end > len(knownChannels) {
+			end = len(knownChannels)
+		}
+		chunk := knownChannels[start:end]
+		chCtx, chCancel := context.WithTimeout(ctx, 8*time.Second)
+		res, chErr := client.API().ChannelsGetChannels(chCtx, chunk)
+		chCancel()
+		if chErr != nil || res == nil {
+			for _, ic := range chunk {
+				if c, ok := ic.(*tg.InputChannel); ok {
+					missingIDs[c.ChannelID] = true
+				}
+			}
+			continue
+		}
+		returned := make(map[int64]bool, len(chunk))
+		for _, chatRaw := range res.GetChats() {
+			ch, ok := chatRaw.(*tg.Channel)
+			if !ok || ch == nil {
 				continue
 			}
-			norm := normalizePeerChannelID(cid)
+			norm := normalizePeerChannelID(ch.ID)
+			returned[norm] = true
 			forumByID[norm] = ch.Forum
 			if ch.Title != "" {
 				titleByID[norm] = ch.Title
@@ -115,20 +278,68 @@ func (s *Service) handleFetchForumGroups(ctx context.Context, client *gobot.Clie
 				s.peerCache().SaveChannel(norm, ch.AccessHash)
 			}
 		}
-		return nil
-	})
+		for _, ic := range chunk {
+			if c, ok := ic.(*tg.InputChannel); ok && !returned[c.ChannelID] {
+				missingIDs[c.ChannelID] = true
+			}
+		}
+	}
+
+	if len(missingIDs) > 0 {
+		scanCtx, scanCancel := context.WithTimeout(ctx, 10*time.Second)
+		scanErr := dialogs.NewQueryBuilder(client.API()).GetDialogs().BatchSize(100).ForEach(scanCtx, func(_ context.Context, item dialogs.Elem) error {
+			chPeer, ok := item.Peer.(*tg.InputPeerChannel)
+			if !ok || chPeer == nil {
+				return nil
+			}
+			norm := normalizePeerChannelID(chPeer.ChannelID)
+			ch, hasCh := item.Entities.Channel(chPeer.ChannelID)
+			if hasCh && ch != nil && ch.AccessHash != 0 {
+				s.peerCache().SaveChannel(norm, ch.AccessHash)
+				if missingIDs[norm] {
+					forumByID[norm] = ch.Forum
+					if ch.Title != "" {
+						titleByID[norm] = ch.Title
+					}
+					hashByID[norm] = ch.AccessHash
+					delete(missingIDs, norm)
+				}
+			} else if chPeer.AccessHash != 0 {
+				s.peerCache().SaveChannel(norm, chPeer.AccessHash)
+				if missingIDs[norm] {
+					hashByID[norm] = chPeer.AccessHash
+					delete(missingIDs, norm)
+				}
+			}
+			if len(missingIDs) == 0 {
+				return errForumGroupsFound
+			}
+			return nil
+		})
+		scanCancel()
+		if scanErr != nil && !errors.Is(scanErr, errForumGroupsFound) && !errors.Is(scanErr, context.DeadlineExceeded) {
+			log.Printf("[panelTopic] fallback dialogs scan error: %v", scanErr)
+		}
+	}
 
 	changed := false
 	result := make([]forumGroupInfo, 0)
 	for i := range cfg.Groups {
 		g := &cfg.Groups[i]
+		if g.ChatID == 0 {
+			if rid := resolvedFromTarget[g.Target]; rid != 0 {
+				g.ChatID = rid
+				g.PeerType = "channel"
+				changed = true
+			}
+		}
 		norm := normalizePeerChannelID(g.ChatID)
 		if isForum, known := forumByID[norm]; known {
 			if g.IsForum != isForum {
 				g.IsForum = isForum
 				changed = true
 			}
-			if g.Title == "" && titleByID[norm] != "" {
+			if titleByID[norm] != "" && g.Title != titleByID[norm] {
 				g.Title = titleByID[norm]
 				changed = true
 			}
@@ -136,6 +347,9 @@ func (s *Service) handleFetchForumGroups(ctx context.Context, client *gobot.Clie
 				g.AccessHash = hashByID[norm]
 				changed = true
 			}
+		} else if g.AccessHash == 0 && hashByID[norm] != 0 {
+			g.AccessHash = hashByID[norm]
+			changed = true
 		}
 		if g.IsForum {
 			title := strings.TrimSpace(g.Title)
@@ -152,15 +366,20 @@ func (s *Service) handleFetchForumGroups(ctx context.Context, client *gobot.Clie
 	}
 
 	if changed {
-		if s.db != nil {
-			_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(ctx, bson.M{"_id": ownerID}, bson.M{
-				"$set": bson.M{"groups": cfg.Groups, "updated_at": time.Now()},
-			}, options.Update().SetUpsert(true))
-			s.publishConfigUpdated(ctx, ownerID)
-		}
 		if s.sqlite != nil {
 			raw, _ := json.Marshal(cfg.Groups)
 			_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET groups = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(raw), ownerID)
+		}
+		if s.db != nil {
+			groupsCopy := append([]jasebGroupDoc(nil), cfg.Groups...)
+			go func() {
+				bgCtx, bgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer bgCancel()
+				_, _ = s.db.Collection("jaseb_configurasi").UpdateOne(bgCtx, bson.M{"_id": ownerID}, bson.M{
+					"$set": bson.M{"groups": groupsCopy, "updated_at": time.Now()},
+				}, options.Update().SetUpsert(true))
+				s.publishConfigUpdated(bgCtx, ownerID)
+			}()
 		}
 	}
 
@@ -191,6 +410,31 @@ func (s *Service) handleFetchGroupTopics(ctx context.Context, client *gobot.Clie
 			break
 		}
 	}
+	groupTitle := strings.TrimSpace(grp.Title)
+	if groupTitle == "" {
+		groupTitle = grp.Target
+	}
+	if !strings.HasPrefix(taskID, "refresh:") {
+		if cachedTitle, cachedTopics, ok := s.getCachedForumTopics(ownerID, targetID); ok {
+			if cachedTitle != "" {
+				groupTitle = cachedTitle
+			}
+			encoded, _ := json.Marshal(forumTopicsPayload{
+				ChatID:     grp.ChatID,
+				GroupTitle: groupTitle,
+				Topics:     cachedTopics,
+			})
+			_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
+				ChatID:  chatID,
+				OwnerID: ownerID,
+				Type:    "forum_topics",
+				TaskID:  taskID,
+				Text:    string(encoded),
+			})
+			return
+		}
+	}
+
 	targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target, grp.AccessHash, grp.PeerType)
 	if err != nil {
 		s.reply(ctx, chatID, 0, fmt.Sprintf(`<h1>❌ Gagal Memuat Topic</h1><blockquote expandable>Tidak dapat mengakses grup forum: <code>%s</code></blockquote>`, html.EscapeString(err.Error())), "panel_notice")
@@ -236,10 +480,7 @@ func (s *Service) handleFetchGroupTopics(ctx context.Context, client *gobot.Clie
 		return topics[i].ID < topics[j].ID
 	})
 
-	groupTitle := strings.TrimSpace(grp.Title)
-	if groupTitle == "" {
-		groupTitle = grp.Target
-	}
+	s.setCachedForumTopics(ownerID, targetID, groupTitle, topics)
 	encoded, _ := json.Marshal(forumTopicsPayload{
 		ChatID:     grp.ChatID,
 		GroupTitle: groupTitle,
@@ -254,7 +495,18 @@ func (s *Service) handleFetchGroupTopics(ctx context.Context, client *gobot.Clie
 	})
 }
 
-func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Client, chatID, ownerID int64, listName, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
+func (s *Service) emitTopicListResult(ctx context.Context, chatID, ownerID int64, threadID int, eventType, listName, text string) {
+	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
+		ChatID:   chatID,
+		ThreadID: threadID,
+		OwnerID:  ownerID,
+		Type:     eventType,
+		TaskID:   listName,
+		Text:     text,
+	})
+}
+
+func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Client, chatID, ownerID int64, threadID int, listName, text string, entities []models.MessageEntity, mediaIDs []int, sourceCount int) {
 	cfg := s.getJasebConfig(ctx, ownerID)
 	listIdx := -1
 	for i := range cfg.TopicLists {
@@ -264,11 +516,13 @@ func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Cl
 		}
 	}
 	if listIdx < 0 {
-		s.reply(ctx, chatID, 0, fmt.Sprintf(`<h1>❌ List Topic Tidak Ditemukan</h1><blockquote expandable>List Topic <code>%s</code> sudah dihapus atau tidak tersedia.</blockquote>`, html.EscapeString(listName)), "panel_notice")
+		errText := fmt.Sprintf(`<h1>❌ List Topic Tidak Ditemukan</h1><blockquote expandable>List Topic <code>%s</code> sudah dihapus atau tidak tersedia.</blockquote><tg-button-row><tg-button type="callback_data" data="panel:tlist:home">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, html.EscapeString(listName))
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_saved", listName, errText)
 		return
 	}
 	if len(cfg.TopicLists[listIdx].Posts) >= 20 {
-		s.reply(ctx, chatID, 0, `<h1>⚠️ Batas Post Tercapai</h1><blockquote expandable>Maksimal <b>20 post</b> per List Topic. Hapus post lama terlebih dahulu.</blockquote>`, "panel_notice")
+		errText := fmt.Sprintf(`<h1>⚠️ Batas Post Tercapai</h1><blockquote expandable>Maksimal <b>20 post</b> per List Topic. Hapus post lama terlebih dahulu.</blockquote><tg-button-row><tg-button type="callback_data" data="panel:tlist:open:%s">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, listName)
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_saved", listName, errText)
 		return
 	}
 
@@ -278,7 +532,8 @@ func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Cl
 	if sourceCount > 0 {
 		mediaIDs, err = s.relayPanelMediaToCache(ctx, client, sourceCount, topicID)
 		if err != nil {
-			s.reply(ctx, chatID, 0, fmt.Sprintf(`<h1>❌ Gagal Menyimpan Media</h1><blockquote expandable><code>%s</code></blockquote>`, html.EscapeString(err.Error())), "panel_notice")
+			errText := fmt.Sprintf(`<h1>❌ Gagal Menyimpan Media</h1><blockquote expandable><code>%s</code></blockquote><tg-button-row><tg-button type="callback_data" data="panel:tlist:open:%s">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, html.EscapeString(err.Error()), listName)
+			s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_saved", listName, errText)
 			return
 		}
 	}
@@ -296,11 +551,12 @@ func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Cl
 		mediaTypeLabel = "Teks"
 	}
 	if err != nil || cachedMsgID <= 0 {
-		errText := "ID pesan cache tidak valid"
+		errMsg := "ID pesan cache tidak valid"
 		if err != nil {
-			errText = err.Error()
+			errMsg = err.Error()
 		}
-		s.reply(ctx, chatID, 0, fmt.Sprintf(`<h1>❌ Gagal Menyimpan Post</h1><blockquote expandable><code>%s</code></blockquote>`, html.EscapeString(errText)), "panel_notice")
+		errText := fmt.Sprintf(`<h1>❌ Gagal Menyimpan Post</h1><blockquote expandable><code>%s</code></blockquote><tg-button-row><tg-button type="callback_data" data="panel:tlist:open:%s">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, html.EscapeString(errMsg), listName)
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_saved", listName, errText)
 		return
 	}
 
@@ -321,10 +577,10 @@ func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Cl
 </tg-button-row>
 <hr/>
 <p>GotdBot • Topic List Manager</p>`, html.EscapeString(listName), mediaTypeLabel, len(cfg.TopicLists[listIdx].Posts), cachedMsgID, listName, listName)
-	s.reply(ctx, chatID, 0, report, "panel_notice")
+	s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_saved", listName, report)
 }
 
-func (s *Service) handleTopicListPosts(ctx context.Context, client *gobot.Client, chatID, ownerID int64, listName string) {
+func (s *Service) handleTopicListPosts(ctx context.Context, client *gobot.Client, chatID, ownerID int64, threadID int, listName string) {
 	cfg := s.getJasebConfig(ctx, ownerID)
 	var tl *jasebTopicListDoc
 	for i := range cfg.TopicLists {
@@ -334,7 +590,8 @@ func (s *Service) handleTopicListPosts(ctx context.Context, client *gobot.Client
 		}
 	}
 	if tl == nil {
-		s.reply(ctx, chatID, 0, fmt.Sprintf(`<h1>❌ List Topic Tidak Ditemukan</h1><blockquote expandable>List Topic <code>%s</code> tidak ditemukan.</blockquote>`, html.EscapeString(listName)), "panel_notice")
+		errText := fmt.Sprintf(`<h1>❌ List Topic Tidak Ditemukan</h1><blockquote expandable>List Topic <code>%s</code> tidak ditemukan.</blockquote><tg-button-row><tg-button type="callback_data" data="panel:tlist:home">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, html.EscapeString(listName))
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_posts", listName, errText)
 		return
 	}
 
@@ -393,19 +650,14 @@ func (s *Service) handleTopicListPosts(ctx context.Context, client *gobot.Client
 	fmt.Fprintf(&sb, "<tg-button-row>\n  <tg-button type=\"callback_data\" data=\"panel:tlist:open:%s\">◀️ Kembali ◀️</tg-button>\n</tg-button-row>\n", tl.Name)
 	sb.WriteString("<hr/>\n<p>GotdBot • Topic List Manager</p>")
 
-	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
-		ChatID:  chatID,
-		OwnerID: ownerID,
-		Type:    "tlist_posts",
-		TaskID:  tl.Name,
-		Text:    sb.String(),
-	})
+	s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_posts", tl.Name, sb.String())
 }
 
-func (s *Service) handleTopicListPostDetail(ctx context.Context, client *gobot.Client, chatID, ownerID int64, listName, idxStr string) {
+func (s *Service) handleTopicListPostDetail(ctx context.Context, client *gobot.Client, chatID, ownerID int64, threadID int, listName, idxStr string) {
+	backMarkup := fmt.Sprintf(`<tg-button-row><tg-button type="callback_data" data="panel:tlist:posts:%s">◀️ Kembali ◀️</tg-button></tg-button-row><hr/><p>GotdBot • Topic List Manager</p>`, listName)
 	idx, err := strconv.Atoi(strings.TrimSpace(idxStr))
 	if err != nil || idx < 0 {
-		s.reply(ctx, chatID, 0, `<h1>❌ Index Post Tidak Valid</h1><blockquote expandable>Nomor post tidak valid.</blockquote>`, "panel_notice")
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_detail", listName, `<h1>❌ Index Post Tidak Valid</h1><blockquote expandable>Nomor post tidak valid.</blockquote>`+backMarkup)
 		return
 	}
 	cfg := s.getJasebConfig(ctx, ownerID)
@@ -417,18 +669,18 @@ func (s *Service) handleTopicListPostDetail(ctx context.Context, client *gobot.C
 		}
 	}
 	if tl == nil || idx >= len(tl.Posts) {
-		s.reply(ctx, chatID, 0, `<h1>❌ Post Tidak Ditemukan</h1><blockquote expandable>Post sudah dihapus atau tidak tersedia.</blockquote>`, "panel_notice")
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_detail", listName, `<h1>❌ Post Tidak Ditemukan</h1><blockquote expandable>Post sudah dihapus atau tidak tersedia.</blockquote>`+backMarkup)
 		return
 	}
 	cachePeer, err := s.resolveCachePeer(ctx, client)
 	if err != nil {
-		s.reply(ctx, chatID, 0, `<h1>❌ Gagal Akses Cache</h1><blockquote expandable>Userbot tidak dapat terhubung ke channel cache.</blockquote>`, "panel_notice")
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_detail", listName, `<h1>❌ Gagal Akses Cache</h1><blockquote expandable>Userbot tidak dapat terhubung ke channel cache.</blockquote>`+backMarkup)
 		return
 	}
 	msgID := tl.Posts[idx]
 	message, err := s.fetchCacheMessage(ctx, client, cachePeer, msgID)
 	if err != nil || message == nil {
-		s.reply(ctx, chatID, 0, `<h1>❌ Gagal Memuat Post</h1><blockquote expandable>Detail post tidak dapat diambil dari cache.</blockquote>`, "panel_notice")
+		s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_detail", listName, `<h1>❌ Gagal Memuat Post</h1><blockquote expandable>Detail post tidak dapat diambil dari cache.</blockquote>`+backMarkup)
 		return
 	}
 
@@ -480,13 +732,7 @@ func (s *Service) handleTopicListPostDetail(ctx context.Context, client *gobot.C
 <hr/>
 <p>GotdBot • Topic List Manager</p>`, mediaTags.String(), idx+1, html.EscapeString(tl.Name), displayContent, html.EscapeString(tl.Name), mediaType, msgID, tl.Name, idx, tl.Name)
 
-	_ = s.redis.To(ctx, "from:ubot", &models.PFromService{
-		ChatID:  chatID,
-		OwnerID: ownerID,
-		Type:    "tlist_post_detail",
-		TaskID:  tl.Name,
-		Text:    text,
-	})
+	s.emitTopicListResult(ctx, chatID, ownerID, threadID, "tlist_post_detail", tl.Name, text)
 }
 
 type topicPlayTracker struct {
