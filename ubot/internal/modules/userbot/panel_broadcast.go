@@ -319,6 +319,7 @@ func (s *Service) handleListDetail(ctx context.Context, client *gobot.Client, ch
 </table>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:list:delete:%s" style="danger">🗑️ Hapus List</tg-button>
+  <tg-button type="callback_data" data="panel:list:back">◀️ Kembali</tg-button>
 </tg-button-row>
 <hr/>
 <p>GotdBot • Promotional Content Manager</p>`, mediaTags.String(), index+1, displayContent, index+1, mediaType, msgID, taskID)

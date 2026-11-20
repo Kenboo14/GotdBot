@@ -30,8 +30,15 @@ func (h *Handler) denyTierFeature(ctx context.Context, b *botgotd.Bot, chatID in
 	}
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: fmt.Sprintf(
-			"🔒 <b>Fitur %s Terkunci</b>\n\nPaket Anda saat ini: <code>%s</code>.\nFitur ini tersedia mulai tier <b>%s</b>.\n\n<i>Gunakan ⚙️ Settings → 🔑 Upgrade / Perpanjang untuk menaikkan paket tanpa perlu login ulang.</i>",
+		Text: fmt.Sprintf(`<h1>🔒 Fitur %s Terkunci</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
+  <tr><td>🎖️ Paket Anda</td><td><code>%s</code></td></tr>
+  <tr><td>🚀 Minimal Tier</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Gunakan menu <b>⚙️ Settings ⚙️ → 🔑 Tambah Token 🔑</b> untuk mengaktifkan paket lebih tinggi tanpa perlu login ulang.</blockquote>
+<hr/>
+<p>GotdBot • Tier Policy Control</p>`,
 			html.EscapeString(featureName),
 			html.EscapeString(currentTier),
 			html.EscapeString(minTier),
@@ -41,7 +48,7 @@ func (h *Handler) denyTierFeature(ctx context.Context, b *botgotd.Bot, chatID in
 	})
 }
 
-func (h *Handler) ShowSettings(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+func (h *Handler) renderSettingsView(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int) {
 	h.setPanelState(chatID, "")
 	cfg := h.db.GetUserConfig(ctx, userID)
 	gCount, lCount := h.db.CountGroupsAndLists(ctx, userID)
@@ -56,7 +63,7 @@ func (h *Handler) ShowSettings(ctx context.Context, b *botgotd.Bot, chatID, user
 		tierLabel = databases.NormalizeTier(latest.Tier) + " (Expired)"
 	}
 
-	text := fmt.Sprintf(`⚙️ <b>Pengaturan &amp; Keamanan Akun</b>
+	text := fmt.Sprintf(`<h1>⚙️ Pengaturan &amp; Keamanan Akun</h1>
 <table border="1">
   <tr><th>📌 Parameter</th><th>Nilai</th></tr>
   <tr><td>🎖️ Paket Aktif</td><td><code>%s</code></td></tr>
@@ -66,17 +73,37 @@ func (h *Handler) ShowSettings(ctx context.Context, b *botgotd.Bot, chatID, user
   <tr><td>✉️ Email Darurat</td><td>%s</td></tr>
   <tr><td>👤 Admin Darurat</td><td>%s</td></tr>
 </table>
-<blockquote>🔄 Gunakan <b>🔑 Tambah Token</b> untuk menambah slot baru atau <b>🔄 Ganti Token</b> untuk berpindah slot. 🔒 <code>GOTD_SHA:</code> memindahkan slot paket (Pro+), 📎 <code>GOTD_BKP:</code> menyalin List &amp; Grup antar-slot/akun.</blockquote>`,
+<blockquote expandable>🔄 Gunakan <b>🔑 Tambah Token 🔑</b> untuk menambah slot baru atau <b>🔄 Ganti Token 🔄</b> untuk berpindah slot. 🔒 <code>GOTD_SHA:</code> memindahkan slot paket (Pro+), 📎 <code>GOTD_BKP:</code> menyalin List &amp; Grup antar-slot atau akun.</blockquote>
+<tg-button-row>
+  <tg-button type="callback_data" data="panel:token:menu" style="primary">🔄 Ganti Token</tg-button>
+  <tg-button type="callback_data" data="panel:settings:backup">📎 Backup Data</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot • Account &amp; Slot Security</p>`,
 		html.EscapeString(tierLabel), len(activeSlots), expLabel, gCount, lCount,
 		html.EscapeString(cfg.Email), html.EscapeString(cfg.Admin),
 	)
 
+	if editMsgID > 0 {
+		if _, err := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: editMsgID,
+			Text:      text,
+			ParseMode: "HTML",
+		}); err == nil {
+			return
+		}
+	}
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.SettingsMenuMarkup,
 	})
+}
+
+func (h *Handler) ShowSettings(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	h.renderSettingsView(ctx, b, chatID, userID, 0)
 }
 
 func (h *Handler) HandleAmbilToken(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
@@ -89,7 +116,7 @@ func (h *Handler) HandleAmbilToken(ctx context.Context, b *botgotd.Bot, chatID, 
 	if lic == nil {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ Akun Anda tidak memiliki lisensi aktif. Gunakan <b>🔑 Tambah Token</b> untuk mengaktifkan voucher baru, atau <b>📎 Backup Data</b> untuk menyimpan data list &amp; grup.",
+			Text:        `<h1>⚠️ Lisensi Tidak Ditemukan</h1><blockquote expandable>Akun Anda tidak memiliki lisensi aktif. Gunakan <b>🔑 Tambah Token 🔑</b> untuk mengaktifkan voucher baru, atau <b>📎 Backup Data 📎</b> untuk menyimpan data list &amp; grup.</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.SettingsMenuMarkup,
 		})
@@ -98,14 +125,16 @@ func (h *Handler) HandleAmbilToken(ctx context.Context, b *botgotd.Bot, chatID, 
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: fmt.Sprintf(`🔒 <b>Token Lisensi Akun (Backup Key)</b>
-
-<code>%s</code>
-
-• <b>Tier:</b> <code>%s</code>
-• <b>Aktif sampai:</b> <code>%s WIB</code>
-
-<blockquote>⚠️ Siapa pun yang memegang token ini dapat memindahkan paket beserta data ke akun Telegram lain. Simpan baik-baik dan jangan bagikan ke orang lain.</blockquote>`,
+		Text: fmt.Sprintf(`<h1>🔒 Token Lisensi Akun (Backup Key)</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+  <tr><td>🎖️ Tier Paket</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Aktif Sampai</td><td><code>%s WIB</code></td></tr>
+</table>
+<blockquote expandable>⚠️ Siapa pun yang memegang token ini dapat memindahkan paket beserta data slot ini ke akun Telegram lain. Simpan baik-baik dan jangan bagikan ke orang lain.</blockquote>
+<hr/>
+<p>GotdBot • Account &amp; Slot Security</p>`,
 			html.EscapeString(lic.TokenSHA),
 			html.EscapeString(lic.Tier),
 			lic.ExpiresAt.Local().Format("02-01-2006 15:04:05"),
@@ -127,12 +156,15 @@ func (h *Handler) PromptUpgradeToken(ctx context.Context, b *botgotd.Bot, chatID
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: fmt.Sprintf(`🔑 <b>Tambah / Ganti Slot Token</b>
-
-• <b>Slot aktif sekarang:</b> <code>%s</code> (<code>%d slot aktif</code>)
-• <b>Masa aktif:</b> <code>%s</code>
-
-Kirimkan voucher master (<code>GOTD:&lt;32_huruf&gt;</code>) dari Owner untuk membuka slot token baru tersendiri (data token lama tetap aman tersimpan dan bisa dipilih kapan saja lewat <b>🔄 Ganti Token</b>), atau tempel <code>GOTD_SHA:...</code> milik slot Anda untuk langsung berpindah.`,
+		Text: fmt.Sprintf(`<h1>🔑 Tambah / Ganti Slot Token</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
+  <tr><td>🎖️ Slot Aktif Sekarang</td><td><code>%s</code> (<code>%d slot aktif</code>)</td></tr>
+  <tr><td>⏳ Masa Aktif</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Kirimkan voucher master (<code>GOTD:&lt;32_huruf&gt;</code>) dari Owner untuk membuka slot token baru tersendiri (data token lama tetap aman tersimpan dan bisa dipilih kapan saja lewat <b>🔄 Ganti Token 🔄</b>), atau tempel <code>GOTD_SHA:...</code> milik slot Anda untuk langsung berpindah.</blockquote>
+<hr/>
+<p>GotdBot • Account &amp; Slot Security</p>`,
 			html.EscapeString(curTier), len(activeSlots), html.EscapeString(curExp),
 		),
 		ParseMode:   "HTML",
@@ -140,7 +172,7 @@ Kirimkan voucher master (<code>GOTD:&lt;32_huruf&gt;</code>) dari Owner untuk me
 	})
 }
 
-func (h *Handler) HandleCreateDataBackup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+func (h *Handler) createAndRenderDataBackup(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int) {
 	cfg := h.db.GetUserConfig(ctx, userID)
 	code := GenerateBackupCode()
 	backup := &databases.DataBackupCode{
@@ -153,39 +185,75 @@ func (h *Handler) HandleCreateDataBackup(ctx context.Context, b *botgotd.Bot, ch
 		CreatedAt:  time.Now(),
 	}
 	if err := h.db.SaveDataBackup(ctx, backup); err != nil {
+		errHTML := `<h1>❌ Gagal Membuat Backup</h1><blockquote expandable>Terjadi kesalahan saat menyimpan kode backup data ke database.</blockquote><hr/><p>GotdBot • Data Backup Manager</p>`
+		if editMsgID > 0 {
+			if _, editErr := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+				ChatID:    chatID,
+				MessageID: editMsgID,
+				Text:      errHTML,
+				ParseMode: "HTML",
+			}); editErr == nil {
+				return
+			}
+		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "❌ Gagal membuat kode backup data.",
+			Text:        errHTML,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.SettingsMenuMarkup,
 		})
 		return
 	}
 
+	text := fmt.Sprintf(`<h1>📎 Kode Backup Data Berhasil Dibuat</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>🔑 Kode Backup</td><td><code>%s</code></td></tr>
+  <tr><td>📋 List / 🌐 Grup</td><td><code>%d list · %d grup</code></td></tr>
+  <tr><td>🧵 Topic / 📌 List Topic</td><td><code>%d topic · %d list topic</code></td></tr>
+</table>
+<blockquote expandable>ℹ️ Gunakan menu <b>♻️ Restore Data ♻️</b> dan kirim kode di atas untuk memulihkan list &amp; grup ke slot atau akun baru (tersedia untuk semua tier termasuk Free).</blockquote>
+<tg-button-row>
+  <tg-button type="callback_data" data="panel:settings:home">◀️ Kembali</tg-button>
+</tg-button-row>
+<hr/>
+<p>GotdBot • Data Backup Manager</p>`,
+		html.EscapeString(code), len(backup.Lists), len(backup.Groups), len(backup.Topics), len(backup.TopicLists),
+	)
+
+	if editMsgID > 0 {
+		if _, editErr := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: editMsgID,
+			Text:      text,
+			ParseMode: "HTML",
+		}); editErr == nil {
+			return
+		}
+	}
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID: chatID,
-		Text: fmt.Sprintf(`📎 <b>Kode Backup Data Berhasil Dibuat</b>
-
-<code>%s</code>
-
-• <b>List:</b> <code>%d</code> · <b>Grup:</b> <code>%d</code>
-• <b>Topic:</b> <code>%d</code> · <b>List Topic:</b> <code>%d</code>
-
-<blockquote>ℹ️ Gunakan menu <b>♻️ Restore Data</b> dan kirim kode di atas untuk memulihkan list &amp; grup ke akun baru (tersedia untuk semua tier termasuk Free).</blockquote>`,
-			html.EscapeString(code), len(backup.Lists), len(backup.Groups), len(backup.Topics), len(backup.TopicLists),
-		),
+		ChatID:      chatID,
+		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.SettingsMenuMarkup,
 	})
+}
+
+func (h *Handler) HandleCreateDataBackup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	h.createAndRenderDataBackup(ctx, b, chatID, userID, 0)
 }
 
 func (h *Handler) PromptRestoreDataBackup(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	h.setPanelState(chatID, "waiting_restore_backup")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: `♻️ <b>Pulihkan Data (Restore Backup)</b>
-
-Kirimkan kode backup (<code>GOTD_BKP:...</code>) untuk memulihkan daftar List dan Grup ke akun ini.`,
+		Text: `<h1>♻️ Pulihkan Data (Restore Backup)</h1>
+<table border="1">
+  <tr><th>Format Kode</th><td><code>GOTD_BKP:...</code></td></tr>
+</table>
+<blockquote expandable>Kirimkan kode backup (<code>GOTD_BKP:...</code>) untuk memulihkan daftar List, Grup, dan Topic ke slot token aktif ini.</blockquote>
+<hr/>
+<p>GotdBot • Data Backup Manager</p>`,
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.CancelOnlyMarkup,
 	})
@@ -205,7 +273,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 			if err != nil || lic == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        "❌ Token SHA tidak ditemukan dalam database.",
+					Text:        `<h1>❌ Token SHA Tidak Ditemukan</h1><blockquote expandable>Token SHA yang Anda masukkan tidak terdaftar dalam database.</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -214,7 +282,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 			if lic.Status != "active" || !lic.ExpiresAt.After(time.Now()) {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        "❌ Token SHA tersebut sudah tidak aktif atau kedaluwarsa.",
+					Text:        `<h1>❌ Token SHA Kedaluwarsa</h1><blockquote expandable>Token SHA tersebut sudah tidak aktif atau masa aktifnya telah berakhir.</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -223,7 +291,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 			if lic.OwnerChatID != effectiveID && lic.UserbotID != effectiveID {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        "ℹ️ Token SHA tersebut terdaftar di akun Telegram lain.\nGunakan menu <b>/start → Input Token</b> untuk memindahkan slot tersebut ke akun ini.",
+					Text:        `<h1>ℹ️ Token Milik Akun Lain</h1><blockquote expandable>Token SHA tersebut terdaftar di akun Telegram lain. Gunakan menu <b>/start → 🔑 Input Token 🔑</b> untuk memindahkan slot tersebut ke akun ini.</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.SettingsMenuMarkup,
 				})
@@ -233,7 +301,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 			if err := h.switchUserActiveToken(ctx, effectiveID, lic); err != nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        "❌ Gagal beralih slot token: " + html.EscapeString(err.Error()),
+					Text:        fmt.Sprintf(`<h1>❌ Gagal Beralih Slot</h1><blockquote expandable>%s</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`, html.EscapeString(err.Error())),
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -243,12 +311,16 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 			expStr := lic.ExpiresAt.Local().Format("02-01-2006 15:04:05 WIB")
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID: chatID,
-				Text: fmt.Sprintf(`✅ <b>Berhasil Beralih Slot Token!</b>
-• <b>Tier Aktif:</b> <code>%s</code>
-• <b>Berlaku sampai:</b> <code>%s</code>
-• <b>Token Slot:</b> <code>%s</code>
-
-<i>Data List, Grup, Topic, Jeda, dan Timer untuk slot ini telah dimuat.</i>`,
+				Text: fmt.Sprintf(`<h1>✅ Berhasil Beralih Slot Token</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>🎖️ Tier Aktif</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Berlaku Sampai</td><td><code>%s</code></td></tr>
+  <tr><td>🔑 Token Slot</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Data List, Grup, Topic, Jeda, Timer, dan Watermark khusus slot ini telah dimuat.</blockquote>
+<hr/>
+<p>GotdBot • Account &amp; Slot Security</p>`,
 					html.EscapeString(databases.NormalizeTier(lic.Tier)),
 					expStr,
 					html.EscapeString(lic.TokenSHA),
@@ -262,7 +334,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 		if errMsg != "" {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        errMsg,
+				Text:        fmt.Sprintf(`<h1>⚠️ Gagal Memproses Token</h1><blockquote expandable>%s</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`, errMsg),
 				ParseMode:   "HTML",
 				ReplyMarkup: assets.CancelOnlyMarkup,
 			})
@@ -272,12 +344,16 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 		expStr := lic.ExpiresAt.Local().Format("02-01-2006 15:04:05 WIB")
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
-			Text: fmt.Sprintf(`✅ <b>%s Aktif!</b>
-• <b>Tier Aktif:</b> <code>%s</code>
-• <b>Berlaku sampai:</b> <code>%s</code>
-• <b>Token Slot:</b> <code>%s</code>
-
-<i>Slot baru aktif dengan data kosong tersendiri. Data token Anda sebelumnya tetap aman tersimpan dan bisa dipilih kapan saja lewat 🔄 Ganti Token.</i>`,
+			Text: fmt.Sprintf(`<h1>✅ %s Aktif</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>🎖️ Tier Aktif</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Berlaku Sampai</td><td><code>%s</code></td></tr>
+  <tr><td>🔑 Token Slot</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Slot baru aktif dengan data kosong tersendiri. Data token Anda sebelumnya tetap aman tersimpan dan bisa dipilih kapan saja lewat <b>🔄 Ganti Token 🔄</b>.</blockquote>
+<hr/>
+<p>GotdBot • Account &amp; Slot Security</p>`,
 				html.EscapeString(actionLabel),
 				html.EscapeString(lic.Tier),
 				expStr,
@@ -297,7 +373,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 		if !strings.HasPrefix(code, "GOTD_BKP:") {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        "⚠️ Format tidak valid. Masukkan kode yang diawali <code>GOTD_BKP:</code>.",
+				Text:        `<h1>⚠️ Format Kode Tidak Valid</h1><blockquote expandable>Masukkan kode backup yang diawali <code>GOTD_BKP:</code>.</blockquote><hr/><p>GotdBot • Data Backup Manager</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: assets.CancelOnlyMarkup,
 			})
@@ -307,7 +383,7 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 		if err != nil || backup == nil {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        "❌ Kode backup tidak ditemukan dalam database.",
+				Text:        `<h1>❌ Kode Backup Tidak Ditemukan</h1><blockquote expandable>Kode backup yang Anda kirimkan tidak terdaftar di database.</blockquote><hr/><p>GotdBot • Data Backup Manager</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: assets.CancelOnlyMarkup,
 			})
@@ -343,16 +419,22 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 		_ = h.db.SaveUserConfig(ctx, cfg)
 		h.resetTopicForumScan(chatID)
 
-		noteText := ""
+		noteBlock := `<blockquote expandable>Seluruh materi List, target Grup, Topic, dan List Topic telah dipulihkan ke slot aktif ini.</blockquote>`
 		if len(notes) > 0 {
-			noteText = "\n\n⚠️ <b>Catatan:</b> " + html.EscapeString(strings.Join(notes, "; "))
+			noteBlock = fmt.Sprintf(`<blockquote expandable>⚠️ <b>Catatan Penyesuaian Tier:</b><br/>%s</blockquote>`, html.EscapeString(strings.Join(notes, "; ")))
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
-			Text: fmt.Sprintf(`✅ <b>Data Berhasil Dipulihkan</b>
-• <b>List:</b> <code>%d</code> · <b>Grup:</b> <code>%d</code>
-• <b>Topic:</b> <code>%d</code> · <b>List Topic:</b> <code>%d</code>%s`,
-				len(lists), len(groups), len(topics), len(topicLists), noteText,
+			Text: fmt.Sprintf(`<h1>✅ Data Berhasil Dipulihkan</h1>
+<table border="1">
+  <tr><th>📌 Data</th><th>Jumlah</th></tr>
+  <tr><td>📋 List / 🌐 Grup</td><td><code>%d list · %d grup</code></td></tr>
+  <tr><td>🧵 Topic / 📌 List Topic</td><td><code>%d topic · %d list topic</code></td></tr>
+</table>
+%s
+<hr/>
+<p>GotdBot • Data Backup Manager</p>`,
+				len(lists), len(groups), len(topics), len(topicLists), noteBlock,
 			),
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.SettingsMenuMarkup,

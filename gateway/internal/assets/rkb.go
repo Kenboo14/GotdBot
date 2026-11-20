@@ -39,9 +39,9 @@ const (
 const (
 	BtnCekTopic   = "🧑‍💻 Cek Topic 🧑‍💻"
 	BtnTopic      = "🧑‍💻 Topic 🧑‍💻"
-	BtnListTopic  = "📌 List Topic"
-	BtnSemuaTopic = "📂 Semua Topic"
-	BtnHapusTopic = "🗑️ Hapus Topic"
+	BtnListTopic  = "📌 List Topic 📌"
+	BtnSemuaTopic = "📂 Semua Topic 📂"
+	BtnHapusTopic = "🗑️ Hapus Topic 🗑️"
 	BtnCekList    = "📁 Cek List 📁"
 	BtnCekGrup    = "📚 Cek Grup 📚"
 	BtnTambahList = "📝 Tambah List 📝"
@@ -49,13 +49,11 @@ const (
 	BtnSebarKeRC  = "📦 Sebar Ke RC 📦"
 )
 
-// Tambah Grup Options
 const (
 	BtnTambahkanSemuaGrup = "🔥 Tambahkan Semua Grup Dalam Akun 🔥"
 	BtnTambahGrupManual   = "📝 Tambahkan Grup Manual 📝"
 )
 
-// Reset Menu
 const (
 	BtnHapusSemuaGrup   = "🗑️ Hapus Semua Grup 🗑️"
 	BtnHapusSemuaList   = "🗑️ Hapus Semua List 🗑️"
@@ -63,48 +61,48 @@ const (
 )
 
 const (
-	BtnJedaAman         = "🎁 Jeda Aman"
-	BtnJedaOtomatis     = "💡 Jeda Otomatis"
+	BtnJedaAman         = "🎁 Jeda Aman 🎁"
+	BtnJedaOtomatis     = "💡 Jeda Otomatis 💡"
 	BtnJedaPerGrup      = "🔗 Jeda Per Grup 🔗"
 	BtnJedaPerSemuaGrup = "🖇️ Jeda Per Semua Grup 🖇️"
-	BtnSkipFloodWait    = "⏭️ Skip FloodWait"
-	BtnMatikan          = "🔕 Matikan"
-	BtnSkipFW30s        = "⏱️ 30 Detik"
-	BtnSkipFW1m         = "⏱️ 1 Menit"
-	BtnSkipFW2m         = "⏱️ 2 Menit"
-	BtnSkipFW3m         = "⏱️ 3 Menit"
-	BtnSkipFW5m         = "⏱️ 5 Menit"
-	BtnSkipFW10m        = "⏱️ 10 Menit"
-	BtnTimerPreset1     = "⏰ 08:00 - 22:00"
-	BtnTimerPreset2     = "⏰ 07:00 - 23:00"
-	BtnTimerPreset3     = "⏰ 09:00 - 21:00"
-	BtnTimerPreset4     = "⏰ 06:00 - 22:00"
+	BtnSkipFloodWait    = "⏭️ Skip FloodWait ⏭️"
+	BtnMatikan          = "🔕 Matikan 🔕"
+	BtnSkipFW30s        = "⏱️ 30 Detik ⏱️"
+	BtnSkipFW1m         = "⏱️ 1 Menit ⏱️"
+	BtnSkipFW2m         = "⏱️ 2 Menit ⏱️"
+	BtnSkipFW3m         = "⏱️ 3 Menit ⏱️"
+	BtnSkipFW5m         = "⏱️ 5 Menit ⏱️"
+	BtnSkipFW10m        = "⏱️ 10 Menit ⏱️"
+	BtnTimerPreset1     = "⏰ 08:00 - 22:00 ⏰"
+	BtnTimerPreset2     = "⏰ 07:00 - 23:00 ⏰"
+	BtnTimerPreset3     = "⏰ 09:00 - 21:00 ⏰"
+	BtnTimerPreset4     = "⏰ 06:00 - 22:00 ⏰"
 	BtnTimerNonaktif    = BtnMatikan
 )
 
 const (
-	BtnModeNormal  = "👑 Normal"
-	BtnModeFast    = "⚡ Fast"
-	BtnModeSilent  = "🔕 Silent"
-	BtnModeForward = "📨 Forward"
+	BtnModeNormal  = "👑 Normal 👑"
+	BtnModeFast    = "⚡ Fast ⚡"
+	BtnModeSilent  = "🔕 Silent 🔕"
+	BtnModeForward = "📨 Forward 📨"
 )
 
 const (
-	BtnUpgradeToken = "🔑 Tambah Token"
-	BtnGantiToken   = "🔄 Ganti Token"
-	BtnAmbilToken   = "🔒 Ambil Token"
-	BtnBackupData   = "📎 Backup Data"
-	BtnRestoreData  = "♻️ Restore Data"
+	BtnUpgradeToken = "🔑 Tambah Token 🔑"
+	BtnGantiToken   = "🔄 Ganti Token 🔄"
+	BtnAmbilToken   = "🔒 Ambil Token 🔒"
+	BtnBackupData   = "📎 Backup Data 📎"
+	BtnRestoreData  = "♻️ Restore Data ♻️"
 )
 
-// Install / Wizard
 const (
 	BtnInputToken     = "🔑 Input Token 🔑"
 	BtnBuatUserbot    = "🚀 Buat Userbot 🚀"
 	BtnControl        = "🎯 Control 🎯"
 	BtnControlAlt     = "🎮 Control 🎮"
 	BtnBatal          = "⬅️ Batal ⬅️"
-	BtnBagikanKontak  = "📱 Bagikan Kontak"
+	BtnKembali        = "◀️ Kembali ◀️"
+	BtnBagikanKontak  = "📱 Bagikan Kontak 📱"
 	BtnHapusWatermark = "🗑️ Hapus Watermark 🗑️"
 )
 

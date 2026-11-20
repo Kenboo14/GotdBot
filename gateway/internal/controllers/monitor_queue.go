@@ -272,12 +272,18 @@ func (d *monitorDispatcher) flushBatches(resolveTopic func(string) int) {
 			continue
 		}
 
+		header := strings.TrimSpace(b.header)
+		if !strings.Contains(strings.ToLower(header), "<h1") {
+			cleanHdr := strings.ReplaceAll(header, "<b>", "")
+			cleanHdr = strings.ReplaceAll(cleanHdr, "</b>", "")
+			header = "<h1>" + cleanHdr + "</h1>"
+		}
 		var sb strings.Builder
-		sb.WriteString(b.header)
-		sb.WriteString("\n────────────────────────\n")
+		sb.WriteString(header)
+		sb.WriteString("\n<blockquote expandable>\n")
 		dropped := b.dropped
 		for _, entry := range b.entries {
-			if sb.Len()+len(entry)+96 > d.cfg.maxMsgBytes {
+			if sb.Len()+len(entry)+180 > d.cfg.maxMsgBytes {
 				dropped++
 				continue
 			}
@@ -289,7 +295,7 @@ func (d *monitorDispatcher) flushBatches(resolveTopic func(string) int) {
 		if dropped > 0 {
 			sb.WriteString(fmt.Sprintf("<i>… dan +%d event lainnya diringkas</i>\n", dropped))
 		}
-		sb.WriteString(fmt.Sprintf("• 🕒 %s WIB", time.Now().Format("15:04:05")))
+		sb.WriteString(fmt.Sprintf("</blockquote>\n<hr/>\n<p>🕒 %s WIB · GotdBot Monitor Digest</p>", time.Now().Format("15:04:05")))
 
 		d.Enqueue(monitorJob{
 			topicKey:   b.topicKey,

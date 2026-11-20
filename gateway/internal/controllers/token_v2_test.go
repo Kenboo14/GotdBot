@@ -296,13 +296,19 @@ func TestOwnerTokenManageAndDataBackupRestoreAndTransfer(t *testing.T) {
 	foundAdminAlert := false
 	var sentCode string
 	for _, call := range rpcLog.getRequests() {
-		if strings.HasSuffix(call.Path, "/sendMessage") && fmt.Sprintf("%v", call.Body["chat_id"]) == "4001" {
+		if (strings.HasSuffix(call.Path, "/sendMessage") || strings.HasSuffix(call.Path, "/sendRichMessage")) && fmt.Sprintf("%v", call.Body["chat_id"]) == "4001" {
 			foundAdminAlert = true
-			if txt, ok := call.Body["text"].(string); ok && strings.Contains(txt, "GOTD_BKP:") {
-				idx := strings.Index(txt, "GOTD_BKP:")
-				end := strings.IndexAny(txt[idx:], "<\n ")
-				if end > 0 {
+			txt, _ := call.Body["text"].(string)
+			if txt == "" {
+				if rm, ok := call.Body["rich_message"].(map[string]any); ok {
+					txt, _ = rm["html"].(string)
+				}
+			}
+			if idx := strings.Index(txt, "GOTD_BKP:"); idx >= 0 {
+				if end := strings.IndexAny(txt[idx:], "<\n "); end > 0 {
 					sentCode = txt[idx : idx+end]
+				} else {
+					sentCode = txt[idx:]
 				}
 			}
 		}

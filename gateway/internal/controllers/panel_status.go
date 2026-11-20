@@ -13,8 +13,7 @@ import (
 	"time"
 )
 
-// ShowStatus renders the userbot status dashboard
-func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+func (h *Handler) renderStatusDashboard(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int) {
 	h.setPanelState(chatID, "")
 
 	cfg := h.db.GetUserConfig(ctx, userID)
@@ -56,14 +55,34 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 	)
 
 	tbl := assets.RichStatusTable(rows)
-	text := assets.RichStatusDashboard(tbl, html.EscapeString(cfg.TindakanTerkini), html.EscapeString(cfg.TindakanTerakhir))
+	toggleBtn := `<tg-button type="callback_data" data="panel:status:toggle" style="danger">🛑 Hentikan Siaran</tg-button>`
+	if strings.HasPrefix(cfg.Status, "Berhenti") {
+		toggleBtn = `<tg-button type="callback_data" data="panel:status:toggle" style="primary">🚀 Mulai Siaran</tg-button>`
+	}
+	actions := "\n<tg-button-row>\n  <tg-button type=\"callback_data\" data=\"panel:status:refresh\" style=\"primary\">🔄 Refresh Status</tg-button>\n  " + toggleBtn + "\n</tg-button-row>\n<hr/>"
+	base := assets.RichStatusDashboard(tbl, html.EscapeString(cfg.TindakanTerkini), html.EscapeString(cfg.TindakanTerakhir))
+	text := strings.Replace(base, "<hr/>", actions, 1)
 
+	if editMsgID > 0 {
+		if _, err := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: editMsgID,
+			Text:      text,
+			ParseMode: "HTML",
+		}); err == nil {
+			return
+		}
+	}
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
 		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.StatusMenuMarkup,
 	})
+}
+
+func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	h.renderStatusDashboard(ctx, b, chatID, userID, 0)
 }
 
 // ToggleSafemode toggles safemode
@@ -119,19 +138,11 @@ func (h *Handler) PromptUbahMode(ctx context.Context, b *botgotd.Bot, chatID, us
 	})
 }
 
-// ToggleStatus toggles userbot broadcast status
-func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+func (h *Handler) executeToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, userID int64) (bool, string, string) {
 	cfg := h.db.GetUserConfig(ctx, userID)
-	var text string
 	if strings.HasPrefix(cfg.Status, "Berhenti") {
 		if ok, expAt := h.ensureActiveLicenseOrExpire(ctx, b, userID); !ok {
-			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        fmt.Sprintf("❌ <b>Masa aktif token telah habis (%s).</b>\nSilakan /start dan masukkan token baru untuk mengaktifkan kembali userbot Anda.", expAt),
-				ParseMode:   "HTML",
-				ReplyMarkup: assets.RemoveKeyboard,
-			})
-			return
+			return false, expAt, ""
 		}
 		cfg.Status = "Berjalan"
 		cfg.TindakanTerkini = "Siaran otomatis diaktifkan"
@@ -139,21 +150,63 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, user
 		_ = h.db.SaveUserConfig(ctx, cfg)
 
 		payload := models.PToService{ChatID: chatID, UserID: userID, OwnerID: userID, Type: "start_panel_broadcast"}
-		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
-			log.Printf("start_panel_broadcast broker error: %v", err)
+		if h.broker != nil {
+			if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
+				log.Printf("start_panel_broadcast broker error: %v", err)
+			}
 		}
-		text = "🚀 <b>Siaran dimulai.</b>\n\nStatus: <code>Berjalan</code>\n\n<i>Userbot aktif mengirim materi ke seluruh grup target.</i>"
-	} else {
-		cfg.Status = "Berhenti"
-		cfg.TindakanTerkini = "Siaran otomatis dimatikan"
-		cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
-		_ = h.db.SaveUserConfig(ctx, cfg)
+		return true, "", "Berjalan"
+	}
 
-		payload := models.PToService{ChatID: chatID, UserID: userID, OwnerID: userID, Type: "stop_panel_broadcast"}
+	cfg.Status = "Berhenti"
+	cfg.TindakanTerkini = "Siaran otomatis dimatikan"
+	cfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
+	_ = h.db.SaveUserConfig(ctx, cfg)
+
+	payload := models.PToService{ChatID: chatID, UserID: userID, OwnerID: userID, Type: "stop_panel_broadcast"}
+	if h.broker != nil {
 		if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 			log.Printf("stop_panel_broadcast broker error: %v", err)
 		}
-		text = "🛑 <b>Siaran dihentikan.</b>\n\nStatus: <code>Berhenti</code>\n\n<i>Seluruh antrean pengiriman dinonaktifkan.</i>"
+	}
+	return true, "", "Berhenti"
+}
+
+func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	ok, expAt, newStatus := h.executeToggleStatus(ctx, b, chatID, userID)
+	if !ok {
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>❌ Masa Aktif Token Berakhir</h1>
+<table border="1">
+  <tr><th>⏳ Berakhir Pada</th><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Masa aktif slot token Anda telah habis. Silakan tekan <b>/start</b> untuk memasukkan token baru atau buka <b>⚙️ Settings ⚙️ → 🔄 Ganti Token 🔄</b>.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`, html.EscapeString(expAt)),
+			ParseMode:   "HTML",
+			ReplyMarkup: assets.RemoveKeyboard,
+		})
+		return
+	}
+
+	var text string
+	if newStatus == "Berjalan" {
+		text = `<h1>🚀 Siaran Dimulai</h1>
+<table border="1">
+  <tr><th>📌 Status</th><td><code>🟢 Berjalan</code></td></tr>
+</table>
+<blockquote expandable>Userbot aktif mengirim materi promosi ke seluruh grup target sesuai jeda dan mode aktif.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`
+	} else {
+		text = `<h1>🛑 Siaran Dihentikan</h1>
+<table border="1">
+  <tr><th>📌 Status</th><td><code>🔴 Berhenti</code></td></tr>
+</table>
+<blockquote expandable>Seluruh antrean pengiriman siaran dinonaktifkan oleh pengguna.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`
 	}
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -164,7 +217,6 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, user
 	})
 }
 
-// ToggleNotifikasi toggles notification setting
 func (h *Handler) ToggleNotifikasi(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	cfg := h.db.GetUserConfig(ctx, userID)
 	if strings.HasPrefix(cfg.Notifikasi, "Aktif") {
@@ -174,10 +226,13 @@ func (h *Handler) ToggleNotifikasi(ctx context.Context, b *botgotd.Bot, chatID, 
 	}
 	_ = h.db.SaveUserConfig(ctx, cfg)
 
-	text := fmt.Sprintf(
-		"✅ <b>Notifikasi diperbarui.</b>\n\nStatus: <code>%s</code>",
-		html.EscapeString(cfg.Notifikasi),
-	)
+	text := fmt.Sprintf(`<h1>🔔 Status Notifikasi Diperbarui</h1>
+<table border="1">
+  <tr><th>🔔 Notifikasi</th><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Pengaturan notifikasi laporan siaran telah disimpan ke database.</blockquote>
+<hr/>
+<p>GotdBot • Status Configuration</p>`, html.EscapeString(cfg.Notifikasi))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,

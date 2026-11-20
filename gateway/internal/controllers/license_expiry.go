@@ -111,7 +111,15 @@ func (h *Handler) expireSingleLicense(ctx context.Context, b *botgotd.Bot, lic *
 			if b != nil && lic.OwnerChatID != 0 {
 				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID: lic.OwnerChatID,
-					Text: fmt.Sprintf("⏳ Slot token <code>%s</code> telah berakhir.\n🔄 Sistem otomatis memindahkan akun ke slot aktif berikutnya: <b>%s</b>.",
+					Text: fmt.Sprintf(`<h1>⏳ Slot Token Berakhir</h1>
+<table border="1">
+  <tr><th>📌 Status</th><th>Nilai</th></tr>
+  <tr><td>❌ Slot Berakhir</td><td><code>%s</code></td></tr>
+  <tr><td>🔄 Beralih Otomatis Ke</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Masa aktif salah satu slot token Anda telah habis. Sistem otomatis mengaktifkan slot tersisa tanpa memutus sesi userbot.</blockquote>
+<hr/>
+<p>GotdBot • License Lifecycle Manager</p>`,
 						html.EscapeString(lic.Tier), html.EscapeString(databases.NormalizeTier(otherActive.Tier))),
 					ParseMode: "HTML",
 				})

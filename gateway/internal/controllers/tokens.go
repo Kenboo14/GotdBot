@@ -221,7 +221,7 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 
 		inlineMarkup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "⏱️ Set Durasi Token Free", CallbackData: "token_set_duration:menu:" + tm.Token}},
+				{{Text: "⏱️ Set Durasi Token Free", CallbackData: "token_set_duration:menu:" + tokenCallbackKey(tm.Token)}},
 			},
 		}
 
@@ -341,6 +341,38 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 	})
 }
 
+func tokenCallbackKey(token string) string {
+	return strings.TrimPrefix(strings.TrimSpace(token), "GOTD:")
+}
+
+func parseDurationCallbackValue(raw string) int64 {
+	s := strings.TrimSpace(raw)
+	if strings.HasSuffix(s, "d") {
+		days, _ := strconv.ParseInt(strings.TrimSuffix(s, "d"), 10, 64)
+		if days > 0 {
+			return days * 86400
+		}
+	}
+	sec, _ := strconv.ParseInt(s, 10, 64)
+	if sec <= 0 {
+		return 7 * 86400
+	}
+	return sec
+}
+
+func (h *Handler) resolveCallbackMasterToken(ctx context.Context, rawToken string) string {
+	tok := strings.TrimSpace(rawToken)
+	if tok == "" || strings.HasPrefix(tok, "GOTD:") {
+		return tok
+	}
+	if h != nil && h.db != nil {
+		if tm, _ := h.db.GetTokenMaster(ctx, tok); tm != nil {
+			return tok
+		}
+	}
+	return "GOTD:" + tok
+}
+
 // TokenCallback handles inline button clicks related to token management
 func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update.CallbackQuery == nil {
@@ -358,37 +390,37 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		return
 	}
 
-	data := cb.Data
-	// Format: token_set_duration:menu:<token> or token_set_duration:apply:<token>:<seconds>
-	parts := strings.Split(data, ":")
-	if len(parts) < 3 {
+	trimmed := strings.TrimPrefix(cb.Data, "token_set_duration:")
+	headParts := strings.SplitN(trimmed, ":", 2)
+	if len(headParts) < 2 {
 		return
 	}
-
-	action := parts[1]
-	token := parts[2]
+	action := headParts[0]
+	rest := headParts[1]
 
 	if action == "menu" {
+		token := h.resolveCallbackMasterToken(ctx, rest)
+		cbKey := tokenCallbackKey(token)
 		markup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
 				{
-					{Text: "1 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:%d", token, 1*86400)},
-					{Text: "3 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:%d", token, 3*86400)},
-					{Text: "7 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:%d", token, 7*86400)},
+					{Text: "1 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:1d", cbKey)},
+					{Text: "3 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:3d", cbKey)},
+					{Text: "7 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:7d", cbKey)},
 				},
 				{
-					{Text: "14 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:%d", token, 14*86400)},
-					{Text: "30 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:%d", token, 30*86400)},
-					{Text: "90 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:%d", token, 90*86400)},
+					{Text: "14 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:14d", cbKey)},
+					{Text: "30 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:30d", cbKey)},
+					{Text: "90 Hari", CallbackData: fmt.Sprintf("token_set_duration:apply:%s:90d", cbKey)},
 				},
 				{
-					{Text: "🔙 Kembali", CallbackData: "token_set_duration:back:" + token},
+					{Text: "◀️ Kembali", CallbackData: "token_set_duration:back:" + cbKey},
 				},
 			},
 		}
 
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
-		if cb.Message.Message != nil {
+		if cb.Message != nil && cb.Message.Message != nil {
 			menuText := fmt.Sprintf(`<h1>⏱️ Atur Durasi Token Free</h1>
 <blockquote expandable>Silakan tentukan masa aktif baru untuk voucher token massal free.</blockquote>
 <table border="1">
@@ -407,11 +439,13 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		return
 	}
 
-	if action == "apply" && len(parts) >= 4 {
-		seconds, _ := strconv.ParseInt(parts[3], 10, 64)
-		if seconds <= 0 {
-			seconds = 7 * 86400
+	if action == "apply" {
+		lastColon := strings.LastIndex(rest, ":")
+		if lastColon <= 0 || lastColon >= len(rest)-1 {
+			return
 		}
+		token := h.resolveCallbackMasterToken(ctx, rest[:lastColon])
+		seconds := parseDurationCallbackValue(rest[lastColon+1:])
 
 		_ = h.db.UpdateTokenMasterDuration(ctx, token, seconds)
 		durStr := FormatDurationID(time.Duration(seconds) * time.Second)
@@ -444,11 +478,11 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 
 		inlineMarkup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "⏱️ Set Durasi Token Free", CallbackData: "token_set_duration:menu:" + token}},
+				{{Text: "⏱️ Set Durasi Token Free", CallbackData: "token_set_duration:menu:" + tokenCallbackKey(token)}},
 			},
 		}
 
-		if cb.Message.Message != nil {
+		if cb.Message != nil && cb.Message.Message != nil {
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:      cb.Message.Message.Chat.ID,
 				MessageID:   cb.Message.Message.ID,
@@ -461,6 +495,8 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	if action == "back" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		token := h.resolveCallbackMasterToken(ctx, rest)
 		tm, _ := h.db.GetTokenMaster(ctx, token)
 		if tm == nil {
 			return
@@ -482,11 +518,11 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 
 		inlineMarkup := &botgotd.InlineKeyboardMarkup{
 			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
-				{{Text: "⏱️ Set Durasi Token Free", CallbackData: "token_set_duration:menu:" + tm.Token}},
+				{{Text: "⏱️ Set Durasi Token Free", CallbackData: "token_set_duration:menu:" + tokenCallbackKey(tm.Token)}},
 			},
 		}
 
-		if cb.Message.Message != nil {
+		if cb.Message != nil && cb.Message.Message != nil {
 			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 				ChatID:      cb.Message.Message.Chat.ID,
 				MessageID:   cb.Message.Message.ID,

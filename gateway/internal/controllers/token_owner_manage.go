@@ -67,24 +67,24 @@ func (h *Handler) execOwnerTokenUpgrade(ctx context.Context, b *botgotd.Bot, cha
 	if len(fields) < 5 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
-			Text:      "⚠️ Format: <code>/token upgrade &lt;user_id&gt; &lt;pro|pro++|vip&gt; &lt;durasi&gt;</code>\nContoh: <code>/token upgrade 123456789 pro++ 30h</code>",
+			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token upgrade &lt;user_id&gt; &lt;pro|pro++|vip&gt; &lt;durasi&gt;</code><br/>Contoh: <code>/token upgrade 123456789 pro++ 30h</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode: "HTML",
 		})
 		return
 	}
 	targetID, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
 	if err != nil || targetID <= 0 {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ <code>user_id</code> harus berupa angka valid.", ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ User ID Tidak Valid</h1><blockquote expandable><code>user_id</code> harus berupa angka Telegram ID yang valid.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
 		return
 	}
 	tier, ok := parseManagedTier(fields[3])
 	if !ok {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ Tier harus <code>free</code>, <code>pro</code>, <code>pro++</code>, atau <code>vip</code>.", ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ Tier Tidak Valid</h1><blockquote expandable>Tier harus berupa <code>free</code>, <code>pro</code>, <code>pro++</code>, atau <code>vip</code>.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
 		return
 	}
 	dur, durErr := ParseDurationStr(fields[4])
 	if durErr != nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ " + html.EscapeString(durErr.Error()), ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>❌ Durasi Tidak Valid</h1><blockquote expandable>%s</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, html.EscapeString(durErr.Error())), ParseMode: "HTML"})
 		return
 	}
 
@@ -126,7 +126,7 @@ func (h *Handler) execOwnerTokenUpgrade(ctx context.Context, b *botgotd.Bot, cha
 		Status:             "active",
 	}
 	if err := h.db.SaveUserLicense(ctx, newLic); err != nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ Gagal menyimpan lisensi: " + html.EscapeString(err.Error()), ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>❌ Gagal Menyimpan Lisensi</h1><blockquote expandable>%s</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, html.EscapeString(err.Error())), ParseMode: "HTML"})
 		return
 	}
 	if err := h.switchUserActiveToken(ctx, targetID, newLic); err != nil {
@@ -138,17 +138,29 @@ func (h *Handler) execOwnerTokenUpgrade(ctx context.Context, b *botgotd.Bot, cha
 	expStr := expiresAt.Local().Format("02-01-2006 15:04:05")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: fmt.Sprintf(`✅ <b>Lisensi Pengguna Diperbarui</b>
-• <b>User ID:</b> <code>%d</code>
-• <b>Tier:</b> <code>%s</code>
-• <b>Aktif sampai:</b> <code>%s WIB</code>
-• <b>Token SHA:</b> <code>%s</code>`, targetID, html.EscapeString(tier), expStr, html.EscapeString(tokenSHA)),
+		Text: fmt.Sprintf(`<h1>✅ Lisensi Pengguna Diperbarui</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>👤 User ID</td><td><code>%d</code></td></tr>
+  <tr><td>🎖️ Tier Baru</td><td><code>%s</code></td></tr>
+  <tr><td>⏰ Aktif Sampai</td><td><code>%s WIB</code></td></tr>
+  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, targetID, html.EscapeString(tier), expStr, html.EscapeString(tokenSHA)),
 		ParseMode: "HTML",
 	})
 	if targetID != chatID {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    targetID,
-			Text:      fmt.Sprintf("🎉 <b>Paket userbot Anda di-upgrade oleh Owner ke <code>%s</code>!</b>\n⏰ Aktif sampai: <code>%s WIB</code>", html.EscapeString(tier), expStr),
+			ChatID: targetID,
+			Text: fmt.Sprintf(`<h1>🎉 Paket Diperbarui Oleh Owner</h1>
+<table border="1">
+  <tr><th>🎖️ Tier Aktif</th><td><code>%s</code></td></tr>
+  <tr><th>⏰ Aktif Sampai</th><td><code>%s WIB</code></td></tr>
+</table>
+<blockquote expandable>Seluruh fitur dan kuota paket baru Anda sudah langsung aktif.</blockquote>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, html.EscapeString(tier), expStr),
 			ParseMode: "HTML",
 		})
 	}
@@ -158,25 +170,25 @@ func (h *Handler) execOwnerTokenExtend(ctx context.Context, b *botgotd.Bot, chat
 	if len(fields) < 4 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
-			Text:      "⚠️ Format: <code>/token extend &lt;user_id&gt; &lt;durasi&gt;</code>\nContoh: <code>/token extend 123456789 7h</code>",
+			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token extend &lt;user_id&gt; &lt;durasi&gt;</code><br/>Contoh: <code>/token extend 123456789 7h</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode: "HTML",
 		})
 		return
 	}
 	targetID, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
 	if err != nil || targetID <= 0 {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ <code>user_id</code> tidak valid.", ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ User ID Tidak Valid</h1><blockquote expandable><code>user_id</code> tidak valid.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
 		return
 	}
 	dur, durErr := ParseDurationStr(fields[3])
 	if durErr != nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ " + html.EscapeString(durErr.Error()), ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>❌ Durasi Tidak Valid</h1><blockquote expandable>%s</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, html.EscapeString(durErr.Error())), ParseMode: "HTML"})
 		return
 	}
 
 	lic, _ := h.lookupLicenseByQuery(ctx, fields[2])
 	if lic == nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("❌ Pengguna <code>%d</code> belum memiliki riwayat lisensi.", targetID), ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>❌ Riwayat Tidak Ditemukan</h1><blockquote expandable>Pengguna <code>%d</code> belum memiliki riwayat lisensi.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, targetID), ParseMode: "HTML"})
 		return
 	}
 
@@ -188,7 +200,7 @@ func (h *Handler) execOwnerTokenExtend(ctx context.Context, b *botgotd.Bot, chat
 	lic.Status = "active"
 	lic.CanCustomWatermark = databases.GetTierPolicy(lic.Tier).AllowCustomWatermark
 	if err := h.db.SaveUserLicense(ctx, lic); err != nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ Gagal memperpanjang: " + html.EscapeString(err.Error()), ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>❌ Gagal Memperpanjang</h1><blockquote expandable>%s</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, html.EscapeString(err.Error())), ParseMode: "HTML"})
 		return
 	}
 	cfg := h.db.GetUserConfig(ctx, targetID)
@@ -203,17 +215,29 @@ func (h *Handler) execOwnerTokenExtend(ctx context.Context, b *botgotd.Bot, chat
 	expStr := lic.ExpiresAt.Local().Format("02-01-2006 15:04:05")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: fmt.Sprintf(`✅ <b>Masa Aktif Diperpanjang</b>
-• <b>User ID:</b> <code>%d</code>
-• <b>Tier:</b> <code>%s</code>
-• <b>Tambahan:</b> <code>%s</code>
-• <b>Berakhir baru:</b> <code>%s WIB</code>`, targetID, html.EscapeString(lic.Tier), FormatDurationID(dur), expStr),
+		Text: fmt.Sprintf(`<h1>✅ Masa Aktif Diperpanjang</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>👤 User ID</td><td><code>%d</code></td></tr>
+  <tr><td>🎖️ Tier</td><td><code>%s</code></td></tr>
+  <tr><td>➕ Tambahan</td><td><code>%s</code></td></tr>
+  <tr><td>⏰ Berakhir Baru</td><td><code>%s WIB</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, targetID, html.EscapeString(lic.Tier), FormatDurationID(dur), expStr),
 		ParseMode: "HTML",
 	})
 	if targetID != chatID {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    targetID,
-			Text:      fmt.Sprintf("⏳ <b>Masa aktif userbot Anda diperpanjang +%s oleh Owner!</b>\n⏰ Aktif sampai: <code>%s WIB</code>", FormatDurationID(dur), expStr),
+			ChatID: targetID,
+			Text: fmt.Sprintf(`<h1>⏳ Masa Aktif Diperpanjang</h1>
+<table border="1">
+  <tr><th>➕ Tambahan Durasi</th><td><code>+%s</code></td></tr>
+  <tr><th>⏰ Aktif Sampai</th><td><code>%s WIB</code></td></tr>
+</table>
+<blockquote expandable>Masa aktif userbot Anda telah ditambahkan oleh Owner.</blockquote>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, FormatDurationID(dur), expStr),
 			ParseMode: "HTML",
 		})
 	}
@@ -223,7 +247,7 @@ func (h *Handler) execOwnerTokenInfo(ctx context.Context, b *botgotd.Bot, chatID
 	if len(fields) < 3 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
-			Text:      "⚠️ Format: <code>/token info &lt;user_id|GOTD:...|GOTD_SHA:...&gt;</code>",
+			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token info &lt;user_id|GOTD:...|GOTD_SHA:...&gt;</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode: "HTML",
 		})
 		return
@@ -232,17 +256,22 @@ func (h *Handler) execOwnerTokenInfo(ctx context.Context, b *botgotd.Bot, chatID
 	if strings.HasPrefix(query, "GOTD:") {
 		tm, err := h.db.GetTokenMaster(ctx, query)
 		if err != nil || tm == nil {
-			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ Voucher master tidak ditemukan.", ParseMode: "HTML"})
+			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ Voucher Tidak Ditemukan</h1><blockquote expandable>Voucher master tersebut tidak terdaftar dalam database.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
 			return
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
-			Text: fmt.Sprintf(`🔎 <b>Info Voucher Master</b>
-• <b>Token:</b> <code>%s</code>
-• <b>Tier:</b> <code>%s</code>
-• <b>Durasi:</b> <code>%s</code>
-• <b>Shared:</b> <code>%v</code> · <b>Klaim:</b> <code>%d</code>
-• <b>Status:</b> <code>%s</code>`, html.EscapeString(tm.Token), html.EscapeString(tm.Tier), FormatDurationID(time.Duration(tm.DurationSeconds)*time.Second), tm.IsShared, tm.ClaimCount, html.EscapeString(tm.Status)),
+			Text: fmt.Sprintf(`<h1>🔎 Info Voucher Master</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>🔑 Token</td><td><code>%s</code></td></tr>
+  <tr><td>🎖️ Tier</td><td><code>%s</code></td></tr>
+  <tr><td>⏳ Durasi</td><td><code>%s</code></td></tr>
+  <tr><td>👥 Shared / Klaim</td><td><code>%v · %d kali</code></td></tr>
+  <tr><td>📌 Status</td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, html.EscapeString(tm.Token), html.EscapeString(tm.Tier), FormatDurationID(time.Duration(tm.DurationSeconds)*time.Second), tm.IsShared, tm.ClaimCount, html.EscapeString(tm.Status)),
 			ParseMode: "HTML",
 		})
 		return
@@ -250,18 +279,23 @@ func (h *Handler) execOwnerTokenInfo(ctx context.Context, b *botgotd.Bot, chatID
 
 	lic, targetID := h.lookupLicenseByQuery(ctx, query)
 	if lic == nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ Data lisensi tidak ditemukan.", ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ Data Lisensi Tidak Ditemukan</h1><blockquote expandable>Tidak ada lisensi yang cocok dengan query Anda.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
 		return
 	}
 	gCount, lCount := h.db.CountGroupsAndLists(ctx, targetID)
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID: chatID,
-		Text: fmt.Sprintf(`🔎 <b>Info Lisensi Pengguna</b>
-• <b>Owner ChatID:</b> <code>%d</code> · <b>Userbot ID:</b> <code>%d</code>
-• <b>Tier:</b> <code>%s</code> · <b>Status:</b> <code>%s</code>
-• <b>Berakhir:</b> <code>%s WIB</code>
-• <b>Data:</b> <code>%d grup · %d list</code>
-• <b>Token SHA:</b> <code>%s</code>`,
+		Text: fmt.Sprintf(`<h1>🔎 Info Lisensi Pengguna</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>👤 Owner / Ubot</td><td><code>%d · %d</code></td></tr>
+  <tr><td>🎖️ Tier / Status</td><td><code>%s · %s</code></td></tr>
+  <tr><td>⏰ Berakhir</td><td><code>%s WIB</code></td></tr>
+  <tr><td>📦 Data Slot</td><td><code>%d grup · %d list</code></td></tr>
+  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`,
 			lic.OwnerChatID, lic.UserbotID, html.EscapeString(lic.Tier), html.EscapeString(lic.Status),
 			lic.ExpiresAt.Local().Format("02-01-2006 15:04:05"), gCount, lCount, html.EscapeString(lic.TokenSHA)),
 		ParseMode: "HTML",
@@ -272,7 +306,7 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 	if len(fields) < 3 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
-			Text:      "⚠️ Format: <code>/token revoke &lt;user_id|GOTD:...|GOTD_SHA:...&gt;</code>",
+			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token revoke &lt;user_id|GOTD:...|GOTD_SHA:...&gt;</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode: "HTML",
 		})
 		return
@@ -280,13 +314,13 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 	query := strings.TrimSpace(fields[2])
 	if strings.HasPrefix(query, "GOTD:") {
 		_ = h.db.RevokeTokenMaster(ctx, query)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("🚫 Voucher <code>%s</code> berhasil dicabut.", html.EscapeString(query)), ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>🚫 Voucher Dicabut</h1><table border="1"><tr><th>🔑 Token</th><td><code>%s</code></td></tr></table><hr/><p>GotdBot • Owner License Manager</p>`, html.EscapeString(query)), ParseMode: "HTML"})
 		return
 	}
 
 	lic, _ := h.lookupLicenseByQuery(ctx, query)
 	if lic == nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: "❌ Lisensi target tidak ditemukan.", ParseMode: "HTML"})
+		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ Lisensi Tidak Ditemukan</h1><blockquote expandable>Lisensi target yang ingin dicabut tidak ditemukan.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
 		return
 	}
 
@@ -303,14 +337,29 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 			_ = h.switchUserActiveToken(ctx, lic.OwnerChatID, nextBest)
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      fmt.Sprintf("🚫 Slot lisensi <code>%d</code> (<code>%s</code>) dicabut. User otomatis memakai slot aktif tersisa: <code>%s</code>.", lic.OwnerChatID, html.EscapeString(lic.TokenSHA), html.EscapeString(databases.NormalizeTier(nextBest.Tier))),
+			ChatID: chatID,
+			Text: fmt.Sprintf(`<h1>🚫 Slot Lisensi Dicabut</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Nilai</th></tr>
+  <tr><td>👤 Owner ID</td><td><code>%d</code></td></tr>
+  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+  <tr><td>🔄 Slot Fallback</td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, lic.OwnerChatID, html.EscapeString(lic.TokenSHA), html.EscapeString(databases.NormalizeTier(nextBest.Tier))),
 			ParseMode: "HTML",
 		})
 		if lic.OwnerChatID != 0 && lic.OwnerChatID != chatID {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:    lic.OwnerChatID,
-				Text:      fmt.Sprintf("⛔ <b>Slot lisensi <code>%s</code> telah dicabut oleh Owner.</b>\n🔄 Akun Anda dialihkan ke slot aktif lain: <b>%s</b>.", html.EscapeString(lic.Tier), html.EscapeString(databases.NormalizeTier(nextBest.Tier))),
+				ChatID: lic.OwnerChatID,
+				Text: fmt.Sprintf(`<h1>⛔ Slot Lisensi Dicabut Oleh Owner</h1>
+<table border="1">
+  <tr><th>❌ Slot Dicabut</th><td><code>%s</code></td></tr>
+  <tr><th>🔄 Beralih Ke</th><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Akun Anda otomatis dialihkan ke slot token aktif yang tersisa.</blockquote>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, html.EscapeString(lic.Tier), html.EscapeString(databases.NormalizeTier(nextBest.Tier))),
 				ParseMode: "HTML",
 			})
 		}
@@ -333,14 +382,20 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 		})
 	}
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:    chatID,
-		Text:      fmt.Sprintf("🚫 Lisensi <code>%d</code> (<code>%s</code>) berhasil dicabut dan sesi dihentikan.", lic.OwnerChatID, html.EscapeString(lic.TokenSHA)),
+		ChatID: chatID,
+		Text: fmt.Sprintf(`<h1>🚫 Lisensi &amp; Sesi Dihentikan</h1>
+<table border="1">
+  <tr><th>👤 Owner ID</th><td><code>%d</code></td></tr>
+  <tr><th>🔑 Token SHA</th><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>GotdBot • Owner License Manager</p>`, lic.OwnerChatID, html.EscapeString(lic.TokenSHA)),
 		ParseMode: "HTML",
 	})
 	if lic.OwnerChatID != 0 && lic.OwnerChatID != chatID {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      lic.OwnerChatID,
-			Text:        "⛔ <b>Lisensi userbot Anda telah dicabut oleh Owner.</b>\nHubungi Owner untuk informasi lebih lanjut.",
+			Text:        `<h1>⛔ Lisensi Userbot Dicabut Oleh Owner</h1><blockquote expandable>Seluruh lisensi aktif akun Anda telah dicabut dan sesi userbot dihentikan. Hubungi Owner untuk informasi lebih lanjut.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.RemoveKeyboard,
 		})

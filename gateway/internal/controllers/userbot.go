@@ -195,7 +195,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 					Text: fmt.Sprintf(`<h1>❌ Token SHA Kedaluwarsa</h1>
 <blockquote expandable>Masa aktif token lisensi ini telah habis pada <b>%s</b> dan tidak dapat digunakan kembali.</blockquote>
 <hr/>
-<p>Gunakan token voucher baru untuk mengaktifkan akun, lalu gunakan <b>⚙️ Settings → ♻️ Restore Data</b> dengan kode backup <code>GOTD_BKP:</code> jika Anda ingin memulihkan data list &amp; grup.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
+<p>Gunakan token voucher baru untuk mengaktifkan akun, lalu gunakan <b>⚙️ Settings ⚙️ → ♻️ Restore Data ♻️</b> dengan kode backup <code>GOTD_BKP:</code> jika Anda ingin memulihkan data list &amp; grup.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -204,7 +204,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			if !databases.GetTierPolicy(lic.Tier).AllowLicenseToken && lic.OwnerChatID != chatID {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        "🔒 <b>Token Free Tidak Dapat Dipindahkan ke Akun Lain</b>\n\nSilakan klaim paket 🆓 Free di akun baru lalu gunakan <b>⚙️ Settings → ♻️ Restore Data</b> memakai kode backup <code>GOTD_BKP:</code>.",
+					Text:        "<h1>🔒 Token Free Tidak Dapat Dipindahkan</h1><blockquote expandable>Token paket 🆓 Free terikat pada akun awal dan tidak bisa dipindahkan langsung. Silakan klaim paket Free di akun baru lalu gunakan <b>⚙️ Settings ⚙️ → ♻️ Restore Data ♻️</b> dengan kode backup <code>GOTD_BKP:</code>.</blockquote><hr/><p>GotdBot • License Protection</p>",
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -396,8 +396,8 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 					ChatID: chatID,
 					Text: `<h1>⚠️ Kontak Tidak Sesuai</h1>
 <blockquote expandable>Kontak yang Anda kirimkan bukan milik akun Telegram Anda sendiri.</blockquote>
-<hr/>
-<p>Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk membagikan nomor akun Anda.</p>`,
+					<hr/>
+					<p>Silakan tekan tombol <b>📱 Bagikan Kontak 📱</b> di bawah untuk membagikan nomor akun Anda.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.InstallPhoneMarkup,
 				})
@@ -412,7 +412,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				Text: `<h1>📱 Hubungkan Nomor Akun</h1>
 <blockquote expandable>Untuk melanjutkan proses otorisasi userbot, silakan bagikan nomor akun Telegram Anda.</blockquote>
 <hr/>
-<p>Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah, atau ketik nomor dalam format internasional (+62...).</p>`,
+<p>Silakan tekan tombol <b>📱 Bagikan Kontak 📱</b> di bawah, atau ketik nomor dalam format internasional (+62...).</p>`,
 				ParseMode:   "HTML",
 				ReplyMarkup: assets.InstallPhoneMarkup,
 			})

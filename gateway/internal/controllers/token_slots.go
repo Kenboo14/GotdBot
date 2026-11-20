@@ -185,14 +185,16 @@ func (h *Handler) ShowSwitchTokenMenu(ctx context.Context, b *botgotd.Bot, chatI
 	var sb strings.Builder
 	sb.WriteString("<h1>🔄 Kelola &amp; Ganti Slot Token</h1>\n")
 	if len(licenses) == 0 {
-		sb.WriteString("<blockquote expandable>Anda belum memiliki slot token aktif.\nKetuk <b>🔑 Tambah Token</b> di menu Settings untuk mengaktifkan atau menambah slot token baru.</blockquote>\n")
+		sb.WriteString("<blockquote expandable>Anda belum memiliki slot token aktif.\nKetuk <b>🔑 Tambah Token 🔑</b> di menu Settings untuk mengaktifkan atau menambah slot token baru.</blockquote>\n")
 	} else {
-		sb.WriteString("<blockquote expandable>Setiap token menyimpan konfigurasi tersendiri (List, Grup, Topic, Jeda, Timer, Watermark, Admin, dan Email).\nPilih salah satu slot di bawah untuk mengganti token yang aktif saat ini.</blockquote>\n<hr/>\n")
+		sb.WriteString("<blockquote expandable>Setiap token menyimpan konfigurasi tersendiri (List, Grup, Topic, Jeda, Timer, Watermark, Admin, dan Email). Pilih salah satu slot di bawah untuk mengganti token aktif saat ini.</blockquote>\n")
+		sb.WriteString("<table border=\"1\">\n")
+		sb.WriteString("  <tr><th>#</th><th>🎖️ Slot</th><th>📦 Data</th><th>⏳ Berlaku</th><th>📌 Status</th></tr>\n")
 		for idx, lic := range licenses {
 			isActive := activeLic != nil && activeLic.TokenSHA == lic.TokenSHA
 			statusTag := "Nonaktif"
 			if isActive {
-				statusTag = "<b>✅ AKTIF</b>"
+				statusTag = "✅ AKTIF"
 			}
 			var prof *databases.TokenProfile
 			if isActive {
@@ -207,12 +209,13 @@ func (h *Handler) ShowSwitchTokenMenu(ctx context.Context, b *botgotd.Bot, chatI
 				groupCount = len(prof.Groups)
 			}
 			key := shortTokenSwitchKey(lic.TokenSHA)
-			expStr := lic.ExpiresAt.Local().Format("02 Jan 2006 15:04")
-			fmt.Fprintf(&sb, "<b>#%d %s %s</b> · %s\n🔑 <code>...%s</code> · ⏳ %s\n📦 %d List · 👥 %d Grup\n\n",
-				idx+1, tierBadge(lic.Tier), html.EscapeString(databases.NormalizeTier(lic.Tier)), statusTag,
-				html.EscapeString(key), html.EscapeString(expStr), listCount, groupCount,
+			expStr := lic.ExpiresAt.Local().Format("02 Jan 06 15:04")
+			fmt.Fprintf(&sb, "  <tr><td><code>%d</code></td><td>%s <b>%s</b> (<code>...%s</code>)</td><td><code>%dL · %dG</code></td><td><code>%s</code></td><td><b>%s</b></td></tr>\n",
+				idx+1, tierBadge(lic.Tier), html.EscapeString(databases.NormalizeTier(lic.Tier)),
+				html.EscapeString(key), listCount, groupCount, html.EscapeString(expStr), statusTag,
 			)
 		}
+		sb.WriteString("</table>\n")
 		for idx, lic := range licenses {
 			isActive := activeLic != nil && activeLic.TokenSHA == lic.TokenSHA
 			key := shortTokenSwitchKey(lic.TokenSHA)
@@ -228,7 +231,8 @@ func (h *Handler) ShowSwitchTokenMenu(ctx context.Context, b *botgotd.Bot, chatI
 			sb.WriteString("</tg-button-row>\n")
 		}
 	}
-	sb.WriteString("<hr/>\n<p>Ketuk <b>🔑 Tambah Token</b> untuk menambah slot baru atau <b>📎 Backup Data</b> untuk salin data antar-slot.</p>")
+	sb.WriteString("<tg-button-row>\n  <tg-button type=\"callback_data\" data=\"panel:token:menu\">🔄 Refresh</tg-button>\n  <tg-button type=\"callback_data\" data=\"panel:settings:home\">◀️ Kembali</tg-button>\n</tg-button-row>\n")
+	sb.WriteString("<hr/>\n<p>GotdBot • Multi-Slot Token Manager</p>")
 
 	msgText := sb.String()
 	if len(editMsgID) > 0 && editMsgID[0] > 0 {

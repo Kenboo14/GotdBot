@@ -296,22 +296,53 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	ramAllocMB, ramSysMB := m.Alloc/1024/1024, m.Sys/1024/1024
 	goroutines := runtime.NumGoroutine()
 
-	simulasiLine := ""
+	var simSection strings.Builder
 	if sim.Status == "RUNNING" {
 		ramAllocMB += sim.RAMAllocMB
 		ramSysMB += sim.RAMSysMB
 		goroutines += sim.Goroutines
-		simulasiLine = fmt.Sprintf("\n\n🧪 <b>Virtual Userbot Simulation:</b>\n• Status: 🟢 <b>RUNNING</b>\n• Target Users: <b>%d</b> | Active Users: <b>%d</b>\n• Generated Updates: <b>%d</b>\n• Processed Updates: <b>%d</b>\n• Failed Updates: <b>%d</b> | Pending Queue: <b>%d</b>\n• Throughput: <b>%.1f updates/sec</b>\n• Latency: P50: <code>%.2f ms</code> | P95: <code>%.2f ms</code> | P99: <code>%.2f ms</code>\n• Simulation Goroutines: <b>%d</b>",
-			sim.TargetUsers, sim.ActiveUsers, sim.GeneratedUpdates, sim.ProcessedUpdates,
-			sim.FailedUpdates, sim.PendingQueue, sim.ThroughputSec,
+		fmt.Fprintf(&simSection, `
+<table border="1">
+  <tr><th>🧪 Simulasi Beban</th><th>📊 Metrik</th></tr>
+  <tr><td>Status / Users</td><td>🟢 <b>RUNNING</b> (<code>%d / %d</code>)</td></tr>
+  <tr><td>Updates (Gen / Proc / Fail)</td><td><code>%d / %d / %d</code></td></tr>
+  <tr><td>Queue / Throughput</td><td><code>%d queue · %.1f/detik</code></td></tr>
+  <tr><td>Latency (P50 / P95 / P99)</td><td><code>%.2f / %.2f / %.2f ms</code></td></tr>
+  <tr><td>Simulation Goroutines</td><td><code>%d</code></td></tr>
+</table>`,
+			sim.ActiveUsers, sim.TargetUsers,
+			sim.GeneratedUpdates, sim.ProcessedUpdates, sim.FailedUpdates,
+			sim.PendingQueue, sim.ThroughputSec,
 			sim.LatencyP50Ms, sim.LatencyP95Ms, sim.LatencyP99Ms, sim.Goroutines,
 		)
 	}
 
-	return fmt.Sprintf("📊 <b>[GOTDBOT TELEMETRY LIVE]</b>\n🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s\n────────────────────────\n👥 <b>MTProto Session Pool:</b>\n• 🟢 Online (Connected)  : <b>%d</b> akun\n• 🟡 Menghubungkan      : <b>%d</b> akun\n• 🟠 Reconnecting       : <b>%d</b> akun\n• 🔴 Revoked / Invalid  : <b>%d</b> akun%s\n\n⚙️ <b>Kesehatan Mesin & Runtime:</b>\n• ⚡ CPU All Image     : <b>%.2f%%</b>\n• ♾️ RAM All Image     : <b>%.2f MiB</b>\n• 🧠 RAM Alloc / Sys    : <b>%d MiB</b> / %d MiB\n• 💻 Concurrency        : <b>%d Goroutines</b>\n• 🚀 Redis Broker Pool  : <b>16 Workers</b> (PEL Auto-Recovery)\n• 🛡️ GC Tuning          : GOMEMLIMIT=1100MiB | GOGC=50\n────────────────────────\nStatus: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>",
-		time.Now().Format("15:04:05 WIB"), time.Since(t.bootTime).Truncate(time.Second).String(),
-		connected, connecting, reconnecting, revoked, simulasiLine,
+	return fmt.Sprintf(`<h1>📊 GOTDBOT TELEMETRY LIVE</h1>
+<table border="1">
+  <tr><th>👥 MTProto Session Pool</th><th>Jumlah</th></tr>
+  <tr><td>🟢 Online (Connected)</td><td><code>%d akun</code></td></tr>
+  <tr><td>🟡 Menghubungkan</td><td><code>%d akun</code></td></tr>
+  <tr><td>🟠 Reconnecting</td><td><code>%d akun</code></td></tr>
+  <tr><td>🔴 Revoked / Invalid</td><td><code>%d akun</code></td></tr>
+</table>
+<table border="1">
+  <tr><th>⚙️ Kesehatan Mesin &amp; Runtime</th><th>Nilai</th></tr>
+  <tr><td>⚡ CPU All Image</td><td><code>%.2f%%</code></td></tr>
+  <tr><td>♾️ RAM All Image</td><td><code>%.2f MiB</code></td></tr>
+  <tr><td>🧠 RAM Alloc / Sys</td><td><code>%d / %d MiB</code></td></tr>
+  <tr><td>💻 Concurrency</td><td><code>%d Goroutines</code></td></tr>
+  <tr><td>🚀 Redis Broker Pool</td><td><code>16 Workers (PEL Auto-Recovery)</code></td></tr>
+  <tr><td>🛡️ GC Tuning</td><td><code>GOMEMLIMIT=1100MiB | GOGC=50</code></td></tr>
+  <tr><td>⏳ Uptime</td><td><code>%s</code></td></tr>
+</table>%s
+<blockquote expandable>🟢 <b>ALL SYSTEMS OPERATIONAL</b> · 🕒 %s</blockquote>
+<hr/>
+<p>GotdBot • Live Telemetry Monitor</p>`,
+		connected, connecting, reconnecting, revoked,
 		cpuAll, ramAll, ramAllocMB, ramSysMB, goroutines,
+		time.Since(t.bootTime).Truncate(time.Second).String(),
+		simSection.String(),
+		time.Now().Format("15:04:05 WIB"),
 	)
 }
 
@@ -366,10 +397,10 @@ drain:
 	}
 
 	var sb strings.Builder
-	sb.WriteString("🚨 <b>[GotdBot Alert Digest]</b>\n────────────────────────\n")
+	sb.WriteString("<h1>🚨 GotdBot Alert Digest</h1>\n<table border=\"1\">\n  <tr><th>🕒 Waktu</th><th>👤 Akun</th><th>📌 Kejadian</th></tr>\n")
 	omitted := 0
 	for i, entry := range collapsed {
-		if i >= 20 || sb.Len() > 3500 {
+		if i >= 15 || sb.Len() > 3300 {
 			omitted = len(collapsed) - i
 			break
 		}
@@ -388,11 +419,13 @@ drain:
 		if entry.count > 1 {
 			suffix = fmt.Sprintf(" (x%d)", entry.count)
 		}
-		sb.WriteString(fmt.Sprintf("• %s <code>[%s]</code> Akun <code>%d</code>: %s%s\n",
-			icon, alert.Timestamp.Format("15:04:05"), alert.ChatID, html.EscapeString(truncateUTF8(alert.Reason, 160)), suffix))
+		sb.WriteString(fmt.Sprintf("  <tr><td><code>%s</code></td><td><code>%d</code></td><td>%s %s%s</td></tr>\n",
+			alert.Timestamp.Format("15:04:05"), alert.ChatID, icon, html.EscapeString(truncateUTF8(alert.Reason, 160)), suffix))
 	}
+	sb.WriteString("</table>\n")
 	if omitted > 0 {
-		sb.WriteString(fmt.Sprintf("<i>… dan +%d akun lainnya diringkas</i>\n", omitted))
+		sb.WriteString(fmt.Sprintf("<blockquote expandable>… dan <b>+%d akun</b> lainnya diringkas.</blockquote>\n", omitted))
 	}
+	sb.WriteString("<hr/>\n<p>GotdBot • Alert Monitor</p>")
 	globalDevMonitor.EnqueueAlertDigest(sb.String())
 }

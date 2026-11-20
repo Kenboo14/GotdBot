@@ -16,21 +16,23 @@ func (h *Handler) PromptAturJeda(ctx context.Context, b *botgotd.Bot, chatID, us
 	cfg := h.db.GetUserConfig(ctx, userID)
 	gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
 
-	text := fmt.Sprintf(`⏳ <b>Atur jeda</b>
-
-Belum yakin? Pilih <b>Jeda Aman</b>.
-• <b>Jeda Aman:</b> bot mengatur jarak antar-grup (200–400 detik). Paling aman untuk akun.
-• <b>Jeda Otomatis:</b> bot menghitung dari jumlah grup Anda.
-• <b>Jeda Per Grup:</b> jarak antar-grup (5–300 detik). Contoh 30 detik: Grup A, tunggu 30 detik, Grup B. Cocok untuk 50 grup ke atas.
-• <b>Jeda Per Semua Grup:</b> jarak antar-putaran (2–120 menit, atau 4/6 jam). Contoh 20 menit: kirim ke semua grup, tunggu 20 menit, ulang. Cocok di bawah 30 grup.
-• <b>Skip FloodWait:</b> lewati grup bila Telegram meminta tunggu melebihi batas (10–3600 detik). Mati = selalu menunggu.
-
-Jeda Per Grup dan Jeda Per Semua Grup bisa menyala bersamaan. Masing-masing bisa dimatikan lewat 🔕 <b>Matikan</b>; keduanya mati berarti tanpa jeda. Berlaku juga untuk set Expert Extra.
-
-<blockquote>⚠️ Bila userbot aktif 24 jam, pakai minimal 30 detik untuk Jeda Per Grup atau 20 menit untuk Jeda Per Semua Grup. Jeda terlalu kecil bisa membuat akun diblokir.</blockquote>
-
-🕒 <b>Jeda sekarang:</b> %s
-⏭️ <b>Skip FloodWait:</b> %s`,
+	text := fmt.Sprintf(`<h1>⏳ Atur Jeda Siaran</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai Aktif</th></tr>
+  <tr><td>🕒 Jeda Sekarang</td><td><code>%s</code></td></tr>
+  <tr><td>⏭️ Skip FloodWait</td><td><code>%s</code></td></tr>
+</table>
+<table border="1">
+  <tr><th>🔘 Opsi Jeda</th><th>📘 Fungsi</th></tr>
+  <tr><td>🎁 Jeda Aman 🎁</td><td>Jarak antar-grup 200–400 detik (paling aman)</td></tr>
+  <tr><td>💡 Jeda Otomatis 💡</td><td>Menyesuaikan jeda dari jumlah grup Anda</td></tr>
+  <tr><td>🔗 Jeda Per Grup 🔗</td><td>Jeda 5–300 detik antar-grup (cocok &gt; 50 grup)</td></tr>
+  <tr><td>🖇️ Jeda Per Semua Grup 🖇️</td><td>Jeda 2–120m atau 4/6 jam antar-putaran (&lt; 30 grup)</td></tr>
+  <tr><td>⏭️ Skip FloodWait ⏭️</td><td>Lewati grup jika FloodWait melewati batas pilihan</td></tr>
+</table>
+<blockquote expandable>⚠️ Jeda Per Grup dan Jeda Per Semua Grup bisa menyala bersamaan; masing-masing dimatikan lewat <b>🔕 Matikan 🔕</b>. Bila userbot aktif 24 jam, pakai minimal 30 detik (per grup) atau 20 menit (per putaran). Berlaku juga untuk set Expert Extra.</blockquote>
+<hr/>
+<p>GotdBot • Delay &amp; Anti-Flood Manager</p>`,
 		html.EscapeString(cfg.FormatJedaSummary(gCount)),
 		html.EscapeString(cfg.FormatSkipFloodWait()),
 	)
@@ -76,15 +78,15 @@ func (h *Handler) PromptJedaPerGrup(ctx context.Context, b *botgotd.Bot, chatID,
 	cfg := h.db.GetUserConfig(ctx, userID)
 	gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
 
-	text := fmt.Sprintf(`⏰ <b>Pilih jeda per grup (detik)</b>
-
-Ini jarak antar-grup, bukan jarak sesudah semua grup. Contoh 30 detik: Grup A, tunggu 30 detik, Grup B.
-Tekan 🔕 <b>Matikan</b> untuk mematikan jeda per grup; jeda per semua grup tidak berubah.
-
-<blockquote>ℹ️ Pakai 30 detik ke atas bila userbot aktif 24 jam.</blockquote>
-
-🕒 <b>Jeda sekarang:</b> %s
-Pilih tombol (5–300 detik) atau ketik angka 5–300.`, html.EscapeString(cfg.FormatJedaSummary(gCount)))
+	text := fmt.Sprintf(`<h1>🔗 Pilih Jeda Per Grup (Detik)</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
+  <tr><td>🕒 Jeda Sekarang</td><td><code>%s</code></td></tr>
+  <tr><td>📏 Rentang Valid</td><td><code>5–300 detik</code></td></tr>
+</table>
+<blockquote expandable>Ini jarak antar-grup, bukan jarak sesudah semua grup. Tekan <b>🔕 Matikan 🔕</b> untuk mematikan jeda per grup tanpa mengubah jeda per semua grup. Pakai 30 detik ke atas bila userbot aktif 24 jam.</blockquote>
+<hr/>
+<p>GotdBot • Delay &amp; Anti-Flood Manager</p>`, html.EscapeString(cfg.FormatJedaSummary(gCount)))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -103,15 +105,15 @@ func (h *Handler) PromptJedaPerSemuaGrup(ctx context.Context, b *botgotd.Bot, ch
 	cfg := h.db.GetUserConfig(ctx, userID)
 	gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
 
-	text := fmt.Sprintf(`⏰ <b>Pilih jeda per semua grup (menit)</b>
-
-Ini jarak sesudah semua grup terkirim, bukan antar-grup. Contoh 20 menit: kirim ke semua grup, tunggu 20 menit, ulang.
-Tekan 🔕 <b>Matikan</b> untuk mematikan jeda per semua grup; jeda per grup tidak berubah.
-
-<blockquote>ℹ️ Pakai 20 menit ke atas bila userbot aktif 24 jam.</blockquote>
-
-🕒 <b>Jeda sekarang:</b> %s
-Pilih tombol (2–120 menit, atau 240/360 menit) atau ketik angka.`, html.EscapeString(cfg.FormatJedaSummary(gCount)))
+	text := fmt.Sprintf(`<h1>🖇️ Pilih Jeda Per Semua Grup (Menit)</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
+  <tr><td>🕒 Jeda Sekarang</td><td><code>%s</code></td></tr>
+  <tr><td>📏 Pilihan Valid</td><td><code>2–120 menit, 240 (4j), 360 (6j)</code></td></tr>
+</table>
+<blockquote expandable>Ini jarak sesudah semua grup terkirim (antar-putaran). Tekan <b>🔕 Matikan 🔕</b> untuk mematikan jeda putaran tanpa mengubah jeda per grup. Pakai 20 menit ke atas bila userbot aktif 24 jam.</blockquote>
+<hr/>
+<p>GotdBot • Delay &amp; Anti-Flood Manager</p>`, html.EscapeString(cfg.FormatJedaSummary(gCount)))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -129,13 +131,15 @@ func (h *Handler) PromptSkipFloodWait(ctx context.Context, b *botgotd.Bot, chatI
 	h.setPanelState(chatID, "waiting_skip_floodwait")
 	cfg := h.db.GetUserConfig(ctx, userID)
 
-	text := fmt.Sprintf(`⏭️ <b>Atur Skip FloodWait (detik)</b>
-
-Bila Telegram meminta akun menunggu (FloodWait) lebih lama dari batas pilihan Anda, grup itu dilewati dan siaran lanjut ke grup berikutnya. Berlaku juga untuk set Expert Extra; 🔕 <b>Matikan</b> = selalu menunggu.
-
-<blockquote>ℹ️ Pilih 30 detik–10 menit lewat tombol di bawah, atau ketik langsung angka <b>10–3600</b> detik.</blockquote>
-
-⏭️ <b>Skip FloodWait saat ini:</b> %s`, html.EscapeString(cfg.FormatSkipFloodWait()))
+	text := fmt.Sprintf(`<h1>⏭️ Atur Skip FloodWait (Detik)</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
+  <tr><td>⏭️ Status Saat Ini</td><td><code>%s</code></td></tr>
+  <tr><td>📏 Rentang Custom</td><td><code>10–3600 detik</code></td></tr>
+</table>
+<blockquote expandable>Bila Telegram meminta akun menunggu (FloodWait) lebih lama dari batas pilihan Anda, grup itu dilewati dan siaran lanjut ke grup berikutnya. Berlaku juga untuk set Expert Extra; tekan <b>🔕 Matikan 🔕</b> = selalu menunggu.</blockquote>
+<hr/>
+<p>GotdBot • Delay &amp; Anti-Flood Manager</p>`, html.EscapeString(cfg.FormatSkipFloodWait()))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -147,11 +151,15 @@ Bila Telegram meminta akun menunggu (FloodWait) lebih lama dari batas pilihan An
 
 func (h *Handler) sendJedaSaved(ctx context.Context, b *botgotd.Bot, chatID, userID int64, cfg *databases.JasebConfig) {
 	gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
-	text := fmt.Sprintf(`✅ <b>Jeda tersimpan</b>
-🕒 <b>Jeda sekarang:</b> %s
-
-🏠 <b>Menu utama</b>
-Pilih lewat tombol di bawah.`, html.EscapeString(cfg.FormatJedaSummary(gCount)))
+	text := fmt.Sprintf(`<h1>✅ Jeda Tersimpan</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai Aktif</th></tr>
+  <tr><td>🕒 Jeda Sekarang</td><td><code>%s</code></td></tr>
+  <tr><td>⏭️ Skip FloodWait</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Konfigurasi jeda berhasil diperbarui dan siap digunakan oleh worker userbot.</blockquote>
+<hr/>
+<p>GotdBot • Delay &amp; Anti-Flood Manager</p>`, html.EscapeString(cfg.FormatJedaSummary(gCount)), html.EscapeString(cfg.FormatSkipFloodWait()))
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,
@@ -195,7 +203,7 @@ func (h *Handler) handleJedaTimerPanelInput(ctx context.Context, b *botgotd.Bot,
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ Silakan pilih salah satu opsi jeda pada tombol di bawah.",
+			Text:        `<h1>⚠️ Pilihan Jeda Belum Valid</h1><blockquote expandable>Silakan pilih salah satu opsi jeda menggunakan tombol keyboard di bawah ini.</blockquote><hr/><p>GotdBot • Delay &amp; Anti-Flood Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.AturJedaMarkup,
 		})
@@ -220,7 +228,7 @@ func (h *Handler) handleJedaTimerPanelInput(ctx context.Context, b *botgotd.Bot,
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ Nilai tidak valid. Masukkan angka <b>5–300</b> detik atau tekan 🔕 <b>Matikan</b>.",
+			Text:        `<h1>⚠️ Nilai Jeda Tidak Valid</h1><blockquote expandable>Masukkan angka <b>5–300</b> detik atau tekan <b>🔕 Matikan 🔕</b>.</blockquote><hr/><p>GotdBot • Delay &amp; Anti-Flood Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.JedaPerGrupMarkup,
 		})
@@ -245,7 +253,7 @@ func (h *Handler) handleJedaTimerPanelInput(ctx context.Context, b *botgotd.Bot,
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ Nilai tidak valid. Pilih <b>2–120</b> menit, <b>240</b> (4 jam), <b>360</b> (6 jam), atau tekan 🔕 <b>Matikan</b>.",
+			Text:        `<h1>⚠️ Nilai Jeda Putaran Tidak Valid</h1><blockquote expandable>Pilih <b>2–120</b> menit, <b>240</b> (4 jam), <b>360</b> (6 jam), atau tekan <b>🔕 Matikan 🔕</b>.</blockquote><hr/><p>GotdBot • Delay &amp; Anti-Flood Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.JedaPerSemuaGrupMarkup,
 		})
@@ -266,7 +274,14 @@ func (h *Handler) handleJedaTimerPanelInput(ctx context.Context, b *botgotd.Bot,
 				cfg.SkipFloodWaitSec = sec
 			}
 			_ = h.db.SaveUserConfig(ctx, cfg)
-			msg := fmt.Sprintf("✅ <b>Skip FloodWait tersimpan</b>\n⏭️ <b>Status:</b> <code>%s</code>", html.EscapeString(cfg.FormatSkipFloodWait()))
+			msg := fmt.Sprintf(`<h1>✅ Skip FloodWait Tersimpan</h1>
+<table border="1">
+  <tr><th>📌 Parameter</th><th>Nilai Aktif</th></tr>
+  <tr><td>⏭️ Status</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>Pengaturan batas FloodWait berhasil diperbarui dan berlaku untuk broadcast utama maupun Expert Extra.</blockquote>
+<hr/>
+<p>GotdBot • Delay &amp; Anti-Flood Manager</p>`, html.EscapeString(cfg.FormatSkipFloodWait()))
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
 				Text:        msg,
@@ -281,7 +296,7 @@ func (h *Handler) handleJedaTimerPanelInput(ctx context.Context, b *botgotd.Bot,
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ Batas tidak valid. Pilih tombol preset atau ketik angka <b>10–3600</b> detik, atau tekan 🔕 <b>Matikan</b>.",
+			Text:        `<h1>⚠️ Batas FloodWait Tidak Valid</h1><blockquote expandable>Pilih tombol preset atau ketik angka <b>10–3600</b> detik, atau tekan <b>🔕 Matikan 🔕</b>.</blockquote><hr/><p>GotdBot • Delay &amp; Anti-Flood Manager</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.SkipFloodWaitMarkup,
 		})
@@ -302,9 +317,11 @@ func isDisableCommand(raw string) bool {
 		return true
 	}
 	clean := strings.TrimSpace(raw)
-	clean = strings.TrimPrefix(clean, "🔕 ")
-	clean = strings.TrimPrefix(clean, "⏱️ ")
-	lower := strings.ToLower(strings.TrimSpace(clean))
+	for _, em := range []string{"🔕", "⏱️"} {
+		clean = strings.TrimSpace(strings.TrimPrefix(clean, em))
+		clean = strings.TrimSpace(strings.TrimSuffix(clean, em))
+	}
+	lower := strings.ToLower(clean)
 	return lower == "matikan" || lower == "mati" || lower == "off" || lower == "0" || lower == "nonaktifkan timer" || lower == "nonaktifkan"
 }
 
@@ -351,7 +368,11 @@ func parseSkipFloodWaitInput(raw string) (int, bool, bool) {
 	if isDisableCommand(raw) {
 		return 0, true, true
 	}
-	clean := strings.TrimSpace(strings.TrimPrefix(raw, "⏱️ "))
+	clean := strings.TrimSpace(raw)
+	for _, em := range []string{"⏱️", "⏰"} {
+		clean = strings.TrimSpace(strings.TrimPrefix(clean, em))
+		clean = strings.TrimSpace(strings.TrimSuffix(clean, em))
+	}
 	lower := strings.ToLower(clean)
 	for _, suf := range []string{"menit", "mnt", "m"} {
 		if strings.HasSuffix(lower, suf) {

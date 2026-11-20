@@ -24,7 +24,6 @@ func TxtMainMenu(userID int64, userName string) string {
 	)
 }
 
-// TxtStartGreeting returns the initial /start greeting with choice table.
 func TxtStartGreeting(userName string) string {
 	if userName == "" {
 		userName = "User"
@@ -34,10 +33,10 @@ func TxtStartGreeting(userName string) string {
 Sistem otomatisasi siaran promosi dan manajemen akun userbot Telegram MTProto berkecepatan tinggi.</blockquote>
 <table border="1">
   <tr><th>Opsi Pemasangan</th><th>Keterangan</th></tr>
-  <tr><td>🔑 Input Token</td><td>Klaim Voucher Master atau Restore Token</td></tr>
-  <tr><td>🚀 Buat Userbot</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
-  <tr><td>⚠️ Bantuan</td><td>Panduan lengkap penggunaan bot</td></tr>
-  <tr><td>🎯 Control</td><td>Menu utama kontrol panel userbot</td></tr>
+  <tr><td>🔑 Input Token 🔑</td><td>Klaim Voucher Master atau Restore Token</td></tr>
+  <tr><td>🚀 Buat Userbot 🚀</td><td>Sambungkan ulang lisensi aktif Anda</td></tr>
+  <tr><td>⚠️ Bantuan ⚠️</td><td>Panduan lengkap penggunaan bot</td></tr>
+  <tr><td>🎯 Control 🎯</td><td>Menu utama kontrol panel userbot</td></tr>
 </table>
 <hr/>
 <p>Silakan pilih opsi pada tombol keyboard di bawah:</p>`, html.EscapeString(userName))
@@ -48,19 +47,18 @@ const TxtPemasanganSedangBerjalan = `<h1>⏳ Pemasangan Sedang Berjalan</h1>
 <hr/>
 <p>Silakan lanjutkan proses atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
-// TxtPilihanTidakDikenali is shown when user sends unexpected text.
 const TxtPilihanTidakDikenali = `<h1>⚠️ Pilihan Tidak Dikenali</h1>` +
 	`<blockquote expandable>Silakan gunakan salah satu tombol keyboard di bawah untuk memilih opsi yang tersedia.</blockquote>` +
-	`<p>Pilih tombol yang tersedia.</p>`
+	`<hr/><p>GotdBot • Control Panel</p>`
 
-// TxtBantuan is the help / guide text.
 const TxtBantuan = `<h1>⚠️ Panduan &amp; Bantuan Penggunaan</h1>
+<blockquote expandable>Panduan ringkas menu utama kendali userbot GotdBot.</blockquote>
 <table border="1">
   <tr><th>🔘 Tombol</th><th>📘 Fungsi</th></tr>
-  <tr><td>💎 Status</td><td>Melihat ringkasan lengkap data dan konfigurasi</td></tr>
-  <tr><td>🧩 Grup &amp; List</td><td>Mengatur materi teks promosi &amp; target grup</td></tr>
-  <tr><td>⌛ Atur Jeda</td><td>Mengubah interval jeda pengiriman antar grup</td></tr>
-  <tr><td>⚠️ Safemode</td><td>Melindungi akun dari risiko limitasi Telegram</td></tr>
+  <tr><td>💎 Status 💎</td><td>Melihat ringkasan lengkap data dan konfigurasi</td></tr>
+  <tr><td>🧩 Grup &amp; List 🧩</td><td>Mengatur materi teks promosi &amp; target grup</td></tr>
+  <tr><td>⌛ Atur Jeda ⌛</td><td>Mengubah interval jeda pengiriman antar grup</td></tr>
+  <tr><td>⚠️ Safemode ⚠️</td><td>Melindungi akun dari risiko limitasi Telegram</td></tr>
 </table>
 <hr/>
 <p>GotdBot • Multi-Configuration VPS Control Panel</p>`
@@ -104,50 +102,53 @@ const TxtPromptTambahGrupManual = `<h1>📝 Tambah Grup Manual</h1>` +
 
 // ─── Remote Control (ctrl:*) ──────────────────────────────────────────────────
 
-// TxtControlAccountList returns the account selector heading.
 func TxtControlAccountList(count int) string {
 	return fmt.Sprintf(
 		`<h1>🖥️ Panel Kontrol Akun</h1>`+
-			`<hr/><b>🧑 Anda memiliki %d akses akun</b>`+
-			`<br/><i>📋 Silakan pilih akun userbot yang ingin Anda kontrol di bawah:</i>`+
-			`<br/><blockquote expandable>💡 Tips: Untuk mengubah teks / grup secara optimal, pastikan userbot dalam posisi Status Nonaktif.</blockquote>`,
+			`<table border="1"><tr><th>📌 Akses Tersedia</th><td><code>%d akun</code></td></tr></table>`+
+			`<blockquote expandable>📋 Silakan pilih akun userbot yang ingin Anda kontrol melalui tombol di bawah.<br/>💡 Tips: Untuk mengubah list atau grup secara optimal, pastikan status siaran dalam posisi Berhenti.</blockquote>`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
 		count,
 	)
 }
 
-// TxtControlAccountListEmpty is shown when the user has 0 accessible accounts.
 func TxtControlAccountListEmpty(userID int64) string {
 	return fmt.Sprintf(
 		`<h1>🖥️ Panel Kontrol Akun</h1>`+
-			`<hr/><b>👤 Anda memiliki 0 akses</b><br/>`+
-			`Anda belum memiliki akses untuk mengontrol akun userbot manapun.<br/><br/>`+
-			`<blockquote>User ID Anda: <code>%d</code></blockquote><br/>`+
-			`Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemilik userbot lain menambahkan User ID Anda sebagai <b>ADMIN</b> di menu Pengaturan Admin.`,
+			`<table border="1"><tr><th>👤 User ID Anda</th><td><code>%d</code></td></tr><tr><th>📌 Akses Akun</th><td><code>0 akun</code></td></tr></table>`+
+			`<blockquote expandable>Anda belum memiliki akses untuk mengontrol akun userbot manapun. Pastikan Anda telah memasang userbot sendiri via <b>/start</b>, atau minta pemilik userbot menambahkan User ID Anda sebagai <b>ADMIN</b> di menu Status → Admin.</blockquote>`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
 		userID,
 	)
 }
 
-// TxtControlAdminMenu returns the remote admin menu heading.
 func TxtControlAdminMenu(targetName string, targetID int64, adminName string) string {
 	return fmt.Sprintf(
 		`<h1>🎛️ Menu Admin Remote</h1>`+
-			`<blockquote expandable>👑 <b>Admin:</b> %s`+
-			`<br/>🎯 <b>Target:</b> %s (<code>%d</code>)</blockquote>`+
-			`<p>Pilih aksi yang ingin Anda lakukan pada akun userbot di atas:</p>`,
+			`<table border="1">`+
+			`<tr><th>📌 Properti</th><th>Nilai</th></tr>`+
+			`<tr><td>👑 Admin</td><td>%s</td></tr>`+
+			`<tr><td>🎯 Target Akun</td><td>%s (<code>%d</code>)</td></tr>`+
+			`</table>`+
+			`<blockquote expandable>Pilih menu aksi di bawah untuk mengelola konfigurasi, list, grup, dan jeda akun userbot target secara remote.</blockquote>`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
 		html.EscapeString(adminName),
 		html.EscapeString(targetName),
 		targetID,
 	)
 }
 
-// TxtControlGrupList returns the remote group and list menu body.
 func TxtControlGrupList(targetName string, targetID int64, lCount, gCount int) string {
 	return fmt.Sprintf(
 		`<h1>🔮 Grup &amp; List (Remote)</h1>`+
-			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
-			`<br/><b>📚 Total List Promosi:</b> <code>%d materi</code>`+
-			`<br/><b>🌐 Total Target Grup:</b> <code>%d grup</code>`+
-			`<br/><blockquote expandable>💡 Gunakan tombol di bawah untuk melihat, menambah, atau mereset list &amp; grup akun ini secara remote.</blockquote>`,
+			`<table border="1">`+
+			`<tr><th>📌 Parameter</th><th>Nilai</th></tr>`+
+			`<tr><td>👑 Akun Target</td><td>%s (<code>%d</code>)</td></tr>`+
+			`<tr><td>📚 Total List Promosi</td><td><code>%d materi</code></td></tr>`+
+			`<tr><td>🌐 Total Target Grup</td><td><code>%d grup</code></td></tr>`+
+			`</table>`+
+			`<blockquote expandable>💡 Gunakan tombol di bawah untuk melihat, menambah, atau mereset list &amp; grup akun ini secara remote.</blockquote>`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
 		html.EscapeString(targetName), targetID, lCount, gCount,
 	)
 }
@@ -278,9 +279,13 @@ func TxtControlHapusGrupDone(targetName string, targetID int64) string {
 func TxtControlJeda(targetName string, targetID int64, currentSummary string) string {
 	return fmt.Sprintf(
 		`<h1>⏱️ Atur Jeda Siaran (Remote)</h1>`+
-			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
-			`<blockquote expandable>⏱️ <b>Jeda saat ini:</b> <code>%s</code></blockquote>`+
-			`<p>Pilih mode atau durasi jeda antar pesan siaran:</p>`,
+			`<table border="1">`+
+			`<tr><th>Parameter</th><th>Nilai</th></tr>`+
+			`<tr><td>👑 Akun Target</td><td>%s (<code>%d</code>)</td></tr>`+
+			`<tr><td>⏱️ Jeda Saat Ini</td><td><code>%s</code></td></tr>`+
+			`</table>`+
+			`<blockquote expandable>Pilih mode atau durasi jeda antar pesan siaran di bawah ini.</blockquote>`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
 		html.EscapeString(targetName), targetID, html.EscapeString(currentSummary),
 	)
 }
@@ -296,13 +301,18 @@ func TxtControlCekList(targetName string, targetID int64, page, totalPages, tota
 		for _, it := range items {
 			body += it + "\n"
 		}
-		body += fmt.Sprintf(`<i>Halaman %d / %d — Total %d materi</i></blockquote>`, page+1, totalPages, totalItems)
+		body += `</blockquote>`
 	}
 	return fmt.Sprintf(
 		`<h1>📋 Cek List Promosi (Remote)</h1>`+
-			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
-			body,
-		html.EscapeString(targetName), targetID,
+			`<table border="1">`+
+			`<tr><th>Parameter</th><th>Nilai</th></tr>`+
+			`<tr><td>👑 Akun Target</td><td>%s (<code>%d</code>)</td></tr>`+
+			`<tr><td>📄 Halaman</td><td><code>%d / %d</code> (Total <b>%d</b> materi)</td></tr>`+
+			`</table>`+
+			`%s`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
+		html.EscapeString(targetName), targetID, page+1, totalPages, totalItems, body,
 	)
 }
 
@@ -316,13 +326,18 @@ func TxtControlCekGrup(targetName string, targetID int64, page, totalPages, tota
 		for _, it := range items {
 			body += it + "\n"
 		}
-		body += fmt.Sprintf(`<i>Halaman %d / %d — Total %d grup</i></blockquote>`, page+1, totalPages, totalItems)
+		body += `</blockquote>`
 	}
 	return fmt.Sprintf(
 		`<h1>📚 Cek Grup Target (Remote)</h1>`+
-			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
-			body,
-		html.EscapeString(targetName), targetID,
+			`<table border="1">`+
+			`<tr><th>Parameter</th><th>Nilai</th></tr>`+
+			`<tr><td>👑 Akun Target</td><td>%s (<code>%d</code>)</td></tr>`+
+			`<tr><td>📄 Halaman</td><td><code>%d / %d</code> (Total <b>%d</b> grup)</td></tr>`+
+			`</table>`+
+			`%s`+
+			`<hr/><p>GotdBot • Remote Control</p>`,
+		html.EscapeString(targetName), targetID, page+1, totalPages, totalItems, body,
 	)
 }
 
@@ -359,7 +374,7 @@ func TxtTokenDetected(tier, sisaDur string) string {
 			`<tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>`+
 			`<tr><td>⏳ Masa Aktif</td><td><code>Sisa %s</code></td></tr>`+
 			`</table>`+
-			`<hr/><p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`,
+			`<hr/><p>📱 Silakan tekan tombol <b>📱 Bagikan Kontak 📱</b> di bawah untuk menghubungkan akun Telegram Anda:</p>`,
 		tier, tier, sisaDur,
 	)
 }
@@ -378,4 +393,6 @@ const TxtResetKonfigurasiSukses = `<h1>🔄 Konfigurasi Berhasil Direset</h1>` +
 	`<blockquote expandable>Seluruh parameter pengaturan bot telah dipulihkan ke setelan default pabrik.</blockquote>` +
 	`<hr/><p>GotdBot • Reset Data Manager</p>`
 
-const TxtTindakanDibatalkan = `<p>↩️ <b>Tindakan dibatalkan.</b></p>`
+const TxtTindakanDibatalkan = `<h1>↩️ Tindakan Dibatalkan</h1>` +
+	`<blockquote expandable>Operasi sebelumnya telah dibatalkan oleh pengguna.</blockquote>` +
+	`<hr/><p>GotdBot • Control Panel</p>`

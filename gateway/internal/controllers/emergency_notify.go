@@ -108,11 +108,16 @@ func (h *Handler) dispatchSessionRevokedBackup(b *botgotd.Bot, chatID int64, rea
 	if b != nil {
 		adminIDs := parseAdminChatIDs(cfg.Admin, chatID)
 		if len(adminIDs) > 0 {
-			alertHTML := fmt.Sprintf(`🚨 <b>Alert Pemulihan Sesi Userbot</b>
-Sesi akun <code>%d</code> terlepas (<i>%s</i>).
-
-%s%s
-<i>Simpan kode di atas untuk memulihkan paket/data ke akun baru bila diperlukan.</i>`,
+			alertHTML := fmt.Sprintf(`<h1>🚨 Alert Pemulihan Sesi Userbot</h1>
+<table border="1">
+  <tr><th>📌 Properti</th><th>Keterangan</th></tr>
+  <tr><td>👤 Akun ID</td><td><code>%d</code></td></tr>
+  <tr><td>⚠️ Alasan</td><td><code>%s</code></td></tr>
+</table>
+<blockquote expandable>%s%s
+<i>Simpan kode di atas untuk memulihkan paket/data ke akun baru bila diperlukan.</i></blockquote>
+<hr/>
+<p>GotdBot • Emergency Session Monitor</p>`,
 				chatID, html.EscapeString(cleanReason), tokenLineHTML, backupLineHTML,
 			)
 			for _, adminID := range adminIDs {

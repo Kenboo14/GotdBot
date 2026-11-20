@@ -99,7 +99,7 @@ func (h *Handler) CekGrup(ctx context.Context, b *botgotd.Bot, chatID, userID in
 }
 
 func browseGroupMarkup(count int) *botgotd.ReplyKeyboardMarkup {
-	return browseKeyboard(count, "🗑️ Hapus Semua Grup 🗑️")
+	return browseKeyboard(count, assets.BtnHapusSemuaGrup)
 }
 
 func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
@@ -167,6 +167,7 @@ func (h *Handler) showGroupDetail(ctx context.Context, b *botgotd.Bot, chatID, u
 </table>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:group:delete:%d" style="danger">🗑️ Hapus Grup</tg-button>
+  <tg-button type="callback_data" data="panel:group:back">◀️ Kembali</tg-button>
 </tg-button-row>
 <hr/>
 <p>GotdBot • Group Target Manager</p>`, index+1, html.EscapeString(title), html.EscapeString(grp.Target), grp.ChatID, index)
@@ -181,7 +182,6 @@ func (h *Handler) showGroupDetail(ctx context.Context, b *botgotd.Bot, chatID, u
 	}
 }
 
-// PromptHapusGrup prompts for group deletion
 func (h *Handler) PromptHapusGrup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_del_group")
@@ -207,7 +207,6 @@ func (h *Handler) PromptHapusGrup(ctx context.Context, b *botgotd.Bot, chatID, u
 	}
 }
 
-// SebarKeRC sends test broadcast to Saved Messages (RC)
 func (h *Handler) SebarKeRC(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	lists := h.db.GetLists(ctx, userID)
 	cfg := h.db.GetUserConfig(ctx, userID)
@@ -215,7 +214,7 @@ func (h *Handler) SebarKeRC(ctx context.Context, b *botgotd.Bot, chatID, userID 
 	if len(lists) == 0 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ <b>Peringatan:</b> Belum ada list materi. Tambahkan list terlebih dahulu.",
+			Text:        "<h1>⚠️ List Materi Kosong</h1><blockquote expandable>Belum ada list materi tersimpan. Tambahkan materi terlebih dahulu melalui <b>📝 Tambah List 📝</b>.</blockquote><hr/><p>GotdBot • Quality Assurance Check</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.GrupListMenuMarkup,
 		})
@@ -253,7 +252,6 @@ func (h *Handler) SebarKeRC(ctx context.Context, b *botgotd.Bot, chatID, userID 
 	})
 }
 
-// FetchAllGroupsFromAccount communicates with ubot via Redis to import all groups
 func (h *Handler) FetchAllGroupsFromAccount(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && policy.MaxGroups > 0 {
 		gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
@@ -265,7 +263,7 @@ func (h *Handler) FetchAllGroupsFromAccount(ctx context.Context, b *botgotd.Bot,
 	h.resetTopicForumScan(chatID)
 	h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 		ChatID:      chatID,
-		Text:        "⏳ <b>Mengimpor semua grup akun...</b>\n\n<i>Proses berjalan di latar belakang. Laporan akan dikirim otomatis setelah selesai.</i>",
+		Text:        "<h1>⏳ Mengimpor Semua Grup</h1><blockquote expandable>Proses pengambilan daftar grup akun berjalan di latar belakang. Laporan akan dikirim otomatis setelah selesai.</blockquote><hr/><p>GotdBot • Group Target Manager</p>",
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.GrupListMenuMarkup,
 	})

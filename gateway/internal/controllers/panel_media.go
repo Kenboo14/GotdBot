@@ -228,7 +228,7 @@ func (h *Handler) stagePanelMediaWithCaption(ctx context.Context, b *botgotd.Bot
 	}
 	h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 		ChatID:      chatID,
-		Text:        "⏳ <b>Mengamankan media ke cache...</b>",
+		Text:        "<h1>⏳ Menyimpan Media</h1><blockquote expandable>Mengamankan media materi ke saluran cache userbot...</blockquote><hr/><p>GotdBot • Media Cache Manager</p>",
 		ParseMode:   "HTML",
 		ReplyMarkup: replyMarkup,
 	})

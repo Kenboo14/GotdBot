@@ -162,14 +162,23 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 					remOld, _ := h.db.ListActiveUserLicenses(ctx, oldOwnerID)
 					if len(remOld) > 0 {
 						b.SendMessage(ctx, &botgotd.SendMessageParams{
-							ChatID:    oldOwnerID,
-							Text:      fmt.Sprintf("🔄 <b>Slot Token Dipindahkan</b>\n\nSlot paket <code>%s</code> telah dipindahkan ke akun Telegram baru. Slot token aktif Anda yang lain tetap berjalan normal.", html.EscapeString(tier)),
+							ChatID: oldOwnerID,
+							Text: fmt.Sprintf(`<h1>🔄 Slot Token Dipindahkan</h1>
+<table border="1">
+  <tr><th>📌 Status</th><td>Slot <code>%s</code> telah dipindahkan ke akun Telegram baru.</td></tr>
+</table>
+<blockquote expandable>Slot token aktif Anda yang lain tetap berjalan normal pada akun ini.</blockquote>
+<hr/>
+<p>GotdBot • Multi-Slot License Transfer</p>`, html.EscapeString(tier)),
 							ParseMode: "HTML",
 						})
 					} else {
 						b.SendMessage(ctx, &botgotd.SendMessageParams{
-							ChatID:      oldOwnerID,
-							Text:        "🔄 <b>Lisensi Akun Dipindahkan</b>\n\nPaket dan data userbot Anda telah dipindahkan menggunakan Token Backup ke akun Telegram baru. Sesi lama pada akun ini telah diputus demi keamanan.",
+							ChatID: oldOwnerID,
+							Text: `<h1>🔄 Lisensi Akun Dipindahkan</h1>
+<blockquote expandable>Paket dan data userbot Anda telah dipindahkan menggunakan Token Backup ke akun Telegram baru. Sesi lama pada akun ini telah diputus demi keamanan.</blockquote>
+<hr/>
+<p>GotdBot • License Transfer</p>`,
 							ParseMode:   "HTML",
 							ReplyMarkup: assets.RemoveKeyboard,
 						})
@@ -401,26 +410,32 @@ func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *botgotd.Bot, da
 
 func broadcastDetailText(data models.PFromService) string {
 	var builder strings.Builder
-	builder.WriteString("<b>📊 Laporan Akhir Broadcast</b>\n━━━━━━━━━━━━━━━━━━━━\n")
-	fmt.Fprintf(&builder, "<b>Terkirim:</b> <code>%d</code>\n<b>Gagal:</b>    <code>%d</code>\n<b>Total:</b>    <code>%d</code>\n", data.Success, data.Failed, data.Total)
+	builder.WriteString("<h1>📊 Laporan Akhir Broadcast</h1>\n")
+	builder.WriteString("<table border=\"1\">\n  <tr><th>📊 Metrik</th><th>📌 Nilai</th></tr>\n")
+	fmt.Fprintf(&builder, "  <tr><td>✅ Terkirim</td><td><code>%d</code></td></tr>\n", data.Success)
+	fmt.Fprintf(&builder, "  <tr><td>❌ Gagal</td><td><code>%d</code></td></tr>\n", data.Failed)
+	fmt.Fprintf(&builder, "  <tr><td>🎯 Total Target</td><td><code>%d</code></td></tr>\n", data.Total)
+	builder.WriteString("</table>\n")
 	if len(data.Errors) == 0 {
-		builder.WriteString("\n<i>Semua pesan berhasil dikirim tanpa kendala.</i>")
+		builder.WriteString("<blockquote expandable>Seluruh pesan siaran berhasil dikirim tanpa kendala.</blockquote>\n")
 	} else {
-		builder.WriteString("\n<b>Catatan Kendala:</b>\n<pre>")
+		builder.WriteString("<blockquote expandable><b>Catatan Kendala:</b>\n<pre>")
 		for index, item := range data.Errors {
-			if index >= 30 {
-				fmt.Fprintf(&builder, "... dan %d kendala lainnya\n", len(data.Errors)-30)
+			if index >= 30 || builder.Len() > 3750 {
+				fmt.Fprintf(&builder, "... dan %d kendala lainnya\n", len(data.Errors)-index)
 				break
 			}
-			fmt.Fprintf(&builder, "%d. %s\n", index+1, html.EscapeString(item))
+			line := fmt.Sprintf("%d. %s\n", index+1, html.EscapeString(item))
+			if builder.Len()+len(line) > 3850 {
+				fmt.Fprintf(&builder, "... dan %d kendala lainnya\n", len(data.Errors)-index)
+				break
+			}
+			builder.WriteString(line)
 		}
-		builder.WriteString("</pre>")
+		builder.WriteString("</pre></blockquote>\n")
 	}
-	text := builder.String()
-	if len(text) > 4000 {
-		return text[:3990] + "\n...</pre>"
-	}
-	return text
+	builder.WriteString("<hr/>\n<p>Userbot Broadcast Service • GotdBot Monitor</p>")
+	return builder.String()
 }
 
 func broadcastMonitorText(data models.PFromService) string {

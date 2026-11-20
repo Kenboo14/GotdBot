@@ -309,7 +309,7 @@ func (m *devMonitor) notifyStartupStatus(ctx context.Context) {
 		redisStatus = "🟢 Connected"
 	}
 
-	text := fmt.Sprintf(`🚀 <b>[BOT LOADER • GATEWAY READY]</b>
+	text := fmt.Sprintf(`<h1>🚀 BOT LOADER • GATEWAY READY</h1>
 <blockquote expandable>Layanan Gateway MTProto telah aktif dan siap memproses panel &amp; broker Redis.</blockquote>
 <table border="1">
   <tr><th>Komponen</th><th>Status</th></tr>
@@ -320,7 +320,7 @@ func (m *devMonitor) notifyStartupStatus(ctx context.Context) {
   <tr><td>💻 CPU / Go</td><td><code>%d vCPU / %s</code></td></tr>
 </table>
 <hr/>
-<p>🕒 %s WIB</p>`,
+<p>🕒 %s WIB · GotdBot Infra Monitor</p>`,
 		sqliteStatus, mongoStatus, redisStatus, html.EscapeString(snap.memDetail),
 		runtime.NumCPU(), html.EscapeString(runtime.Version()),
 		time.Now().Format("15:04:05"),
@@ -344,7 +344,7 @@ func (m *devMonitor) checkAndReportHealth(ctx context.Context, forceStartup bool
 	}
 
 	icon := "🟢"
-	title := "DATABASE & VPS HEALTH"
+	title := "DATABASE &amp; VPS HEALTH"
 	if !snap.dbHealth.SQLiteOK || !snap.redisOK || highRAM {
 		icon = "🔴"
 		title = "DATABASE / VPS WARNING"
@@ -353,30 +353,51 @@ func (m *devMonitor) checkAndReportHealth(ctx context.Context, forceStartup bool
 		title = "MONGODB FALLBACK ACTIVE"
 	}
 
-	extraErr := ""
-	if snap.dbHealth.SQLiteErr != "" {
-		extraErr += "\n• SQLite: <code>" + html.EscapeString(snap.dbHealth.SQLiteErr) + "</code>"
+	sqliteBadge := "❌ Error"
+	if snap.dbHealth.SQLiteOK {
+		sqliteBadge = "🟢 OK"
 	}
-	if snap.dbHealth.MongoErr != "" {
-		extraErr += "\n• MongoDB: <code>" + html.EscapeString(snap.dbHealth.MongoErr) + "</code>"
+	mongoBadge := "⚪ Nonaktif"
+	if snap.mongoConfigured {
+		if snap.dbHealth.MongoOK {
+			mongoBadge = "🟢 OK"
+		} else {
+			mongoBadge = "🟡 Fallback SQLite"
+		}
 	}
-	if snap.redisErr != "" {
-		extraErr += "\n• Redis: <code>" + html.EscapeString(snap.redisErr) + "</code>"
+	redisBadge := "❌ Error"
+	if snap.redisOK {
+		redisBadge = "🟢 OK"
 	}
 
-	text := fmt.Sprintf(`%s <b>[%s]</b>
+	var errs []string
+	if snap.dbHealth.SQLiteErr != "" {
+		errs = append(errs, "• SQLite: <code>"+html.EscapeString(snap.dbHealth.SQLiteErr)+"</code>")
+	}
+	if snap.dbHealth.MongoErr != "" {
+		errs = append(errs, "• MongoDB: <code>"+html.EscapeString(snap.dbHealth.MongoErr)+"</code>")
+	}
+	if snap.redisErr != "" {
+		errs = append(errs, "• Redis: <code>"+html.EscapeString(snap.redisErr)+"</code>")
+	}
+	errBlock := ""
+	if len(errs) > 0 {
+		errBlock = "\n<blockquote expandable>" + strings.Join(errs, "\n") + "</blockquote>"
+	}
+
+	text := fmt.Sprintf(`<h1>%s %s</h1>
 <table border="1">
   <tr><th>Resource</th><th>Status</th></tr>
-  <tr><td>📂 SQLite</td><td>%v</td></tr>
-  <tr><td>🍃 MongoDB</td><td>%v (cfg=%v)</td></tr>
-  <tr><td>⚡ Redis</td><td>%v</td></tr>
+  <tr><td>📂 SQLite</td><td>%s</td></tr>
+  <tr><td>🍃 MongoDB</td><td>%s</td></tr>
+  <tr><td>⚡ Redis</td><td>%s</td></tr>
   <tr><td>🧠 RAM VPS</td><td><code>%s</code></td></tr>
 </table>%s
 <hr/>
-<p>🕒 %s WIB</p>`,
+<p>🕒 %s WIB · GotdBot Infra Monitor</p>`,
 		icon, title,
-		snap.dbHealth.SQLiteOK, snap.dbHealth.MongoOK, snap.mongoConfigured, snap.redisOK,
-		html.EscapeString(snap.memDetail), extraErr,
+		sqliteBadge, mongoBadge, redisBadge,
+		html.EscapeString(snap.memDetail), errBlock,
 		time.Now().Format("15:04:05"),
 	)
 	m.enqueue("MONITOR_DATABASE", "dbhealth:"+summary, 5*time.Minute, monitorPriorityHigh, text)

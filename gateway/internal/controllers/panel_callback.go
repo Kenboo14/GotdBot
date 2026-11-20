@@ -71,16 +71,51 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		}
 	}
 	if cb.Data == "panel:status" || cb.Data == "panel:status:refresh" {
-		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "Status diperbarui"})
-		var chatID int64
-		if cb.Message != nil && cb.Message.Message != nil {
-			chatID = cb.Message.Message.Chat.ID
-		}
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "✅ Status diperbarui"})
 		if chatID == 0 {
 			chatID = cb.From.ID
 		}
 		effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
-		h.ShowStatus(ctx, b, chatID, effectiveID)
+		h.renderStatusDashboard(ctx, b, chatID, effectiveID, messageID)
+		return
+	}
+	if cb.Data == "panel:status:toggle" {
+		if chatID == 0 {
+			chatID = cb.From.ID
+		}
+		effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
+		ok, expAt, newStatus := h.executeToggleStatus(ctx, b, chatID, effectiveID)
+		if !ok {
+			_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+				CallbackQueryID: cb.ID,
+				Text:            fmt.Sprintf("❌ Masa aktif token habis (%s).", expAt),
+				ShowAlert:       true,
+			})
+			return
+		}
+		toast := "🛑 Siaran dihentikan"
+		if newStatus == "Berjalan" {
+			toast = "🚀 Siaran dimulai"
+		}
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: toast})
+		h.renderStatusDashboard(ctx, b, chatID, effectiveID, messageID)
+		return
+	}
+	if cb.Data == "panel:token:menu" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		h.ShowSwitchTokenMenu(ctx, b, chatID, cb.From.ID, messageID)
+		return
+	}
+	if cb.Data == "panel:settings:home" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+		effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
+		h.renderSettingsView(ctx, b, chatID, effectiveID, messageID)
+		return
+	}
+	if cb.Data == "panel:settings:backup" {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID, Text: "✅ Kode backup dibuat"})
+		effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
+		h.createAndRenderDataBackup(ctx, b, chatID, effectiveID, messageID)
 		return
 	}
 	if strings.HasPrefix(cb.Data, "panel:tlist:") {

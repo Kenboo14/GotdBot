@@ -225,7 +225,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			log.Printf("cache_list broker error: %v", err)
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        "❌ <b>Gagal menyimpan list.</b> Broker userbot tidak merespons.",
+				Text:        "<h1>❌ Gagal Menyimpan List</h1><blockquote expandable>Broker userbot tidak merespons. Silakan coba beberapa saat lagi.</blockquote><hr/><p>GotdBot • Promotional Content Manager</p>",
 				ParseMode:   "HTML",
 				ReplyMarkup: grupListMenuMarkup,
 			})
@@ -233,7 +233,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		}
 		h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⏳ <b>Menyimpan list ke cache...</b>",
+			Text:        "<h1>⏳ Menyimpan List</h1><blockquote expandable>Mengamankan materi promosi ke saluran cache userbot...</blockquote><hr/><p>GotdBot • Promotional Content Manager</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
@@ -305,14 +305,14 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 
 	case "browse_list", "list_detail":
-		if text == "🗑️ Hapus Semua List 🗑️" {
+		if text == assets.BtnHapusSemuaList {
 			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			_ = h.db.ClearLists(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
 			h.DisplayList(ctx, b, chatID, userID)
 			return true
 		}
-		if text == "Kembali" {
+		if text == assets.BtnKembali || text == "Kembali" {
 			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			h.ShowGrupList(ctx, b, chatID, userID)
 			return true
@@ -327,14 +327,14 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 
 	case "browse_group":
-		if text == "🗑️ Hapus Semua Grup 🗑️" {
+		if text == assets.BtnHapusSemuaGrup {
 			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			_ = h.db.ClearGroups(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_groups"})
 			h.DisplayGroup(ctx, b, chatID, userID)
 			return true
 		}
-		if text == "Kembali" {
+		if text == assets.BtnKembali || text == "Kembali" {
 			h.deleteBotMessages(ctx, b, chatID, h.clearAndGetDetailMessageIDs(ctx, chatID))
 			h.ShowGrupList(ctx, b, chatID, userID)
 			return true
@@ -349,7 +349,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	case "waiting_del_list":
 		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "")
-		if text == "🗑️ Hapus Semua List 🗑️" {
+		if text == assets.BtnHapusSemuaList {
 			_ = h.db.ClearLists(ctx, userID)
 			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "clear_panel_lists"})
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -444,11 +444,11 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 
 	case "waiting_set_mode":
 		h.setPanelState(chatID, "")
-		mode := strings.TrimPrefix(text, "👑 ")
-		mode = strings.TrimPrefix(mode, "⚡ ")
-		mode = strings.TrimPrefix(mode, "🔕 ")
-		mode = strings.TrimPrefix(mode, "📨 ")
-		mode = strings.TrimSpace(mode)
+		mode := strings.TrimSpace(text)
+		for _, em := range []string{"👑", "⚡", "🔕", "📨"} {
+			mode = strings.TrimSpace(strings.TrimPrefix(mode, em))
+			mode = strings.TrimSpace(strings.TrimSuffix(mode, em))
+		}
 		if mode == "Forward" {
 			if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowForwardMode {
 				h.denyTierFeature(ctx, b, chatID, policy.Tier, "Mode Forward", "Pro++", statusMenuMarkup)
@@ -461,7 +461,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			_ = h.db.SaveUserConfig(ctx, cfg)
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        fmt.Sprintf("✅ <b>Mode diubah ke <code>%s</code>.</b>", mode),
+				Text:        fmt.Sprintf("<h1>✅ Mode Siaran Diperbarui</h1><table border=\"1\"><tr><th>👑 Mode Aktif</th><td><code>%s</code></td></tr></table><hr/><p>GotdBot • Status Configuration</p>", mode),
 				ParseMode:   "HTML",
 				ReplyMarkup: statusMenuMarkup,
 			})
@@ -469,7 +469,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⚠️ Pilihan mode tidak dikenali.",
+			Text:        "<h1>⚠️ Pilihan Mode Tidak Dikenali</h1><blockquote expandable>Silakan pilih mode melalui tombol keyboard: Normal, Fast, Silent, atau Forward.</blockquote><hr/><p>GotdBot • Status Configuration</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: statusMenuMarkup,
 		})
@@ -511,7 +511,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			log.Printf("cache_watermark broker error: %v", err)
 			b.SendMessage(ctx, &botgotd.SendMessageParams{
 				ChatID:      chatID,
-				Text:        "❌ <b>Gagal menyimpan watermark.</b> Broker tidak merespons.",
+				Text:        "<h1>❌ Gagal Menyimpan Watermark</h1><blockquote expandable>Broker userbot tidak merespons. Silakan coba beberapa saat lagi.</blockquote><hr/><p>GotdBot • Status Configuration</p>",
 				ParseMode:   "HTML",
 				ReplyMarkup: statusMenuMarkup,
 			})
@@ -519,7 +519,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		}
 		h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "⏳ <b>Menyimpan watermark ke cache...</b>",
+			Text:        "<h1>⏳ Menyimpan Watermark</h1><blockquote expandable>Mengamankan custom watermark ke saluran cache userbot...</blockquote><hr/><p>GotdBot • Status Configuration</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: statusMenuMarkup,
 		})

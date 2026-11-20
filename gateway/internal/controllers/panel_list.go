@@ -72,12 +72,12 @@ func browseKeyboard(count int, allText string) *botgotd.ReplyKeyboardMarkup {
 		}
 		rows = append(rows, row)
 	}
-	rows = append(rows, []botgotd.KeyboardButton{{Text: "Kembali"}})
+	rows = append(rows, []botgotd.KeyboardButton{{Text: assets.BtnKembali}})
 	return &botgotd.ReplyKeyboardMarkup{Keyboard: rows, ResizeKeyboard: true}
 }
 
 func browseListMarkup(count int) *botgotd.ReplyKeyboardMarkup {
-	return browseKeyboard(count, "🗑️ Hapus Semua List 🗑️")
+	return browseKeyboard(count, assets.BtnHapusSemuaList)
 }
 
 func (h *Handler) DisplayList(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
@@ -102,7 +102,7 @@ func (h *Handler) DisplayList(ctx context.Context, b *botgotd.Bot, chatID, userI
 	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "❌ <b>Gagal.</b> Preview list tidak dapat diminta dari userbot.",
+			Text:        "<h1>❌ Gagal Memuat Preview</h1><blockquote expandable>Preview list tidak dapat diminta dari userbot.</blockquote><hr/><p>GotdBot • Promotional Content Manager</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: browseListMarkup(len(lists)),
 		})
@@ -125,14 +125,13 @@ func (h *Handler) showListDetail(ctx context.Context, b *botgotd.Bot, chatID, us
 	if err := h.broker.To(ctx, "to:ubot:command", payload); err != nil {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        "❌ <b>Gagal.</b> Detail list tidak dapat diminta dari userbot.",
+			Text:        "<h1>❌ Gagal Memuat Detail List</h1><blockquote expandable>Detail list tidak dapat diminta dari userbot.</blockquote><hr/><p>GotdBot • Promotional Content Manager</p>",
 			ParseMode:   "HTML",
 			ReplyMarkup: browseListMarkup(len(lists)),
 		})
 	}
 }
 
-// PromptHapusList prompts for list deletion
 func (h *Handler) PromptHapusList(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	h.clearPanelPrompt(ctx, b, chatID)
 	h.setPanelState(chatID, "waiting_del_list")
@@ -159,7 +158,7 @@ func (h *Handler) PromptHapusList(ctx context.Context, b *botgotd.Bot, chatID, u
 }
 
 func isRestartBrowseButton(text string) bool {
-	if text == "Kembali" {
+	if text == assets.BtnKembali || text == "Kembali" {
 		return true
 	}
 	if n, err := strconv.Atoi(text); err == nil && n > 0 && n <= 100 {
