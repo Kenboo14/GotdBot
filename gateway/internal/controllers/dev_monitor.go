@@ -27,6 +27,7 @@ const (
 type devMonitor struct {
 	mu                sync.Mutex
 	chatTarget        any
+	rawTargetUsername string
 	fallbackTop       int
 	topics            map[string]int
 	dispatcher        *monitorDispatcher
@@ -106,8 +107,14 @@ func startDevMonitor(ctx context.Context, b *botgotd.Bot, rdb *redis.Client, db 
 		"MONITOR_DATABASE",
 	}
 
+	rawUsername := ""
+	if targetStr, ok := target.(string); ok {
+		rawUsername = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(targetStr), "@"))
+	}
+
 	globalDevMonitor.mu.Lock()
 	globalDevMonitor.chatTarget = target
+	globalDevMonitor.rawTargetUsername = rawUsername
 	globalDevMonitor.fallbackTop = fallback
 	globalDevMonitor.b = b
 	globalDevMonitor.db = db
@@ -238,12 +245,82 @@ func (m *devMonitor) EnqueueAlertDigest(text string) {
 	m.enqueue("MONITOR_TOPIC", "alertdigest:"+hashDedup(text), 10*time.Second, monitorPriorityNormal, text)
 }
 
+func (m *devMonitor) ObserveIncomingChat(chat botgotd.Chat) {
+	if m == nil || chat.ID == 0 || strings.TrimSpace(chat.Username) == "" {
+		return
+	}
+	m.mu.Lock()
+	match := m.rawTargetUsername != "" &&
+		strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(chat.Username), "@"), m.rawTargetUsername) &&
+		parseMonitorChatID(m.chatTarget) == 0
+	var disp *monitorDispatcher
+	var b *botgotd.Bot
+	var fb int
+	if match {
+		m.chatTarget = chat.ID
+		disp = m.dispatcher
+		b = m.b
+		fb = m.fallbackTop
+	}
+	m.mu.Unlock()
+	if match && disp != nil {
+		disp.updateTarget(b, chat.ID, fb)
+	}
+}
+
+func (m *devMonitor) ResolveChatTarget(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	b := m.b
+	target := m.chatTarget
+	disp := m.dispatcher
+	fb := m.fallbackTop
+	m.mu.Unlock()
+	if target == nil || parseMonitorChatID(target) != 0 || b == nil {
+		return
+	}
+	resolved := resolveMonitorChatTarget(ctx, b, target)
+	resolvedID := parseMonitorChatID(resolved)
+	if resolvedID == 0 {
+		return
+	}
+	m.mu.Lock()
+	if parseMonitorChatID(m.chatTarget) == 0 {
+		m.chatTarget = resolvedID
+		disp = m.dispatcher
+		b = m.b
+		fb = m.fallbackTop
+	} else {
+		disp = nil
+	}
+	m.mu.Unlock()
+	if disp != nil {
+		disp.updateTarget(b, resolvedID, fb)
+	}
+}
+
 func (m *devMonitor) runStartupAndDBHealthLoop(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(4 * time.Second):
 	}
+	for i := 0; i < 16; i++ {
+		m.mu.Lock()
+		ready := m.b != nil && m.b.API != nil
+		m.mu.Unlock()
+		if ready {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	m.ResolveChatTarget(ctx)
 
 	m.notifyStartupStatus(ctx)
 	m.checkAndReportHealth(ctx, true)

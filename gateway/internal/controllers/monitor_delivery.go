@@ -116,7 +116,16 @@ func (d *monitorDispatcher) execSend(ctx context.Context, threadID int, text str
 		if st.sendFn != nil {
 			return st.sendFn(opCtx, params)
 		}
-		return st.bot.SendMessage(opCtx, params)
+		if parseMonitorChatID(st.target) == 0 {
+			resolved := resolveMonitorChatTarget(opCtx, st.bot, st.target)
+			if parseMonitorChatID(resolved) != 0 {
+				st.target = resolved
+				d.mu.Lock()
+				d.chatTarget = resolved
+				d.mu.Unlock()
+			}
+		}
+		return sendMonitorRichMessage(opCtx, st.bot, st.target, threadID, text)
 	})
 }
 
@@ -134,7 +143,16 @@ func (d *monitorDispatcher) execEdit(ctx context.Context, msgID int, text string
 		if st.editFn != nil {
 			return st.editFn(opCtx, params)
 		}
-		return st.bot.EditMessageText(opCtx, params)
+		if parseMonitorChatID(st.target) == 0 {
+			resolved := resolveMonitorChatTarget(opCtx, st.bot, st.target)
+			if parseMonitorChatID(resolved) != 0 {
+				st.target = resolved
+				d.mu.Lock()
+				d.chatTarget = resolved
+				d.mu.Unlock()
+			}
+		}
+		return editMonitorRichMessage(opCtx, st.bot, st.target, msgID, text)
 	})
 }
 

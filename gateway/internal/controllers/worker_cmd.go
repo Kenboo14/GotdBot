@@ -9,21 +9,23 @@ import (
 	"strings"
 )
 
+func sendWorkerCard(ctx context.Context, b *botgotd.Bot, chatID int64, threadID int, htmlText string) {
+	_, _ = sendMonitorRichMessage(ctx, b, chatID, threadID, htmlText)
+}
+
 func (h *Handler) WorkerCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update == nil || update.Message == nil || update.Message.From == nil {
 		return
 	}
 	chatID := update.Message.Chat.ID
 	senderID := update.Message.From.ID
+	threadID := update.Message.MessageThreadID
+	globalDevMonitor.ObserveIncomingChat(update.Message.Chat)
 	if !isOwner(senderID) {
 		return
 	}
 	if h.lb == nil {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      renderMonitorRichCard("⚙️ Worker Pool", []monitorRichRow{{Label: "📌 Status", Value: "Load balancer belum aktif"}, {Label: "🕒 Mode", Value: "Single-worker default"}}, "ℹ️ Hubungkan Redis dan aktifkan WORKER_ID pada worker ubot.", false),
-			ParseMode: "HTML",
-		})
+		sendWorkerCard(ctx, b, chatID, threadID, renderMonitorRichCard("⚙️ Worker Pool", []monitorRichRow{{Label: "📌 Status", Value: "Load balancer belum aktif"}, {Label: "🕒 Mode", Value: "Single-worker default"}}, "ℹ️ Hubungkan Redis dan aktifkan WORKER_ID pada worker ubot.", false))
 		return
 	}
 
@@ -35,13 +37,13 @@ func (h *Handler) WorkerCommand(ctx context.Context, b *botgotd.Bot, update *bot
 
 	switch subCmd {
 	case "status":
-		h.sendWorkerStatusCard(ctx, b, chatID)
+		h.sendWorkerStatusCard(ctx, b, chatID, threadID)
 	case "move":
-		h.handleWorkerMoveCmd(ctx, b, chatID, fields)
+		h.handleWorkerMoveCmd(ctx, b, chatID, threadID, fields)
 	case "drain":
-		h.handleWorkerDrainCmd(ctx, b, chatID, fields, true)
+		h.handleWorkerDrainCmd(ctx, b, chatID, threadID, fields, true)
 	case "undrain":
-		h.handleWorkerDrainCmd(ctx, b, chatID, fields, false)
+		h.handleWorkerDrainCmd(ctx, b, chatID, threadID, fields, false)
 	default:
 		msg := renderMonitorRichCard("⚙️ Panduan Perintah /worker", []monitorRichRow{
 			{Label: "📊 Status", Value: "<code>/worker status</code>"},
@@ -49,11 +51,11 @@ func (h *Handler) WorkerCommand(ctx context.Context, b *botgotd.Bot, update *bot
 			{Label: "🚧 Drain", Value: "<code>/worker drain &lt;worker_id&gt;</code>"},
 			{Label: "✅ Undrain", Value: "<code>/worker undrain &lt;worker_id&gt;</code>"},
 		}, "ℹ️ Kelola distribusi user antar worker dalam pool VPS secara real-time.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 	}
 }
 
-func (h *Handler) sendWorkerStatusCard(ctx context.Context, b *botgotd.Bot, chatID int64) {
+func (h *Handler) sendWorkerStatusCard(ctx context.Context, b *botgotd.Bot, chatID int64, threadID int) {
 	knownIDs, err := h.lb.GetKnownWorkerIDs(ctx)
 	live, liveErr := h.lb.ListWorkers(ctx)
 	if err != nil || liveErr != nil {
@@ -65,7 +67,7 @@ func (h *Handler) sendWorkerStatusCard(ctx context.Context, b *botgotd.Bot, chat
 			{Label: "📌 Sumber", Value: "Redis Registry"},
 			{Label: "❌ Detail", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(errObj.Error()))},
 		}, "ℹ️ Periksa koneksi Redis sebelum mengulangi perintah.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 	if len(knownIDs) == 0 && len(live) == 0 {
@@ -73,7 +75,7 @@ func (h *Handler) sendWorkerStatusCard(ctx context.Context, b *botgotd.Bot, chat
 			{Label: "📌 Mode", Value: "Single-worker legacy (<code>to:ubot:command</code>)"},
 			{Label: "📊 Worker Aktif", Value: "<code>0 worker sharded</code>"},
 		}, "ℹ️ Belum ada worker sharded yang mendaftarkan heartbeat di Redis.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 
@@ -116,16 +118,16 @@ func (h *Handler) sendWorkerStatusCard(ctx context.Context, b *botgotd.Bot, chat
 	}
 	quote := fmt.Sprintf("ℹ️ Total aktif pool: <b>%d / %d</b> user terdaftar · Warm Pool 1 VPS.", totalActive, totalCap)
 	msg := renderMonitorRichCard("⚙️ Status Worker Pool", rows, quote, false)
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+	sendWorkerCard(ctx, b, chatID, threadID, msg)
 }
 
-func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatID int64, fields []string) {
+func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatID int64, threadID int, fields []string) {
 	if len(fields) < 4 {
 		msg := renderMonitorRichCard("⚠️ Format Perintah Kurang", []monitorRichRow{
 			{Label: "📌 Format", Value: "<code>/worker move &lt;uid&gt; &lt;worker_id|hell|normal&gt;</code>"},
 			{Label: "💡 Contoh", Value: "<code>/worker move 1935806583 ubot-hell</code>"},
 		}, "ℹ️ Masukkan User ID target dan worker tujuan.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 	uid, err := strconv.ParseInt(strings.TrimSpace(fields[2]), 10, 64)
@@ -134,7 +136,7 @@ func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatI
 			{Label: "🆔 Input", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(fields[2]))},
 			{Label: "📌 Syarat", Value: "Angka ID Telegram positif"},
 		}, "ℹ️ Periksa kembali UID pengguna.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 
@@ -144,7 +146,7 @@ func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatI
 	if strings.EqualFold(targetArg, "hell") || strings.EqualFold(targetArg, "normal") {
 		live, listErr := h.lb.ListWorkers(ctx)
 		if listErr != nil {
-			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf("<code>%s</code>", html.EscapeString(listErr.Error())), ParseMode: "HTML"})
+			sendWorkerCard(ctx, b, chatID, threadID, fmt.Sprintf("<code>%s</code>", html.EscapeString(listErr.Error())))
 			return
 		}
 		chosen, ok := SelectLeastLoaded(live, strings.ToLower(targetArg))
@@ -153,7 +155,7 @@ func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatI
 				{Label: "🆔 User ID", Value: fmt.Sprintf("<code>%d</code>", uid)},
 				{Label: "📦 Pool", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(strings.ToLower(targetArg)))},
 			}, "ℹ️ Tidak ada worker siap pakai dengan slot kosong pada pool tujuan.", false)
-			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+			sendWorkerCard(ctx, b, chatID, threadID, msg)
 			return
 		}
 		targetWorkerID = chosen.WorkerID
@@ -166,7 +168,7 @@ func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatI
 			{Label: "🎯 Tujuan", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(targetWorkerID))},
 			{Label: "⚠️ Error", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(err.Error()))},
 		}, "ℹ️ Pastikan worker tujuan aktif.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 
@@ -174,16 +176,16 @@ func (h *Handler) handleWorkerMoveCmd(ctx context.Context, b *botgotd.Bot, chatI
 		{Label: "🆔 User ID", Value: fmt.Sprintf("<code>%d</code>", uid)},
 		{Label: "🎯 Worker Tujuan", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(targetWorkerID))},
 	}, "ℹ️ Sesi akan berpindah tanpa login ulang dan siaran aktif dilanjutkan otomatis.", false)
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+	sendWorkerCard(ctx, b, chatID, threadID, msg)
 }
 
-func (h *Handler) handleWorkerDrainCmd(ctx context.Context, b *botgotd.Bot, chatID int64, fields []string, drain bool) {
+func (h *Handler) handleWorkerDrainCmd(ctx context.Context, b *botgotd.Bot, chatID int64, threadID int, fields []string, drain bool) {
 	if len(fields) < 3 {
 		msg := renderMonitorRichCard("⚠️ Nama Worker Diperlukan", []monitorRichRow{
 			{Label: "📌 Format Drain", Value: "<code>/worker drain &lt;worker_id&gt;</code>"},
 			{Label: "📌 Format Undrain", Value: "<code>/worker undrain &lt;worker_id&gt;</code>"},
 		}, "ℹ️ Tentukan ID worker misalnya ubot-1 atau ubot-2.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 	wid := strings.TrimSpace(fields[2])
@@ -193,14 +195,14 @@ func (h *Handler) handleWorkerDrainCmd(ctx context.Context, b *botgotd.Bot, chat
 				{Label: "⚙️ Worker", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(wid))},
 				{Label: "⚠️ Error", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(err.Error()))},
 			}, "ℹ️ Periksa koneksi Redis.", false)
-			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+			sendWorkerCard(ctx, b, chatID, threadID, msg)
 			return
 		}
 		msg := renderMonitorRichCard("✅ Worker Siap Menerima User", []monitorRichRow{
 			{Label: "⚙️ Worker", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(wid))},
 			{Label: "📌 Status", Value: "🟢 Ready"},
 		}, "ℹ️ Flag drain dilepas dan worker kembali masuk rotasi load balancer.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 
@@ -210,12 +212,12 @@ func (h *Handler) handleWorkerDrainCmd(ctx context.Context, b *botgotd.Bot, chat
 			{Label: "⚙️ Worker", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(wid))},
 			{Label: "⚠️ Error", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(err.Error()))},
 		}, "ℹ️ Periksa status worker dan slot pool lain.", false)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+		sendWorkerCard(ctx, b, chatID, threadID, msg)
 		return
 	}
 	msg := renderMonitorRichCard("🚧 Worker Mode Drain Aktif", []monitorRichRow{
 		{Label: "⚙️ Worker", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(wid))},
 		{Label: "🔀 User Dipindah", Value: fmt.Sprintf("<code>%d user</code>", moved)},
 	}, "ℹ️ Worker dikeluarkan dari penerimaan user baru dan sesi dialihkan bertahap.", false)
-	b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: msg, ParseMode: "HTML"})
+	sendWorkerCard(ctx, b, chatID, threadID, msg)
 }
