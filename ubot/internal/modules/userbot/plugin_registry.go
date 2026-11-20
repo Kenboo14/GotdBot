@@ -45,46 +45,63 @@ var pluginModuleNames = [pluginModuleCount]string{
 // Default status plugin saat ini: modul yang sudah terimplementasi aktif (true),
 // modul yang belum diimplementasikan nonaktif (false) agar zero-overhead.
 var defaultPluginEnabled = [pluginModuleCount]bool{
-	PluginAdmin:     false,
+	PluginAdmin:     true,
 	PluginNotes:     true,
 	PluginBroadcast: true,
 	PluginBlacklist: true,
 	PluginExtra:     true,
-	PluginGlobals:   false,
+	PluginGlobals:   true,
 	PluginInfo:      true,
 	PluginPMPermit:  false,
-	PluginProfile:   false,
-	PluginSticker:   false,
+	PluginProfile:   true,
+	PluginSticker:   true,
 	PluginSudo:      true,
-	PluginVCTools:   false,
+	PluginVCTools:   true,
 	PluginLogger:    true,
 }
 
 var commandPluginMap = map[string]PluginModule{
-	// Notes
+	"ban": PluginAdmin, "del": PluginAdmin, "demote": PluginAdmin,
+	"dh": PluginAdmin, "fullpromote": PluginAdmin, "kick": PluginAdmin,
+	"mute": PluginAdmin, "pin": PluginAdmin, "promote": PluginAdmin,
+	"purge": PluginAdmin, "unban": PluginAdmin, "unmute": PluginAdmin,
+	"unpin": PluginAdmin, "zombies": PluginAdmin,
+
 	"save": PluginNotes, "get": PluginNotes, "cat": PluginNotes,
 	"lsnote": PluginNotes, "notes": PluginNotes, "delnote": PluginNotes,
 	"clearnote": PluginNotes, "nofm": PluginNotes, "exportnote": PluginNotes,
 	"importnote": PluginNotes,
 
-	// Broadcast
 	"gcast": PluginBroadcast, "broadcast": PluginBroadcast, "cancel": PluginBroadcast,
+	"cancelall": PluginBroadcast, "fgcast": PluginBroadcast, "fucast": PluginBroadcast,
+	"memcast": PluginBroadcast, "spam": PluginBroadcast, "spamcast": PluginBroadcast,
+	"ucast": PluginBroadcast,
 
-	// Blacklist
 	"addbl": PluginBlacklist, "rmbl": PluginBlacklist, "rmallbl": PluginBlacklist, "lsbl": PluginBlacklist,
 
-	// Info
 	"alive": PluginInfo, "ping": PluginInfo, "p": PluginInfo, "server": PluginInfo,
+	"id": PluginInfo, "info": PluginInfo, "limit": PluginInfo, "sg": PluginInfo,
 
-	// Extra
 	"help": PluginExtra, "setp": PluginExtra, "code": PluginExtra, "eval": PluginExtra, "sh": PluginExtra,
+	"ai": PluginExtra, "azan": PluginExtra, "font": PluginExtra, "fontlist": PluginExtra,
+	"invite": PluginExtra, "join": PluginExtra, "kickme": PluginExtra,
+	"mirror": PluginExtra, "quotly": PluginExtra, "telegraph": PluginExtra,
 
-	// Logger
+	"gban": PluginGlobals, "gkick": PluginGlobals, "gmute": PluginGlobals,
+	"ungban": PluginGlobals, "ungmute": PluginGlobals, "lsgban": PluginGlobals, "lsgmute": PluginGlobals,
+
+	"setbio": PluginProfile, "setname": PluginProfile, "setusername": PluginProfile,
+
+	"kang": PluginSticker, "strinfo": PluginSticker,
+
 	"log": PluginLogger, "statuslog": PluginLogger,
 	"addblock": PluginLogger, "rmblock": PluginLogger, "lsblock": PluginLogger, "rmallblock": PluginLogger,
 
-	// Sudo
-	"addsudo": PluginSudo, "rmsudo": PluginSudo,
+	"addsudo": PluginSudo, "rmsudo": PluginSudo, "lsudo": PluginSudo, "clearsudo": PluginSudo,
+
+	"joinvc": PluginVCTools, "leavevc": PluginVCTools, "play": PluginVCTools,
+	"setvc": PluginVCTools, "startvc": PluginVCTools, "stopvc": PluginVCTools,
+	"video": PluginVCTools, "ytmusic": PluginVCTools, "ytvideo": PluginVCTools,
 }
 
 // pluginRegistry menyimpan status aktif tiap plugin menggunakan atomic.Bool agar

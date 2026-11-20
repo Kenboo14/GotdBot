@@ -193,6 +193,16 @@ func (s *SQLiteClient) initTables() error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_log_routes_user ON log_routes(user_id);`,
 
+		`CREATE TABLE IF NOT EXISTS global_moderation (
+			owner_id INTEGER NOT NULL,
+			kind TEXT NOT NULL,
+			user_id INTEGER NOT NULL,
+			label TEXT DEFAULT '',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (owner_id, kind, user_id)
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_global_mod_owner ON global_moderation(owner_id, kind);`,
+
 		`CREATE TABLE IF NOT EXISTS userbot_configs (
 			owner_id INTEGER PRIMARY KEY,
 			type TEXT DEFAULT 'Broadcast',
@@ -1059,4 +1069,94 @@ func (s *SQLiteClient) IncrementDailySendCount(ctx context.Context, ownerID int6
 		return 0, fmt.Errorf("increment daily send count: %w", err)
 	}
 	return s.GetDailySendCount(ctx, ownerID, dateWIB)
+}
+
+func (s *SQLiteClient) ListSudo(ctx context.Context, ownerID int64) ([]int64, error) {
+	if s == nil || s.DB == nil {
+		return nil, nil
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT user_id FROM sudo_users WHERE owner_id = ? ORDER BY user_id ASC;`, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("list sudo: %w", err)
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var uid int64
+		if err := rows.Scan(&uid); err != nil {
+			return nil, fmt.Errorf("scan sudo: %w", err)
+		}
+		ids = append(ids, uid)
+	}
+	return ids, rows.Err()
+}
+
+func (s *SQLiteClient) ClearSudo(ctx context.Context, ownerID int64) (int64, error) {
+	if s == nil || s.DB == nil {
+		return 0, nil
+	}
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM sudo_users WHERE owner_id = ?;`, ownerID)
+	if err != nil {
+		return 0, fmt.Errorf("clear sudo: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+func (s *SQLiteClient) AddGlobalMod(ctx context.Context, ownerID int64, kind string, userID int64, label string) error {
+	if s == nil || s.DB == nil {
+		return nil
+	}
+	query := `INSERT INTO global_moderation (owner_id, kind, user_id, label)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(owner_id, kind, user_id) DO UPDATE SET
+			label = CASE WHEN excluded.label != '' THEN excluded.label ELSE global_moderation.label END;`
+	_, err := s.DB.ExecContext(ctx, query, ownerID, kind, userID, label)
+	if err != nil {
+		return fmt.Errorf("add global mod: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteClient) RemoveGlobalMod(ctx context.Context, ownerID int64, kind string, userID int64) error {
+	if s == nil || s.DB == nil {
+		return nil
+	}
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM global_moderation WHERE owner_id = ? AND kind = ? AND user_id = ?;`, ownerID, kind, userID)
+	if err != nil {
+		return fmt.Errorf("remove global mod: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteClient) ListGlobalMod(ctx context.Context, ownerID int64, kind string) ([]LogBlockRecord, error) {
+	if s == nil || s.DB == nil {
+		return nil, nil
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT owner_id, user_id, label, created_at FROM global_moderation WHERE owner_id = ? AND kind = ? ORDER BY user_id ASC;`, ownerID, kind)
+	if err != nil {
+		return nil, fmt.Errorf("list global mod: %w", err)
+	}
+	defer rows.Close()
+	var records []LogBlockRecord
+	for rows.Next() {
+		var r LogBlockRecord
+		if err := rows.Scan(&r.OwnerID, &r.UserID, &r.Label, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan global mod: %w", err)
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
+func (s *SQLiteClient) IsGlobalMod(ctx context.Context, ownerID int64, kind string, userID int64) (bool, error) {
+	if s == nil || s.DB == nil {
+		return false, nil
+	}
+	var count int
+	err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM global_moderation WHERE owner_id = ? AND kind = ? AND user_id = ?;`, ownerID, kind, userID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check global mod: %w", err)
+	}
+	return count > 0, nil
 }

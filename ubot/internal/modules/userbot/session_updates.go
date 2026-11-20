@@ -487,6 +487,9 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		}
 		return s.shellCommand(ctx, client, peerID, prefix, args, threadID)
 	}
+	if handled, err := s.dispatchExtendedCommand(ctx, client, chatID, peerID, msg, entities, name, args, threadID); handled {
+		return err
+	}
 	if name != "ping" && name != "p" {
 		return nil
 	}

@@ -9,8 +9,8 @@ func TestPluginRegistry_SwitchAndCommandMapping(t *testing.T) {
 	if !s.IsPluginEnabled(PluginNotes) {
 		t.Fatalf("expected PluginNotes to default to enabled")
 	}
-	if s.IsPluginEnabled(PluginAdmin) {
-		t.Fatalf("expected PluginAdmin to default to disabled")
+	if s.IsPluginEnabled(PluginPMPermit) {
+		t.Fatalf("expected PluginPMPermit to default to disabled")
 	}
 
 	// Switching Notes off takes effect immediately
@@ -28,6 +28,17 @@ func TestPluginRegistry_SwitchAndCommandMapping(t *testing.T) {
 	}
 	if mod, ok := pluginForCommand("addblock"); !ok || mod != PluginLogger {
 		t.Fatalf("pluginForCommand(addblock) = (%v, %v), want (PluginLogger, true)", mod, ok)
+	}
+	for cmd, wantMod := range map[string]PluginModule{
+		"ban":     PluginAdmin,
+		"gban":    PluginGlobals,
+		"setbio":  PluginProfile,
+		"kang":    PluginSticker,
+		"startvc": PluginVCTools,
+	} {
+		if mod, ok := pluginForCommand(cmd); !ok || mod != wantMod {
+			t.Fatalf("pluginForCommand(%s) = (%v, %v), want (%v, true)", cmd, mod, ok, wantMod)
+		}
 	}
 }
 

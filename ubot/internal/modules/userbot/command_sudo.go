@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
@@ -184,4 +185,61 @@ func (s *Service) sudoCommand(ctx context.Context, client *gobot.Client, target 
 	s.sudoCache[cacheKey] = sudoCacheEntry{allowed: false, expiresAt: time.Now().Add(30 * time.Minute)}
 	s.sudoMu.Unlock()
 	return sendUserText(ctx, client, target, "Sudo dihapus: "+targetLabel, threadID)
+}
+
+func (s *Service) listSudoCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
+	ownerID, err := s.userbotOwner(ctx, client)
+	if err != nil {
+		return err
+	}
+	if s.sqlite == nil {
+		return sendUserText(ctx, client, target, "Database lokal tidak tersedia.", threadID)
+	}
+	ids, err := s.sqlite.ListSudo(ctx, ownerID)
+	if err != nil {
+		return sendUserText(ctx, client, target, "Gagal membaca daftar sudo: "+err.Error(), threadID)
+	}
+	if len(ids) == 0 {
+		return sendUserText(ctx, client, target, "Daftar sudo kosong.", threadID)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Daftar Sudo (%d pengguna):\n", len(ids))
+	for i, uid := range ids {
+		fmt.Fprintf(&sb, "%d. %d\n", i+1, uid)
+	}
+	return sendUserText(ctx, client, target, strings.TrimSpace(sb.String()), threadID)
+}
+
+func (s *Service) clearSudoCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, threadID int) error {
+	ownerID, err := s.userbotOwner(ctx, client)
+	if err != nil {
+		return err
+	}
+	if msg == nil || !msg.Out {
+		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat menghapus seluruh sudo.", threadID)
+	}
+	var removed int64
+	if s.sqlite != nil {
+		n, err := s.sqlite.ClearSudo(ctx, ownerID)
+		if err != nil {
+			return sendUserText(ctx, client, target, "Gagal menghapus daftar sudo: "+err.Error(), threadID)
+		}
+		removed = n
+	}
+	if s.db != nil {
+		go func(oid int64) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = s.db.Collection("userbot_sudo").DeleteMany(bgCtx, bson.M{"owner_id": oid})
+		}(ownerID)
+	}
+	prefix := fmt.Sprintf("%d:", ownerID)
+	s.sudoMu.Lock()
+	for k := range s.sudoCache {
+		if strings.HasPrefix(k, prefix) {
+			delete(s.sudoCache, k)
+		}
+	}
+	s.sudoMu.Unlock()
+	return sendUserText(ctx, client, target, fmt.Sprintf("Seluruh akses sudo dihapus (%d entri).", removed), threadID)
 }
