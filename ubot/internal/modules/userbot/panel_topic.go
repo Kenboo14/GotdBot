@@ -526,7 +526,7 @@ func (s *Service) handleCacheTopicListPost(ctx context.Context, client *gobot.Cl
 		return
 	}
 
-	topicID := getTeksCacheTopicID()
+	topicID := getTopicCacheTopicID()
 	cachedMsgID := 0
 	var err error
 	if sourceCount > 0 {

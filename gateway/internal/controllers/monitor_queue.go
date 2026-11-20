@@ -273,17 +273,18 @@ func (d *monitorDispatcher) flushBatches(resolveTopic func(string) int) {
 		}
 
 		header := strings.TrimSpace(b.header)
-		if !strings.Contains(strings.ToLower(header), "<h1") {
-			cleanHdr := strings.ReplaceAll(header, "<b>", "")
-			cleanHdr = strings.ReplaceAll(cleanHdr, "</b>", "")
-			header = "<h1>" + cleanHdr + "</h1>"
-		}
+		cleanHdr := strings.ReplaceAll(header, "<h1>", "")
+		cleanHdr = strings.ReplaceAll(cleanHdr, "</h1>", "")
+		cleanHdr = strings.ReplaceAll(cleanHdr, "<b>", "")
+		cleanHdr = strings.ReplaceAll(cleanHdr, "</b>", "")
+		cleanHdr = strings.TrimSpace(cleanHdr)
 		var sb strings.Builder
-		sb.WriteString(header)
-		sb.WriteString("\n<blockquote expandable>\n")
+		fmt.Fprintf(&sb, "<h1>%s</h1>\n<table>\n  <tr><td><b>📦 Total Event</b></td><td><code>%d event</code></td></tr>\n  <tr><td><b>🕒 Waktu</b></td><td><code>%s WIB</code></td></tr>\n</table>\n<blockquote expandable>\n",
+			cleanHdr, len(b.entries)+b.dropped, time.Now().Format("15:04:05"),
+		)
 		dropped := b.dropped
 		for _, entry := range b.entries {
-			if sb.Len()+len(entry)+180 > d.cfg.maxMsgBytes {
+			if sb.Len()+len(entry)+160 > d.cfg.maxMsgBytes {
 				dropped++
 				continue
 			}
@@ -295,7 +296,7 @@ func (d *monitorDispatcher) flushBatches(resolveTopic func(string) int) {
 		if dropped > 0 {
 			sb.WriteString(fmt.Sprintf("<i>… dan +%d event lainnya diringkas</i>\n", dropped))
 		}
-		sb.WriteString(fmt.Sprintf("</blockquote>\n<hr/>\n<p>🕒 %s WIB · GotdBot Monitor Digest</p>", time.Now().Format("15:04:05")))
+		sb.WriteString("</blockquote>")
 
 		d.Enqueue(monitorJob{
 			topicKey:   b.topicKey,

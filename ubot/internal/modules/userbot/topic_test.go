@@ -203,3 +203,23 @@ func TestForumTopicsCacheHitExpiryAndCap(t *testing.T) {
 		t.Fatalf("expected forumTopicsCache capped <= %d, got %d", maxForumTopicsCacheEntries, size)
 	}
 }
+
+func TestGetTopicCacheTopicIDEnvAndFallback(t *testing.T) {
+	t.Setenv("TEKS_CACHE", "3325")
+	t.Setenv("TOPIC_CACHE", "9876")
+	if got := getTopicCacheTopicID(); got != 9876 {
+		t.Fatalf("getTopicCacheTopicID() with TOPIC_CACHE=9876 = %d, want 9876", got)
+	}
+
+	t.Setenv("TOPIC_CACHE", "")
+	t.Setenv("TEKS_CACHE", "4455")
+	if got := getTopicCacheTopicID(); got != 4455 {
+		t.Fatalf("getTopicCacheTopicID() fallback to TEKS_CACHE = %d, want 4455", got)
+	}
+
+	t.Setenv("TOPIC_CACHE", "invalid")
+	t.Setenv("TEKS_CACHE", "")
+	if got := getTopicCacheTopicID(); got != 3325 {
+		t.Fatalf("getTopicCacheTopicID() default fallback = %d, want 3325", got)
+	}
+}

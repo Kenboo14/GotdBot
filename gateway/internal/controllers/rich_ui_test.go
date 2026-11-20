@@ -171,21 +171,28 @@ func TestEmoteWrappedInputParsers(t *testing.T) {
 	}
 }
 
+func assertMonitorCardLayout(t *testing.T, label, msg string) {
+	t.Helper()
+	if !botgotd.IsRichContent(msg) {
+		t.Errorf("%s is not rich content: %q", label, msg)
+	}
+	if !strings.Contains(msg, "<table>") || !strings.Contains(msg, "<tr><td><b>") || !strings.Contains(msg, "<blockquote") {
+		t.Errorf("%s missing monitor table card structure: %q", label, msg)
+	}
+	if strings.Contains(msg, "<table border=") || strings.Contains(msg, "<th>") || strings.Contains(msg, "<hr") {
+		t.Errorf("%s still contains disallowed border/th/hr tags: %q", label, msg)
+	}
+}
+
 func TestMonitorAndJasebRichContent(t *testing.T) {
 	dashHTML := (&telemetryTracker{bootTime: time.Now()}).formatDashboardHTML()
-	if !botgotd.IsRichContent(dashHTML) {
-		t.Errorf("formatDashboardHTML is not rich content")
-	}
+	assertMonitorCardLayout(t, "formatDashboardHTML", dashHTML)
 	svcPayload := models.PFromService{
 		OwnerID: 7201, ChatID: 7201, TaskID: "task_rich_1",
 		Total: 5, Success: 4, Failed: 1, Errors: []string{"FloodWait 10s"},
 	}
-	if !botgotd.IsRichContent(broadcastMonitorText(svcPayload)) {
-		t.Errorf("broadcastMonitorText is not rich content")
-	}
-	if !botgotd.IsRichContent(broadcastDetailText(svcPayload)) {
-		t.Errorf("broadcastDetailText is not rich content")
-	}
+	assertMonitorCardLayout(t, "broadcastMonitorText", broadcastMonitorText(svcPayload))
+	assertMonitorCardLayout(t, "broadcastDetailText", broadcastDetailText(svcPayload))
 
 	var mu sync.Mutex
 	var monSent []string
@@ -206,6 +213,9 @@ func TestMonitorAndJasebRichContent(t *testing.T) {
 		OwnerChatID: 7201, UserbotID: 8201, Tier: "Pro",
 		ExpiresAt: time.Now().Add(24 * time.Hour), Status: "active",
 	}
+	ctx := context.Background()
+	dm.notifyStartupStatus(ctx)
+	dm.checkAndReportHealth(ctx, true)
 	dm.NotifyBotLoader("gateway", "boot ok")
 	dm.NotifyDatabase("sqlite", "wal ok")
 	dm.NotifyInvoice("TRX-01 paid")
@@ -220,7 +230,6 @@ func TestMonitorAndJasebRichContent(t *testing.T) {
 	disp.EnqueueBatchEntry("MONITOR_USER_START", "👤 Ringkasan Start", monitorPriorityNormal, "User A started", "single")
 	disp.EnqueueBatchEntry("MONITOR_USER_START", "👤 Ringkasan Start", monitorPriorityNormal, "User B started", "single")
 
-	ctx := context.Background()
 	disp.flushBatches(dm.resolveTopic)
 	for draining := true; draining; {
 		select {
@@ -236,9 +245,7 @@ func TestMonitorAndJasebRichContent(t *testing.T) {
 		t.Fatalf("expected devMonitor to emit at least 1 message")
 	}
 	for i, msg := range monSent {
-		if !botgotd.IsRichContent(msg) {
-			t.Errorf("monitor message %d is not rich content: %q", i, msg)
-		}
+		assertMonitorCardLayout(t, "monitor["+strconv.Itoa(i)+"]", msg)
 	}
 
 	server, b, rpcLog := setupMockTelegramServer(t, nil)

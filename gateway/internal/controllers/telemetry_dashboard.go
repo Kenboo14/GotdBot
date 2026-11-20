@@ -296,54 +296,31 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	ramAllocMB, ramSysMB := m.Alloc/1024/1024, m.Sys/1024/1024
 	goroutines := runtime.NumGoroutine()
 
-	var simSection strings.Builder
+	rows := []monitorRichRow{
+		{Label: "🟢 Online", Value: fmt.Sprintf("<code>%d akun</code>", connected)},
+		{Label: "🟡 Menghubungkan", Value: fmt.Sprintf("<code>%d akun</code>", connecting)},
+		{Label: "🟠 Reconnecting", Value: fmt.Sprintf("<code>%d akun</code>", reconnecting)},
+		{Label: "🔴 Revoked / Invalid", Value: fmt.Sprintf("<code>%d akun</code>", revoked)},
+		{Label: "⚡ CPU All Image", Value: fmt.Sprintf("<code>%.2f%%</code>", cpuAll)},
+		{Label: "♾️ RAM All Image", Value: fmt.Sprintf("<code>%.2f MiB</code>", ramAll)},
+		{Label: "🧠 RAM Alloc / Sys", Value: fmt.Sprintf("<code>%d / %d MiB</code>", ramAllocMB, ramSysMB)},
+		{Label: "💻 Concurrency", Value: fmt.Sprintf("<code>%d Goroutines</code>", goroutines)},
+		{Label: "🚀 Redis Broker", Value: "<code>16 Workers (PEL Auto-Recovery)</code>"},
+		{Label: "🛡️ GC Tuning", Value: "<code>GOMEMLIMIT=1100MiB | GOGC=50</code>"},
+		{Label: "⏳ Uptime", Value: fmt.Sprintf("<code>%s</code>", time.Since(t.bootTime).Truncate(time.Second).String())},
+	}
 	if sim.Status == "RUNNING" {
-		ramAllocMB += sim.RAMAllocMB
-		ramSysMB += sim.RAMSysMB
-		goroutines += sim.Goroutines
-		fmt.Fprintf(&simSection, `
-<table border="1">
-  <tr><th>🧪 Simulasi Beban</th><th>📊 Metrik</th></tr>
-  <tr><td>Status / Users</td><td>🟢 <b>RUNNING</b> (<code>%d / %d</code>)</td></tr>
-  <tr><td>Updates (Gen / Proc / Fail)</td><td><code>%d / %d / %d</code></td></tr>
-  <tr><td>Queue / Throughput</td><td><code>%d queue · %.1f/detik</code></td></tr>
-  <tr><td>Latency (P50 / P95 / P99)</td><td><code>%.2f / %.2f / %.2f ms</code></td></tr>
-  <tr><td>Simulation Goroutines</td><td><code>%d</code></td></tr>
-</table>`,
-			sim.ActiveUsers, sim.TargetUsers,
-			sim.GeneratedUpdates, sim.ProcessedUpdates, sim.FailedUpdates,
-			sim.PendingQueue, sim.ThroughputSec,
-			sim.LatencyP50Ms, sim.LatencyP95Ms, sim.LatencyP99Ms, sim.Goroutines,
+		rows = append(rows,
+			monitorRichRow{Label: "🧪 Simulasi", Value: fmt.Sprintf("🟢 Running (<code>%d / %d</code>)", sim.ActiveUsers, sim.TargetUsers)},
+			monitorRichRow{Label: "📨 Updates", Value: fmt.Sprintf("<code>%d / %d / %d</code>", sim.GeneratedUpdates, sim.ProcessedUpdates, sim.FailedUpdates)},
+			monitorRichRow{Label: "📦 Queue / Rate", Value: fmt.Sprintf("<code>%d queue · %.1f/detik</code>", sim.PendingQueue, sim.ThroughputSec)},
+			monitorRichRow{Label: "⏱️ Latency", Value: fmt.Sprintf("<code>%.2f / %.2f / %.2f ms</code>", sim.LatencyP50Ms, sim.LatencyP95Ms, sim.LatencyP99Ms)},
+			monitorRichRow{Label: "🧵 Sim Goroutines", Value: fmt.Sprintf("<code>%d</code>", sim.Goroutines)},
 		)
 	}
+	rows = append(rows, monitorRichRow{Label: "🕒 Update", Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05"))})
 
-	return fmt.Sprintf(`<h1>📊 GOTDBOT TELEMETRY LIVE</h1>
-<table border="1">
-  <tr><th>👥 MTProto Session Pool</th><th>Jumlah</th></tr>
-  <tr><td>🟢 Online (Connected)</td><td><code>%d akun</code></td></tr>
-  <tr><td>🟡 Menghubungkan</td><td><code>%d akun</code></td></tr>
-  <tr><td>🟠 Reconnecting</td><td><code>%d akun</code></td></tr>
-  <tr><td>🔴 Revoked / Invalid</td><td><code>%d akun</code></td></tr>
-</table>
-<table border="1">
-  <tr><th>⚙️ Kesehatan Mesin &amp; Runtime</th><th>Nilai</th></tr>
-  <tr><td>⚡ CPU All Image</td><td><code>%.2f%%</code></td></tr>
-  <tr><td>♾️ RAM All Image</td><td><code>%.2f MiB</code></td></tr>
-  <tr><td>🧠 RAM Alloc / Sys</td><td><code>%d / %d MiB</code></td></tr>
-  <tr><td>💻 Concurrency</td><td><code>%d Goroutines</code></td></tr>
-  <tr><td>🚀 Redis Broker Pool</td><td><code>16 Workers (PEL Auto-Recovery)</code></td></tr>
-  <tr><td>🛡️ GC Tuning</td><td><code>GOMEMLIMIT=1100MiB | GOGC=50</code></td></tr>
-  <tr><td>⏳ Uptime</td><td><code>%s</code></td></tr>
-</table>%s
-<blockquote expandable>🟢 <b>ALL SYSTEMS OPERATIONAL</b> · 🕒 %s</blockquote>
-<hr/>
-<p>GotdBot • Live Telemetry Monitor</p>`,
-		connected, connecting, reconnecting, revoked,
-		cpuAll, ramAll, ramAllocMB, ramSysMB, goroutines,
-		time.Since(t.bootTime).Truncate(time.Second).String(),
-		simSection.String(),
-		time.Now().Format("15:04:05 WIB"),
-	)
+	return renderMonitorRichCard("📊 Telemetry Live GotdBot", rows, "ℹ️ 🟢 Semua sistem operasional · GotdBot Live Telemetry", false)
 }
 
 func (t *telemetryTracker) runAlertDigestLoop(ctx context.Context) {
@@ -396,14 +373,10 @@ drain:
 		}
 	}
 
-	var sb strings.Builder
-	sb.WriteString("<h1>🚨 GotdBot Alert Digest</h1>\n<table border=\"1\">\n  <tr><th>🕒 Waktu</th><th>👤 Akun</th><th>📌 Kejadian</th></tr>\n")
+	rows := make([]monitorRichRow, 0, len(collapsed)+1)
+	approxLen := 120
 	omitted := 0
 	for i, entry := range collapsed {
-		if i >= 15 || sb.Len() > 3300 {
-			omitted = len(collapsed) - i
-			break
-		}
 		alert := entry.item
 		icon := "⚠️"
 		stateUpper := strings.ToUpper(alert.State)
@@ -419,13 +392,26 @@ drain:
 		if entry.count > 1 {
 			suffix = fmt.Sprintf(" (x%d)", entry.count)
 		}
-		sb.WriteString(fmt.Sprintf("  <tr><td><code>%s</code></td><td><code>%d</code></td><td>%s %s%s</td></tr>\n",
-			alert.Timestamp.Format("15:04:05"), alert.ChatID, icon, html.EscapeString(truncateUTF8(alert.Reason, 160)), suffix))
+		row := monitorRichRow{
+			Label: fmt.Sprintf("%s %s", icon, alert.Timestamp.Format("15:04:05")),
+			Value: fmt.Sprintf("<code>%d</code> · %s%s", alert.ChatID, html.EscapeString(truncateUTF8(alert.Reason, 160)), suffix),
+		}
+		if i >= 15 || approxLen+len(row.Label)+len(row.Value)+40 > 3300 {
+			omitted = len(collapsed) - i
+			break
+		}
+		approxLen += len(row.Label) + len(row.Value) + 40
+		rows = append(rows, row)
 	}
-	sb.WriteString("</table>\n")
+	if len(rows) == 1 {
+		rows = append(rows, monitorRichRow{
+			Label: "🕒 Digest",
+			Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05")),
+		})
+	}
+	quote := "ℹ️ Ringkasan kejadian sesi terbaru · GotdBot Alert Monitor"
 	if omitted > 0 {
-		sb.WriteString(fmt.Sprintf("<blockquote expandable>… dan <b>+%d akun</b> lainnya diringkas.</blockquote>\n", omitted))
+		quote = fmt.Sprintf("ℹ️ … dan <b>+%d akun</b> lainnya diringkas · GotdBot Alert Monitor", omitted)
 	}
-	sb.WriteString("<hr/>\n<p>GotdBot • Alert Monitor</p>")
-	globalDevMonitor.EnqueueAlertDigest(sb.String())
+	globalDevMonitor.EnqueueAlertDigest(renderMonitorRichCard("🚨 Alert Digest GotdBot", rows, quote, false))
 }

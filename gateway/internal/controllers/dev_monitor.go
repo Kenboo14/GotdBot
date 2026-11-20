@@ -309,22 +309,14 @@ func (m *devMonitor) notifyStartupStatus(ctx context.Context) {
 		redisStatus = "🟢 Connected"
 	}
 
-	text := fmt.Sprintf(`<h1>🚀 BOT LOADER • GATEWAY READY</h1>
-<blockquote expandable>Layanan Gateway MTProto telah aktif dan siap memproses panel &amp; broker Redis.</blockquote>
-<table border="1">
-  <tr><th>Komponen</th><th>Status</th></tr>
-  <tr><td>📂 SQLite</td><td>%s</td></tr>
-  <tr><td>🍃 MongoDB</td><td>%s</td></tr>
-  <tr><td>⚡ Redis</td><td>%s</td></tr>
-  <tr><td>🧠 RAM VPS</td><td><code>%s</code></td></tr>
-  <tr><td>💻 CPU / Go</td><td><code>%d vCPU / %s</code></td></tr>
-</table>
-<hr/>
-<p>🕒 %s WIB · GotdBot Infra Monitor</p>`,
-		sqliteStatus, mongoStatus, redisStatus, html.EscapeString(snap.memDetail),
-		runtime.NumCPU(), html.EscapeString(runtime.Version()),
-		time.Now().Format("15:04:05"),
-	)
+	text := renderMonitorRichCard("🚀 Bot Loader · Gateway Ready", []monitorRichRow{
+		{Label: "📂 SQLite", Value: sqliteStatus},
+		{Label: "🍃 MongoDB", Value: mongoStatus},
+		{Label: "⚡ Redis", Value: redisStatus},
+		{Label: "🧠 RAM VPS", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(snap.memDetail))},
+		{Label: "💻 CPU / Go", Value: fmt.Sprintf("<code>%d vCPU / %s</code>", runtime.NumCPU(), html.EscapeString(runtime.Version()))},
+		{Label: "🕒 Waktu", Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05"))},
+	}, "ℹ️ Layanan Gateway MTProto aktif dan siap memproses panel serta broker Redis.", false)
 	m.enqueue("MONITOR_BOT_LOADER", "loader:gateway:startup", 30*time.Second, monitorPriorityHigh, text)
 }
 
@@ -344,13 +336,13 @@ func (m *devMonitor) checkAndReportHealth(ctx context.Context, forceStartup bool
 	}
 
 	icon := "🟢"
-	title := "DATABASE &amp; VPS HEALTH"
+	title := "Database &amp; VPS Health"
 	if !snap.dbHealth.SQLiteOK || !snap.redisOK || highRAM {
 		icon = "🔴"
-		title = "DATABASE / VPS WARNING"
+		title = "Database / VPS Warning"
 	} else if snap.mongoConfigured && !snap.dbHealth.MongoOK {
 		icon = "🟡"
-		title = "MONGODB FALLBACK ACTIVE"
+		title = "MongoDB Fallback Active"
 	}
 
 	sqliteBadge := "❌ Error"
@@ -380,25 +372,19 @@ func (m *devMonitor) checkAndReportHealth(ctx context.Context, forceStartup bool
 	if snap.redisErr != "" {
 		errs = append(errs, "• Redis: <code>"+html.EscapeString(snap.redisErr)+"</code>")
 	}
-	errBlock := ""
+	quote := "ℹ️ Seluruh komponen database dan VPS dalam kondisi sehat."
+	expandable := false
 	if len(errs) > 0 {
-		errBlock = "\n<blockquote expandable>" + strings.Join(errs, "\n") + "</blockquote>"
+		quote = strings.Join(errs, "\n")
+		expandable = true
 	}
 
-	text := fmt.Sprintf(`<h1>%s %s</h1>
-<table border="1">
-  <tr><th>Resource</th><th>Status</th></tr>
-  <tr><td>📂 SQLite</td><td>%s</td></tr>
-  <tr><td>🍃 MongoDB</td><td>%s</td></tr>
-  <tr><td>⚡ Redis</td><td>%s</td></tr>
-  <tr><td>🧠 RAM VPS</td><td><code>%s</code></td></tr>
-</table>%s
-<hr/>
-<p>🕒 %s WIB · GotdBot Infra Monitor</p>`,
-		icon, title,
-		sqliteBadge, mongoBadge, redisBadge,
-		html.EscapeString(snap.memDetail), errBlock,
-		time.Now().Format("15:04:05"),
-	)
+	text := renderMonitorRichCard(icon+" "+title, []monitorRichRow{
+		{Label: "📂 SQLite", Value: sqliteBadge},
+		{Label: "🍃 MongoDB", Value: mongoBadge},
+		{Label: "⚡ Redis", Value: redisBadge},
+		{Label: "🧠 RAM VPS", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(snap.memDetail))},
+		{Label: "🕒 Waktu", Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05"))},
+	}, quote, expandable)
 	m.enqueue("MONITOR_DATABASE", "dbhealth:"+summary, 5*time.Minute, monitorPriorityHigh, text)
 }

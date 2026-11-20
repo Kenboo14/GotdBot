@@ -51,6 +51,15 @@ func getTeksCacheTopicID() int {
 	return 3325
 }
 
+func getTopicCacheTopicID() int {
+	if val := strings.TrimSpace(os.Getenv("TOPIC_CACHE")); val != "" {
+		if id, err := strconv.Atoi(val); err == nil && id > 0 {
+			return id
+		}
+	}
+	return getTeksCacheTopicID()
+}
+
 func getWatermarkCacheTopicID() int {
 	if val := strings.TrimSpace(os.Getenv("WATERMARK_CACHE")); val != "" {
 		if id, err := strconv.Atoi(val); err == nil && id > 0 {
@@ -244,7 +253,8 @@ func (s *Service) sendTextToAiotdCachesTopic(ctx context.Context, client *gobot.
 	}
 
 	replyTo := &tg.InputReplyToMessage{
-		TopMsgID: topicID,
+		ReplyToMsgID: topicID,
+		TopMsgID:     topicID,
 	}
 
 	randomID := time.Now().UnixNano()

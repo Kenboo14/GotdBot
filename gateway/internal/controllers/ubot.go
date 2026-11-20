@@ -410,14 +410,13 @@ func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *botgotd.Bot, da
 
 func broadcastDetailText(data models.PFromService) string {
 	var builder strings.Builder
-	builder.WriteString("<h1>📊 Laporan Akhir Broadcast</h1>\n")
-	builder.WriteString("<table border=\"1\">\n  <tr><th>📊 Metrik</th><th>📌 Nilai</th></tr>\n")
-	fmt.Fprintf(&builder, "  <tr><td>✅ Terkirim</td><td><code>%d</code></td></tr>\n", data.Success)
-	fmt.Fprintf(&builder, "  <tr><td>❌ Gagal</td><td><code>%d</code></td></tr>\n", data.Failed)
-	fmt.Fprintf(&builder, "  <tr><td>🎯 Total Target</td><td><code>%d</code></td></tr>\n", data.Total)
+	builder.WriteString("<h1>📊 Laporan Akhir Broadcast</h1>\n<table>\n")
+	fmt.Fprintf(&builder, "  <tr><td><b>✅ Terkirim</b></td><td><code>%d</code></td></tr>\n", data.Success)
+	fmt.Fprintf(&builder, "  <tr><td><b>❌ Gagal</b></td><td><code>%d</code></td></tr>\n", data.Failed)
+	fmt.Fprintf(&builder, "  <tr><td><b>🎯 Total Target</b></td><td><code>%d</code></td></tr>\n", data.Total)
 	builder.WriteString("</table>\n")
 	if len(data.Errors) == 0 {
-		builder.WriteString("<blockquote expandable>Seluruh pesan siaran berhasil dikirim tanpa kendala.</blockquote>\n")
+		builder.WriteString("<blockquote>ℹ️ Seluruh pesan siaran berhasil dikirim tanpa kendala.</blockquote>")
 	} else {
 		builder.WriteString("<blockquote expandable><b>Catatan Kendala:</b>\n<pre>")
 		for index, item := range data.Errors {
@@ -432,9 +431,8 @@ func broadcastDetailText(data models.PFromService) string {
 			}
 			builder.WriteString(line)
 		}
-		builder.WriteString("</pre></blockquote>\n")
+		builder.WriteString("</pre></blockquote>")
 	}
-	builder.WriteString("<hr/>\n<p>Userbot Broadcast Service • GotdBot Monitor</p>")
 	return builder.String()
 }
 
@@ -460,15 +458,13 @@ func broadcastMonitorText(data models.PFromService) string {
 		}
 	}
 	return fmt.Sprintf(`<h1>%s</h1>
-<table border="1">
-  <tr><th>📊 Metrik</th><th>📌 Status</th></tr>
-  <tr><td>🚀 Progress</td><td><code>[%s] %s</code></td></tr>
-  <tr><td>✅ Terkirim</td><td><code>%d</code></td></tr>
-  <tr><td>❌ Gagal</td><td><code>%d</code></td></tr>
-  <tr><td>🎯 Total</td><td><code>%d</code></td></tr>
+<table>
+  <tr><td><b>🚀 Progress</b></td><td><code>[%s] %s</code></td></tr>
+  <tr><td><b>✅ Terkirim</b></td><td><code>%d</code></td></tr>
+  <tr><td><b>❌ Gagal</b></td><td><code>%d</code></td></tr>
+  <tr><td><b>🎯 Total</b></td><td><code>%d</code></td></tr>
 </table>
-<hr/>
-<p>Userbot Broadcast Service • Gotd</p>`, title, bar, status, data.Success, data.Failed, data.Total)
+<blockquote>ℹ️ Pantau progres pengiriman userbot secara berkala.</blockquote>`, title, bar, status, data.Success, data.Failed, data.Total)
 }
 
 func broadcastStopKeyboard(ownerID int64, taskID string) *botgotd.InlineKeyboardMarkup {
