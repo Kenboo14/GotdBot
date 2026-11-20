@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Kenboo14/GoBot/keyboard"
 	"github.com/gotd/td/telegram/message/rich"
 	"github.com/gotd/td/tg"
 )
@@ -196,6 +197,10 @@ func postBotAPIJSON(ctx context.Context, b *botgotd.Bot, method string, body map
 }
 
 func sendMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, threadID int, htmlText string) (*botgotd.Message, error) {
+	return sendMonitorRichMessageWithMarkup(ctx, b, target, threadID, htmlText, nil)
+}
+
+func sendMonitorRichMessageWithMarkup(ctx context.Context, b *botgotd.Bot, target any, threadID int, htmlText string, markup botgotd.ReplyMarkup) (*botgotd.Message, error) {
 	if b == nil {
 		return nil, nil
 	}
@@ -203,12 +208,14 @@ func sendMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, thr
 	if b.API != nil && b.Peers != nil && chatID != 0 {
 		if peer := b.Peers.GetInputPeer(chatID); isValidMTProtoPeer(chatID, peer) {
 			plainText, entities := botgotd.ParseHTML(htmlText)
+			mtMarkup := keyboard.ConvertReplyMarkup(markup)
 			newReq := func(rm tg.InputRichMessageClass) *tg.MessagesSendMessageRequest {
 				req := &tg.MessagesSendMessageRequest{
-					Peer:     peer,
-					Message:  plainText,
-					Entities: entities,
-					RandomID: randomMTProtoID(),
+					Peer:        peer,
+					Message:     plainText,
+					Entities:    entities,
+					ReplyMarkup: mtMarkup,
+					RandomID:    randomMTProtoID(),
 				}
 				if threadID > 0 {
 					req.SetReplyTo(&tg.InputReplyToMessage{
@@ -248,6 +255,9 @@ func sendMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, thr
 		if threadID > 0 {
 			richBody["message_thread_id"] = threadID
 		}
+		if markup != nil {
+			richBody["reply_markup"] = markup
+		}
 		status, respBody, err := postBotAPIJSON(ctx, b, "sendRichMessage", richBody)
 		if err == nil {
 			var envelope struct {
@@ -276,6 +286,9 @@ func sendMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, thr
 		if threadID > 0 {
 			stdBody["message_thread_id"] = threadID
 		}
+		if markup != nil {
+			stdBody["reply_markup"] = markup
+		}
 		status, respBody, err = postBotAPIJSON(ctx, b, "sendMessage", stdBody)
 		if err != nil {
 			return nil, fmt.Errorf("sendMessage http: %w", err)
@@ -300,6 +313,10 @@ func sendMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, thr
 }
 
 func editMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, msgID int, htmlText string) (*botgotd.Message, error) {
+	return editMonitorRichMessageWithMarkup(ctx, b, target, msgID, htmlText, nil)
+}
+
+func editMonitorRichMessageWithMarkup(ctx context.Context, b *botgotd.Bot, target any, msgID int, htmlText string, markup botgotd.ReplyMarkup) (*botgotd.Message, error) {
 	if b == nil {
 		return nil, nil
 	}
@@ -307,12 +324,14 @@ func editMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, msg
 	if b.API != nil && b.Peers != nil && chatID != 0 {
 		if peer := b.Peers.GetInputPeer(chatID); isValidMTProtoPeer(chatID, peer) {
 			plainText, entities := botgotd.ParseHTML(htmlText)
+			mtMarkup := keyboard.ConvertReplyMarkup(markup)
 			newReq := func(rm tg.InputRichMessageClass) *tg.MessagesEditMessageRequest {
 				req := &tg.MessagesEditMessageRequest{
-					Peer:     peer,
-					ID:       msgID,
-					Message:  plainText,
-					Entities: entities,
+					Peer:        peer,
+					ID:          msgID,
+					Message:     plainText,
+					Entities:    entities,
+					ReplyMarkup: mtMarkup,
 				}
 				req.SetRichMessage(rm)
 				return req
@@ -332,9 +351,10 @@ func editMonitorRichMessage(ctx context.Context, b *botgotd.Bot, target any, msg
 		}
 	}
 	return b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
-		ChatID:    target,
-		MessageID: msgID,
-		Text:      htmlText,
-		ParseMode: botgotd.ParseModeHTML,
+		ChatID:      target,
+		MessageID:   msgID,
+		Text:        htmlText,
+		ParseMode:   botgotd.ParseModeHTML,
+		ReplyMarkup: markup,
 	})
 }

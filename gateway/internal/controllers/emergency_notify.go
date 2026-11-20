@@ -108,24 +108,31 @@ func (h *Handler) dispatchSessionRevokedBackup(b *botgotd.Bot, chatID int64, rea
 	if b != nil {
 		adminIDs := parseAdminChatIDs(cfg.Admin, chatID)
 		if len(adminIDs) > 0 {
-			alertHTML := fmt.Sprintf(`<h1>🚨 Alert Pemulihan Sesi Userbot</h1>
-<table border="1">
-  <tr><th>📌 Properti</th><th>Keterangan</th></tr>
-  <tr><td>👤 Akun ID</td><td><code>%d</code></td></tr>
-  <tr><td>⚠️ Alasan</td><td><code>%s</code></td></tr>
-</table>
-<blockquote expandable>%s%s
-<i>Simpan kode di atas untuk memulihkan paket/data ke akun baru bila diperlukan.</i></blockquote>
-<hr/>
-<p>GotdBot • Emergency Session Monitor</p>`,
-				chatID, html.EscapeString(cleanReason), tokenLineHTML, backupLineHTML,
-			)
-			for _, adminID := range adminIDs {
-				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:    adminID,
-					Text:      alertHTML,
-					ParseMode: "HTML",
+			rows := []monitorRichRow{
+				{Label: "👤 Akun ID", Value: fmt.Sprintf("<code>%d</code>", chatID)},
+				{Label: "⚠️ Alasan", Value: html.EscapeString(cleanReason)},
+			}
+			if lic != nil && databases.GetTierPolicy(lic.Tier).AllowLicenseToken {
+				rows = append(rows, monitorRichRow{
+					Label: "🔑 Token SHA",
+					Value: fmt.Sprintf("<code>%s</code> (%s)", html.EscapeString(lic.TokenSHA), html.EscapeString(lic.Tier)),
 				})
+			}
+			var backupSummary string
+			if strings.Contains(backupLineHTML, "GOTD_BKP:") {
+				parts := strings.SplitN(backupLineHTML, "\n", 3)
+				if len(parts) >= 2 {
+					backupSummary = strings.TrimSpace(parts[1])
+				}
+			}
+			if backupSummary != "" {
+				rows = append(rows, monitorRichRow{Label: "💾 Backup Data", Value: backupSummary})
+			}
+			rows = append(rows, monitorRichRow{Label: "🕒 Waktu", Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05"))})
+			quote := fmt.Sprintf("ℹ️ %s%s<i>Simpan kode di atas untuk memulihkan paket/data ke akun baru bila diperlukan · Emergency Session Monitor.</i>", tokenLineHTML, backupLineHTML)
+			alertHTML := renderMonitorRichCard("🚨 Alert Pemulihan Sesi Userbot", rows, quote, true)
+			for _, adminID := range adminIDs {
+				_, _ = sendMonitorRichMessage(ctx, b, adminID, 0, alertHTML)
 			}
 		}
 	}

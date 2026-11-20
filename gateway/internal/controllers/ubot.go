@@ -365,11 +365,9 @@ func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *botgotd.Bot, da
 	if data.ChatID == 0 || data.TaskID == "" {
 		return
 	}
+	markup := broadcastStopKeyboard(data.OwnerID, data.TaskID)
 	if data.Type == "broadcast_start" {
-		msg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: data.ChatID, Text: broadcastMonitorText(data), ParseMode: "HTML",
-			ReplyMarkup: broadcastStopKeyboard(data.OwnerID, data.TaskID),
-		})
+		msg, err := sendMonitorRichMessageWithMarkup(ctx, b, data.ChatID, data.ThreadID, broadcastMonitorText(data), markup)
 		if err != nil {
 			log.Printf("broadcast monitor start failed: %v", err)
 			return
@@ -385,20 +383,11 @@ func (h *Handler) handleBroadcastMonitor(ctx context.Context, b *botgotd.Bot, da
 	if !ok {
 		return
 	}
-	params := &botgotd.EditMessageTextParams{
-		ChatID: monitor.ChatID, MessageID: monitor.MessageID,
-		Text: broadcastMonitorText(data), ParseMode: "HTML",
-	}
+	text := broadcastMonitorText(data)
 	if data.Type == "broadcast_done" {
-		// The final report replaces the progress message instead of creating a
-		// second message in the owner's private chat.
-		params.Text = broadcastDetailText(data)
+		text = broadcastDetailText(data)
 	}
-	// Keep the stop button visible on the same monitor message, including the
-	// final report. Pressing it after completion is harmless because the worker
-	// has already removed the task.
-	params.ReplyMarkup = broadcastStopKeyboard(data.OwnerID, data.TaskID)
-	if _, err := b.EditMessageText(ctx, params); err != nil {
+	if _, err := editMonitorRichMessageWithMarkup(ctx, b, monitor.ChatID, monitor.MessageID, text, markup); err != nil {
 		log.Printf("broadcast monitor update failed: %v", err)
 	}
 	if data.Type == "broadcast_done" {

@@ -296,6 +296,15 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 	ramAllocMB, ramSysMB := m.Alloc/1024/1024, m.Sys/1024/1024
 	goroutines := runtime.NumGoroutine()
 
+	memLimit := strings.TrimSpace(os.Getenv("GOMEMLIMIT"))
+	if memLimit == "" {
+		memLimit = "85MiB"
+	}
+	gogc := strings.TrimSpace(os.Getenv("GOGC"))
+	if gogc == "" {
+		gogc = "30"
+	}
+
 	rows := []monitorRichRow{
 		{Label: "🟢 Online", Value: fmt.Sprintf("<code>%d akun</code>", connected)},
 		{Label: "🟡 Menghubungkan", Value: fmt.Sprintf("<code>%d akun</code>", connecting)},
@@ -306,7 +315,7 @@ func (t *telemetryTracker) formatDashboardHTML() string {
 		{Label: "🧠 RAM Alloc / Sys", Value: fmt.Sprintf("<code>%d / %d MiB</code>", ramAllocMB, ramSysMB)},
 		{Label: "💻 Concurrency", Value: fmt.Sprintf("<code>%d Goroutines</code>", goroutines)},
 		{Label: "🚀 Redis Broker", Value: "<code>16 Workers (PEL Auto-Recovery)</code>"},
-		{Label: "🛡️ GC Tuning", Value: "<code>GOMEMLIMIT=1100MiB | GOGC=50</code>"},
+		{Label: "🛡️ GC Tuning", Value: fmt.Sprintf("<code>GOMEMLIMIT=%s | GOGC=%s</code>", html.EscapeString(memLimit), html.EscapeString(gogc))},
 		{Label: "⏳ Uptime", Value: fmt.Sprintf("<code>%s</code>", time.Since(t.bootTime).Truncate(time.Second).String())},
 	}
 	if sim.Status == "RUNNING" {

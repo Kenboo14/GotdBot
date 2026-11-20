@@ -14,6 +14,7 @@ import (
 	"html"
 	"log"
 	"net"
+	"os"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -764,18 +765,19 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 
 	// Step 3: Edit message
 	editStart := time.Now()
-	_, editErr := b.EditMessageText(ctx, edit)
+	var editErr error
+	if isInline || update.CallbackQuery.Message == nil || update.CallbackQuery.Message.Message == nil {
+		_, editErr = b.EditMessageText(ctx, edit)
+	} else {
+		_, editErr = editMonitorRichMessageWithMarkup(ctx, b, edit.ChatID, edit.MessageID, text, markup)
+	}
 	editDur = time.Since(editStart)
 	rpcCount++
 
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		if !isInline && edit.ChatID != nil {
-			if newMsg, sendErr := b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      edit.ChatID,
-				Text:        text,
-				ParseMode:   "HTML",
-				ReplyMarkup: markup,
-			}); sendErr == nil && newMsg != nil {
+		if !isInline && edit.ChatID != nil && update.CallbackQuery.Message != nil && update.CallbackQuery.Message.Message != nil {
+			threadID := update.CallbackQuery.Message.Message.MessageThreadID
+			if newMsg, sendErr := sendMonitorRichMessageWithMarkup(ctx, b, edit.ChatID, threadID, text, markup); sendErr == nil && newMsg != nil {
 				_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{
 					ChatID:    edit.ChatID,
 					MessageID: edit.MessageID,
@@ -793,26 +795,44 @@ func (h *Handler) serverCallback(ctx context.Context, b *botgotd.Bot, update *bo
 }
 
 func (h *Handler) HelpCommandMenu(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
+	if update == nil || update.Message == nil {
+		return
+	}
+	fields := strings.Fields(strings.TrimSpace(update.Message.Text))
+	if len(fields) == 0 {
+		return
+	}
+	lowerCmd := strings.ToLower(fields[0])
+	if lowerCmd != "/help" && !strings.HasPrefix(lowerCmd, "/help@") {
+		return
+	}
+	if update.Message.From != nil && isOwner(update.Message.From.ID) {
+		if len(fields) >= 2 && strings.EqualFold(fields[1], "user") {
+			h.sendHelpInitialPrompt(ctx, b, update)
+			return
+		}
+		page := 1
+		if len(fields) >= 2 {
+			page = resolveOwnerHelpPageArg(fields[1])
+		}
+		h.SendOwnerHelp(ctx, b, update, page)
+		return
+	}
 	h.sendHelpInitialPrompt(ctx, b, update)
 }
 
 func (h *Handler) ServerCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
-	if update.Message == nil {
+	if update == nil || update.Message == nil {
 		return
 	}
+	globalDevMonitor.ObserveIncomingChat(update.Message.Chat)
 	invokeStart := time.Now()
 	var invokerID int64
 	if update.Message.From != nil {
 		invokerID = update.Message.From.ID
 	}
 	text := serverStatusTextRich(invokerID, time.Since(invokeStart))
-	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:          update.Message.Chat.ID,
-		MessageThreadID: update.Message.MessageThreadID,
-		Text:            text,
-		ParseMode:       "HTML",
-		ReplyMarkup:     serverKeyboard(),
-	})
+	_, _ = sendMonitorRichMessageWithMarkup(ctx, b, update.Message.Chat.ID, update.Message.MessageThreadID, text, serverKeyboard())
 }
 
 func (h *Handler) CodeCommand(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
@@ -1149,68 +1169,44 @@ func collectServerStats(invokerID int64, invokeDuration time.Duration) *serverSt
 
 func serverStatusTextRich(invokerID int64, invokeDuration time.Duration) string {
 	st := collectServerStats(invokerID, invokeDuration)
-	nowStr := time.Now().Format("15:04:05 WIB")
-
-	simulasiTable := ""
-	if st.simulasi.Status == "RUNNING" {
-		sim := st.simulasi
-		simulasiTable = fmt.Sprintf(`
-
-<table border="1">
-  <tr><th>🧪 Simulasi Beban</th><th>📊 Metrik Live</th></tr>
-  <tr><td>👥 Target / Aktif</td><td><code>%d / %d Users</code></td></tr>
-  <tr><td>📨 Updates (Gen/Proc)</td><td><code>%d / %d</code></td></tr>
-  <tr><td>🚀 Throughput</td><td><code>%.1f updates/sec</code></td></tr>
-  <tr><td>⏱️ Latensi P50 / P99</td><td><code>%.2f ms / %.2f ms</code></td></tr>
-  <tr><td>🧵 Goroutines</td><td><code>%d</code></td></tr>
-</table>`,
-			sim.TargetUsers, sim.ActiveUsers,
-			sim.GeneratedUpdates, sim.ProcessedUpdates,
-			sim.ThroughputSec,
-			sim.LatencyP50Ms, sim.LatencyP99Ms,
-			sim.Goroutines,
-		)
+	memLimit := strings.TrimSpace(os.Getenv("GOMEMLIMIT"))
+	if memLimit == "" {
+		memLimit = "85MiB"
+	}
+	gogc := strings.TrimSpace(os.Getenv("GOGC"))
+	if gogc == "" {
+		gogc = "30"
 	}
 
-	return fmt.Sprintf(`⚡ <b>[GOTDBOT SYSTEM & SERVER STATUS]</b>
-🕒 <b>Waktu:</b> %s | ⏳ <b>Uptime:</b> %s
+	rows := []monitorRichRow{
+		{Label: "🐧 OS / Arch", Value: fmt.Sprintf("<code>%s (%s)</code>", html.EscapeString(st.osPlatform), html.EscapeString(st.kernelArch))},
+		{Label: "⚙️ CPU Host", Value: fmt.Sprintf("<code>%.1f%% (%d vCPU)</code>", st.cpuUsage, st.numCPU)},
+		{Label: "🧠 RAM VPS", Value: fmt.Sprintf("<code>%.1f / %.1f MiB (%.1f%%)</code>", st.usedRAMMB, st.totalRAMMB, st.ramPercent)},
+		{Label: "💾 Swap VPS", Value: fmt.Sprintf("<code>%.1f / %.1f MiB (%.1f%%)</code>", st.usedSwapMB, st.totalSwapMB, st.swapPercent)},
+		{Label: "🌐 Ping Server", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(st.serverPingStr))},
+		{Label: "👤 User Invoke", Value: fmt.Sprintf("%s (<code>%s</code>)", st.userInvokeStr, html.EscapeString(st.invokeStr))},
+		{Label: "👥 Sesi MTProto", Value: fmt.Sprintf("<code>%d Online (%d Revoked)</code>", st.connected, st.revoked)},
+		{Label: "⚡ CPU Container", Value: fmt.Sprintf("<code>%.2f%%</code>", st.cpuAllImage)},
+		{Label: "♾️ RAM Container", Value: fmt.Sprintf("<code>%.2f MiB</code>", st.ramAllImage)},
+		{Label: "🧠 Go Alloc / Sys", Value: fmt.Sprintf("<code>%.0f MiB / %.0f MiB</code>", st.heapAllocMB, st.sysMemMB)},
+		{Label: "💻 Concurrency", Value: fmt.Sprintf("<code>%d Goroutines</code>", st.goroutines)},
+		{Label: "🚀 Redis Broker", Value: "<code>16 Workers (PEL)</code>"},
+		{Label: "🛡️ GC Tuning", Value: fmt.Sprintf("<code>GOMEMLIMIT=%s | GOGC=%s</code>", html.EscapeString(memLimit), html.EscapeString(gogc))},
+		{Label: "⏳ Uptime", Value: fmt.Sprintf("<code>%s</code>", html.EscapeString(st.uptimeStr))},
+	}
+	if st.simulasi.Status == "RUNNING" {
+		sim := st.simulasi
+		rows = append(rows,
+			monitorRichRow{Label: "🧪 Simulasi", Value: fmt.Sprintf("<code>%d / %d Users</code>", sim.TargetUsers, sim.ActiveUsers)},
+			monitorRichRow{Label: "📨 Sim Updates", Value: fmt.Sprintf("<code>%d / %d</code>", sim.GeneratedUpdates, sim.ProcessedUpdates)},
+			monitorRichRow{Label: "🚀 Sim Throughput", Value: fmt.Sprintf("<code>%.1f updates/sec</code>", sim.ThroughputSec)},
+			monitorRichRow{Label: "⏱️ Sim Latensi", Value: fmt.Sprintf("<code>%.2f ms / %.2f ms</code>", sim.LatencyP50Ms, sim.LatencyP99Ms)},
+			monitorRichRow{Label: "🧵 Sim Goroutines", Value: fmt.Sprintf("<code>%d</code>", sim.Goroutines)},
+		)
+	}
+	rows = append(rows, monitorRichRow{Label: "🕒 Waktu", Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05"))})
 
-<table border="1">
-  <tr><th>💻 Host VPS</th><th>📊 Spesifikasi</th></tr>
-  <tr><td>🐧 OS / Arch</td><td><code>%s (%s)</code></td></tr>
-  <tr><td>⚙️ CPU Host</td><td><code>%.1f%% (%d vCPU)</code></td></tr>
-  <tr><td>🧠 RAM VPS</td><td><code>%.1f / %.1f MiB (%.1f%%)</code></td></tr>
-  <tr><td>💾 Swap VPS</td><td><code>%.1f / %.1f MiB (%.1f%%)</code></td></tr>
-  <tr><td>🌐 Ping Server</td><td><code>%s</code></td></tr>
-  <tr><td>👤 User Invoke</td><td>%s (<code>%s</code>)</td></tr>
-</table>
-
-<table border="1">
-  <tr><th>⚙️ GotdBot Runtime</th><th>📊 Metrik Live</th></tr>
-  <tr><td>👥 Sesi MTProto</td><td><code>%d Online (%d Revoked)</code></td></tr>
-  <tr><td>⚡ CPU Container</td><td><code>%.2f%%</code></td></tr>
-  <tr><td>♾️ RAM Container</td><td><code>%.2f MiB</code></td></tr>
-  <tr><td>🧠 Go Alloc / Sys</td><td><code>%.0f MiB / %.0f MiB</code></td></tr>
-  <tr><td>💻 Concurrency</td><td><code>%d Goroutines</code></td></tr>
-  <tr><td>🚀 Redis Broker</td><td><code>16 Workers (PEL)</code></td></tr>
-  <tr><td>🛡️ GC Tuning</td><td><code>GOMEMLIMIT=1100M</code></td></tr>
-</table>%s
-────────────────────────
-Status: 🟢 <b>ALL SYSTEMS OPERATIONAL</b>
-<i>GotdBot Infrastructure • Layer 227 MTProto</i>`,
-		nowStr, st.uptimeStr,
-		st.osPlatform, st.kernelArch,
-		st.cpuUsage, st.numCPU,
-		st.usedRAMMB, st.totalRAMMB, st.ramPercent,
-		st.usedSwapMB, st.totalSwapMB, st.swapPercent,
-		st.serverPingStr,
-		st.userInvokeStr, st.invokeStr,
-		st.connected, st.revoked,
-		st.cpuAllImage, st.ramAllImage,
-		st.heapAllocMB, st.sysMemMB,
-		st.goroutines,
-		simulasiTable,
-	)
+	return renderMonitorRichCard("⚡ System &amp; Server Status", rows, "ℹ️ 🟢 Semua sistem operasional · GotdBot Infrastructure Monitor.", false)
 }
 
 func serverStatusTextPlain(invokerID int64, invokeDuration time.Duration) string {
