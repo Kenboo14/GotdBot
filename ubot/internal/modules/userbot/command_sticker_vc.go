@@ -2,17 +2,163 @@ package userbot
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
 )
+
+type vcSessionState struct {
+	call   *tg.InputGroupCall
+	ssrc   int
+	cancel context.CancelFunc
+}
+
+var (
+	vcSessionMu sync.Mutex
+	vcSessions  = make(map[string]*vcSessionState)
+)
+
+func vcSessionKey(ownerID int64, target tg.InputPeerClass) string {
+	return fmt.Sprintf("%d:%s", ownerID, vcTargetKey(target))
+}
+
+func vcTargetKey(target tg.InputPeerClass) string {
+	switch p := target.(type) {
+	case *tg.InputPeerChannel:
+		return fmt.Sprintf("c:%d", p.ChannelID)
+	case *tg.InputPeerChat:
+		return fmt.Sprintf("g:%d", p.ChatID)
+	default:
+		return "unknown"
+	}
+}
+
+func isVCChatPeer(target tg.InputPeerClass) bool {
+	switch target.(type) {
+	case *tg.InputPeerChannel, *tg.InputPeerChat:
+		return true
+	default:
+		return false
+	}
+}
+
+func storeVCSession(key string, call *tg.InputGroupCall, ssrc int, cancel context.CancelFunc) {
+	if key == "" || call == nil {
+		return
+	}
+	vcSessionMu.Lock()
+	if prev, ok := vcSessions[key]; ok && prev != nil && prev.cancel != nil {
+		prev.cancel()
+	}
+	vcSessions[key] = &vcSessionState{
+		call:   call,
+		ssrc:   ssrc,
+		cancel: cancel,
+	}
+	vcSessionMu.Unlock()
+}
+
+func getStoredVCCall(key string) *tg.InputGroupCall {
+	vcSessionMu.Lock()
+	defer vcSessionMu.Unlock()
+	if st, ok := vcSessions[key]; ok && st != nil && st.call != nil {
+		return st.call
+	}
+	return nil
+}
+
+func popVCSession(key string) *vcSessionState {
+	vcSessionMu.Lock()
+	defer vcSessionMu.Unlock()
+	st := vcSessions[key]
+	delete(vcSessions, key)
+	if st != nil && st.cancel != nil {
+		st.cancel()
+	}
+	return st
+}
+
+func vcRandomPositive32() int {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		v := int(binary.BigEndian.Uint32(b[:]) & 0x7ffffffe)
+		if v > 0 {
+			return v
+		}
+	}
+	v := int(time.Now().UnixNano() & 0x7ffffffe)
+	if v <= 0 {
+		return 100001
+	}
+	return v
+}
+
+func vcRandomHex(nBytes int) string {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		binary.BigEndian.PutUint64(b, uint64(time.Now().UnixNano()))
+	}
+	return hex.EncodeToString(b)
+}
+
+func buildVCJoinParams() (tg.DataJSON, int, error) {
+	ssrc := vcRandomPositive32()
+	fpBytes := make([]byte, 32)
+	if _, err := rand.Read(fpBytes); err != nil {
+		return tg.DataJSON{}, 0, fmt.Errorf("buat fingerprint WebRTC: %w", err)
+	}
+	parts := make([]string, len(fpBytes))
+	for i, bt := range fpBytes {
+		parts[i] = fmt.Sprintf("%02X", bt)
+	}
+	payload := map[string]any{
+		"ufrag": vcRandomHex(4),
+		"pwd":   vcRandomHex(12),
+		"fingerprints": []map[string]any{
+			{
+				"hash":        "sha-256",
+				"setup":       "active",
+				"fingerprint": strings.Join(parts, ":"),
+			},
+		},
+		"ssrc": ssrc,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return tg.DataJSON{}, 0, fmt.Errorf("marshal parameter WebRTC: %w", err)
+	}
+	return tg.DataJSON{Data: string(raw)}, ssrc, nil
+}
+
+func extractGroupCallFromUpdates(updates tg.UpdatesClass) *tg.InputGroupCall {
+	scan := func(items []tg.UpdateClass) *tg.InputGroupCall {
+		for _, item := range items {
+			ug, ok := item.(*tg.UpdateGroupCall)
+			if !ok {
+				continue
+			}
+			if gc, ok := ug.Call.(*tg.GroupCall); ok && gc != nil && gc.ID != 0 {
+				return gc.AsInput()
+			}
+		}
+		return nil
+	}
+	switch u := updates.(type) {
+	case *tg.Updates:
+		return scan(u.Updates)
+	case *tg.UpdatesCombined:
+		return scan(u.Updates)
+	}
+	return nil
+}
 
 func extractStickerDocument(reply *tg.Message) (*tg.Document, *tg.DocumentAttributeSticker) {
 	if reply == nil {
@@ -145,212 +291,56 @@ func getActiveGroupCall(ctx context.Context, client *gobot.Client, target tg.Inp
 	return call, nil
 }
 
-func (s *Service) vcCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, name, args string, threadID int) error {
-	switch name {
-	case "startvc":
-		req := &tg.PhoneCreateGroupCallRequest{
-			Peer:     target,
-			RandomID: int(randInt64()),
-		}
-		if title := strings.TrimSpace(args); title != "" {
-			req.SetTitle(title)
-		}
-		if _, err := client.API().PhoneCreateGroupCall(ctx, req); err != nil {
-			return sendUserText(ctx, client, target, "Gagal memulai Voice Chat: "+err.Error(), threadID)
-		}
-		return sendUserText(ctx, client, target, "Voice Chat berhasil dimulai.", threadID)
-	case "stopvc":
-		call, err := getActiveGroupCall(ctx, client, target)
-		if err != nil {
-			return sendUserText(ctx, client, target, err.Error(), threadID)
-		}
-		if _, err := client.API().PhoneDiscardGroupCall(ctx, call); err != nil {
-			return sendUserText(ctx, client, target, "Gagal menghentikan Voice Chat: "+err.Error(), threadID)
-		}
-		return sendUserText(ctx, client, target, "Voice Chat dihentikan.", threadID)
-	case "setvc":
-		title := strings.TrimSpace(args)
-		if title == "" {
-			return sendUserText(ctx, client, target, "Gunakan: !setvc <judul baru>", threadID)
-		}
-		call, err := getActiveGroupCall(ctx, client, target)
-		if err != nil {
-			return sendUserText(ctx, client, target, err.Error(), threadID)
-		}
-		if _, err := client.API().PhoneEditGroupCallTitle(ctx, &tg.PhoneEditGroupCallTitleRequest{
-			Call:  call,
-			Title: title,
-		}); err != nil {
-			return sendUserText(ctx, client, target, "Gagal mengubah judul Voice Chat: "+err.Error(), threadID)
-		}
-		return sendUserText(ctx, client, target, "Judul Voice Chat diperbarui: "+title, threadID)
-	case "joinvc":
-		call, err := getActiveGroupCall(ctx, client, target)
-		if err != nil {
-			return sendUserText(ctx, client, target, err.Error(), threadID)
-		}
-		_, err = client.API().PhoneJoinGroupCall(ctx, &tg.PhoneJoinGroupCallRequest{
-			Muted:        true,
-			VideoStopped: true,
-			Call:         call,
-			JoinAs:       &tg.InputPeerSelf{},
-			Params:       tg.DataJSON{Data: "{}"},
-		})
-		if err != nil {
-			return sendUserText(ctx, client, target, fmt.Sprintf("Voice Chat aktif (call_id=%d), signaling join: %v", call.ID, err), threadID)
-		}
-		return sendUserText(ctx, client, target, fmt.Sprintf("Bergabung ke Voice Chat (call_id=%d).", call.ID), threadID)
-	case "leavevc":
-		call, err := getActiveGroupCall(ctx, client, target)
-		if err != nil {
-			return sendUserText(ctx, client, target, err.Error(), threadID)
-		}
-		if _, err := client.API().PhoneLeaveGroupCall(ctx, &tg.PhoneLeaveGroupCallRequest{
-			Call:   call,
-			Source: 0,
-		}); err != nil {
-			return sendUserText(ctx, client, target, "Keluar dari Voice Chat: "+err.Error(), threadID)
-		}
-		return sendUserText(ctx, client, target, "Berhasil keluar dari Voice Chat.", threadID)
-	case "play", "video", "ytmusic", "ytvideo":
-		query := strings.TrimSpace(args)
-		if query == "" {
-			if replyTxt, _, rErr := repliedText(ctx, client, target, msg); rErr == nil {
-				query = strings.TrimSpace(replyTxt)
-			}
-		}
-		if query == "" {
-			return sendUserText(ctx, client, target, fmt.Sprintf("Gunakan: !%s <judul|link>", name), threadID)
-		}
-		call, err := getActiveGroupCall(ctx, client, target)
-		if err != nil {
-			return sendUserText(ctx, client, target, "Pastikan Voice Chat aktif terlebih dahulu (!startvc): "+err.Error(), threadID)
-		}
-		title := query
-		if strings.HasPrefix(strings.ToLower(query), "http") {
-			reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			oembedURL := "https://www.youtube.com/oembed?url=" + url.QueryEscape(query) + "&format=json"
-			if req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodGet, oembedURL, nil); reqErr == nil {
-				if resp, rErr := toolHTTPClient.Do(req); rErr == nil {
-					raw, _ := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
-					_ = resp.Body.Close()
-					var meta struct {
-						Title      string `json:"title"`
-						AuthorName string `json:"author_name"`
-					}
-					if json.Unmarshal(raw, &meta) == nil && meta.Title != "" {
-						title = fmt.Sprintf("%s (%s)", meta.Title, meta.AuthorName)
-					}
-				}
-			}
-			cancel()
-		}
-		modeLabel := "Audio Stream"
-		if name == "video" || name == "ytvideo" {
-			modeLabel = "Video Stream"
-		}
-		return sendUserText(ctx, client, target, fmt.Sprintf("VC Queue (%s | Call %d):\nMedia: %s\nStatus: Terdaftar (catatan: WebRTC media encoder eksternal belum terpasang di container hemat RAM).", modeLabel, call.ID, title), threadID)
+func (s *Service) resolveActiveGroupCall(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, key string) (*tg.InputGroupCall, error) {
+	call, err := getActiveGroupCall(ctx, client, target)
+	if err == nil && call != nil {
+		return call, nil
 	}
-	return nil
+	if cached := getStoredVCCall(key); cached != nil {
+		return cached, nil
+	}
+	return nil, err
 }
 
-func (s *Service) dispatchExtendedCommand(ctx context.Context, client *gobot.Client, chatID int64, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, name, args string, threadID int) (bool, error) {
-	switch name {
-	case "lsudo":
-		return true, s.listSudoCommand(ctx, client, target, threadID)
-	case "clearsudo":
-		return true, s.clearSudoCommand(ctx, client, target, msg, threadID)
-	case "ban":
-		return true, s.banCommand(ctx, client, target, msg, entities, args, false, threadID)
-	case "unban":
-		return true, s.banCommand(ctx, client, target, msg, entities, args, true, threadID)
-	case "kick":
-		return true, s.kickCommand(ctx, client, target, msg, entities, args, threadID)
-	case "mute":
-		return true, s.muteCommand(ctx, client, target, msg, entities, args, false, threadID)
-	case "unmute":
-		return true, s.muteCommand(ctx, client, target, msg, entities, args, true, threadID)
-	case "promote", "fullpromote", "demote":
-		return true, s.adminRoleCommand(ctx, client, target, msg, entities, args, name, threadID)
-	case "pin":
-		return true, s.pinCommand(ctx, client, target, msg, args, false, threadID)
-	case "unpin":
-		return true, s.pinCommand(ctx, client, target, msg, args, true, threadID)
-	case "del":
-		return true, s.delCommand(ctx, client, target, msg, threadID)
-	case "purge":
-		return true, s.purgeCommand(ctx, client, target, msg, threadID)
-	case "dh":
-		return true, s.deleteHistoryCommand(ctx, client, target, msg, args, threadID)
-	case "zombies":
-		return true, s.zombiesCommand(ctx, client, target, threadID)
-	case "gban":
-		return true, s.gbanCommand(ctx, client, target, msg, entities, args, false, threadID)
-	case "ungban":
-		return true, s.gbanCommand(ctx, client, target, msg, entities, args, true, threadID)
-	case "gmute":
-		return true, s.gmuteCommand(ctx, client, target, msg, entities, args, false, threadID)
-	case "ungmute":
-		return true, s.gmuteCommand(ctx, client, target, msg, entities, args, true, threadID)
-	case "gkick":
-		return true, s.gkickCommand(ctx, client, target, msg, entities, args, threadID)
-	case "lsgban":
-		return true, s.listGlobalModCommand(ctx, client, target, "gban", threadID)
-	case "lsgmute":
-		return true, s.listGlobalModCommand(ctx, client, target, "gmute", threadID)
-	case "cancelall":
-		return true, s.cancelAllBroadcastsCommand(ctx, client, target, threadID)
-	case "ucast":
-		return true, s.broadcastCommand(ctx, client, target, msg, "-pc "+args, threadID)
-	case "fgcast", "fucast":
-		return true, s.forwardBroadcastCommand(ctx, client, target, msg, args, name, threadID)
-	case "spam":
-		return true, s.spamCommand(ctx, client, target, msg, args, threadID)
-	case "spamcast":
-		return true, s.spamcastCommand(ctx, client, target, msg, args, threadID)
-	case "memcast":
-		return true, s.memcastCommand(ctx, client, target, msg, args, threadID)
-	case "id":
-		return true, s.idCommand(ctx, client, chatID, target, msg, threadID)
-	case "info":
-		return true, s.infoCommand(ctx, client, target, msg, entities, args, threadID)
-	case "limit":
-		return true, s.limitCommand(ctx, client, target, threadID)
-	case "sg":
-		return true, s.sgCommand(ctx, client, target, msg, entities, args, threadID)
-	case "setbio":
-		return true, s.setBioCommand(ctx, client, target, msg, args, threadID)
-	case "setname":
-		return true, s.setNameCommand(ctx, client, target, msg, args, threadID)
-	case "setusername":
-		return true, s.setUsernameCommand(ctx, client, target, msg, args, threadID)
-	case "join":
-		return true, s.joinCommand(ctx, client, target, args, threadID)
-	case "kickme":
-		return true, s.kickmeCommand(ctx, client, target, threadID)
-	case "invite":
-		return true, s.inviteCommand(ctx, client, target, msg, entities, args, threadID)
-	case "fontlist":
-		return true, s.fontListCommand(ctx, client, target, threadID)
-	case "font":
-		return true, s.fontCommand(ctx, client, target, msg, args, threadID)
-	case "azan":
-		return true, s.azanCommand(ctx, client, target, args, threadID)
-	case "ai":
-		return true, s.aiCommand(ctx, client, target, msg, args, threadID)
-	case "telegraph":
-		return true, s.telegraphCommand(ctx, client, target, msg, args, threadID)
-	case "mirror":
-		return true, s.mirrorCommand(ctx, client, target, msg, args, threadID)
-	case "quotly":
-		return true, s.quotlyCommand(ctx, client, target, msg, threadID)
-	case "strinfo":
-		return true, s.strinfoCommand(ctx, client, target, msg, threadID)
-	case "kang":
-		return true, s.kangCommand(ctx, client, target, msg, args, threadID)
-	case "startvc", "stopvc", "setvc", "joinvc", "leavevc", "play", "video", "ytmusic", "ytvideo":
-		return true, s.vcCommand(ctx, client, target, msg, name, args, threadID)
-	default:
-		return false, nil
+func (s *Service) resolveVCJoinAsPeer(ctx context.Context, client *gobot.Client, target tg.InputPeerClass) tg.InputPeerClass {
+	self, selfErr := client.Self(ctx)
+	if joinPeers, err := client.API().PhoneGetGroupCallJoinAs(ctx, target); err == nil && joinPeers != nil {
+		userHashes := make(map[int64]int64, len(joinPeers.Users))
+		for _, u := range joinPeers.Users {
+			if userObj, ok := u.(*tg.User); ok {
+				userHashes[userObj.ID] = userObj.AccessHash
+			}
+		}
+		chanHashes := make(map[int64]int64, len(joinPeers.Chats))
+		for _, c := range joinPeers.Chats {
+			if chObj, ok := c.(*tg.Channel); ok {
+				chanHashes[chObj.ID] = chObj.AccessHash
+			}
+		}
+		if selfErr == nil && self != nil {
+			for _, p := range joinPeers.Peers {
+				if pu, ok := p.(*tg.PeerUser); ok && pu.UserID == self.ID {
+					ah := userHashes[pu.UserID]
+					if ah == 0 {
+						ah = self.AccessHash
+					}
+					return &tg.InputPeerUser{UserID: self.ID, AccessHash: ah}
+				}
+			}
+		}
+		for _, p := range joinPeers.Peers {
+			switch v := p.(type) {
+			case *tg.PeerUser:
+				return &tg.InputPeerUser{UserID: v.UserID, AccessHash: userHashes[v.UserID]}
+			case *tg.PeerChannel:
+				return &tg.InputPeerChannel{ChannelID: v.ChannelID, AccessHash: chanHashes[v.ChannelID]}
+			case *tg.PeerChat:
+				return &tg.InputPeerChat{ChatID: v.ChatID}
+			}
+		}
 	}
+	if selfErr == nil && self != nil {
+		return &tg.InputPeerUser{UserID: self.ID, AccessHash: self.AccessHash}
+	}
+	return &tg.InputPeerSelf{}
 }

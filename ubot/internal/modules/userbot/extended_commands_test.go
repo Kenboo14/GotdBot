@@ -3,8 +3,12 @@ package userbot
 import (
 	"assterisk/ubot/internal/databases"
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gotd/td/tg"
 )
 
 func TestSQLiteSudoAndGlobalModeration(t *testing.T) {
@@ -165,5 +169,136 @@ func TestParseUserCommandAllRegisteredCommandsAndNoPrefixFallback(t *testing.T) 
 		if _, _, ok := parseUserCommand(bad, ""); ok {
 			t.Fatalf("expected %q to fail command parsing", bad)
 		}
+	}
+}
+
+func TestFormatUserbotResponseBoldItalicAndHTMLCleanup(t *testing.T) {
+	text, ents := formatUserbotResponse("Informasi Pengguna\nID: 1935806583\nNama: Agetaal 🚀")
+	if text != "Informasi Pengguna\nID: 1935806583\nNama: Agetaal 🚀" {
+		t.Fatalf("unexpected cleaned text: %q", text)
+	}
+	var boldCount, italicCount int
+	for _, ent := range ents {
+		switch e := ent.(type) {
+		case *tg.MessageEntityBold:
+			boldCount++
+			if e.Offset < 0 || e.Length <= 0 || e.Offset+e.Length > utf16Len(text) {
+				t.Fatalf("invalid bold entity bounds: %+v", e)
+			}
+		case *tg.MessageEntityItalic:
+			italicCount++
+			if e.Offset < 0 || e.Length <= 0 || e.Offset+e.Length > utf16Len(text) {
+				t.Fatalf("invalid italic entity bounds: %+v", e)
+			}
+		}
+	}
+	if boldCount != 3 || italicCount != 2 {
+		t.Fatalf("expected 3 bold and 2 italic entities, got bold=%d italic=%d", boldCount, italicCount)
+	}
+
+	single, sEnts := formatUserbotResponse("Pong! 12 ms")
+	if single != "Pong! 12 ms" || len(sEnts) != 2 {
+		t.Fatalf("expected single-line bold+italic entities, got text=%q len=%d", single, len(sEnts))
+	}
+
+	parenText, parenEnts := formatUserbotResponse("Berhasil bergabung ke Voice Chat (call_id=42).")
+	if parenText != "Berhasil bergabung ke Voice Chat (call_id=42)." || len(parenEnts) != 2 {
+		t.Fatalf("unexpected paren format: %q len=%d", parenText, len(parenEnts))
+	}
+	if _, ok := parenEnts[0].(*tg.MessageEntityBold); !ok {
+		t.Fatalf("expected first entity to be bold")
+	}
+	if _, ok := parenEnts[1].(*tg.MessageEntityItalic); !ok {
+		t.Fatalf("expected second entity to be italic")
+	}
+
+	usageText, _ := formatUserbotResponse("Gunakan: !setvc <judul baru>")
+	if !strings.Contains(usageText, "<judul baru>") {
+		t.Fatalf("expected placeholder <judul baru> preserved, got %q", usageText)
+	}
+
+	htmlClean, _ := formatUserbotResponse("<h1>📖 Panduan</h1><blockquote expandable>Catatan <code>!ping</code> &amp; info</blockquote>")
+	if strings.Contains(htmlClean, "<blockquote") || strings.Contains(htmlClean, "<h1>") || strings.Contains(htmlClean, "&amp;") {
+		t.Fatalf("expected legacy HTML stripped and unescaped, got %q", htmlClean)
+	}
+
+	codeOut, codeEnts := formatUserbotResponse("```html\n<b>Halo</b>\n```")
+	if codeOut != "<b>Halo</b>" || len(codeEnts) != 1 {
+		t.Fatalf("expected pre code block preserved cleanly, got %q len=%d", codeOut, len(codeEnts))
+	}
+	if pre, ok := codeEnts[0].(*tg.MessageEntityPre); !ok || pre.Language != "html" {
+		t.Fatalf("expected MessageEntityPre html, got %#v", codeEnts[0])
+	}
+}
+
+func TestVCJoinParamsAndSessionTracker(t *testing.T) {
+	params, ssrc, err := buildVCJoinParams()
+	if err != nil {
+		t.Fatalf("buildVCJoinParams: %v", err)
+	}
+	if ssrc <= 0 {
+		t.Fatalf("expected positive ssrc, got %d", ssrc)
+	}
+	var parsed struct {
+		Ufrag        string `json:"ufrag"`
+		Pwd          string `json:"pwd"`
+		Fingerprints []struct {
+			Hash        string `json:"hash"`
+			Setup       string `json:"setup"`
+			Fingerprint string `json:"fingerprint"`
+		} `json:"fingerprints"`
+		SSRC int `json:"ssrc"`
+	}
+	if err := json.Unmarshal([]byte(params.Data), &parsed); err != nil {
+		t.Fatalf("unmarshal vc join params: %v", err)
+	}
+	if parsed.Ufrag == "" || parsed.Pwd == "" || len(parsed.Fingerprints) != 1 || parsed.Fingerprints[0].Hash != "sha-256" || parsed.SSRC != ssrc {
+		t.Fatalf("unexpected WebRTC join params: %+v", parsed)
+	}
+
+	key := vcSessionKey(1234, &tg.InputPeerChannel{ChannelID: 55, AccessHash: 99})
+	cancelled := false
+	storeVCSession(key, &tg.InputGroupCall{ID: 777, AccessHash: 888}, ssrc, func() { cancelled = true })
+	if got := getStoredVCCall(key); got == nil || got.ID != 777 {
+		t.Fatalf("expected stored call ID 777, got %+v", got)
+	}
+	popped := popVCSession(key)
+	if popped == nil || popped.ssrc != ssrc || !cancelled {
+		t.Fatalf("expected popped session with ssrc=%d and cancelled=true, got %+v cancelled=%v", ssrc, popped, cancelled)
+	}
+	if getStoredVCCall(key) != nil {
+		t.Fatalf("expected stored call cleared after pop")
+	}
+}
+
+func TestTelegraphContentNodesAndMediaDetection(t *testing.T) {
+	photoMsg := &tg.Message{
+		Message: "Baris satu\nBaris dua",
+		Media: &tg.MessageMediaPhoto{
+			Photo: &tg.Photo{
+				ID:            9001,
+				AccessHash:    12345,
+				FileReference: []byte{1, 2},
+				Sizes: []tg.PhotoSizeClass{
+					&tg.PhotoSize{Type: "m", Size: 1024},
+					&tg.PhotoSize{Type: "x", Size: 4096},
+				},
+			},
+		},
+	}
+	loc, sz, isMedia := extractTelegraphImageSource(photoMsg)
+	if !isMedia || sz != 4096 {
+		t.Fatalf("expected photo media size 4096, got isMedia=%v sz=%d", isMedia, sz)
+	}
+	if pLoc, ok := loc.(*tg.InputPhotoFileLocation); !ok || pLoc.ThumbSize != "x" {
+		t.Fatalf("expected largest photo thumb 'x', got %#v", loc)
+	}
+
+	nodes := buildTelegraphContentNodes(photoMsg.Message, "https://i.ibb.co/example/pic.jpg")
+	if len(nodes) != 3 {
+		t.Fatalf("expected 3 nodes (2 p + 1 figure), got %d", len(nodes))
+	}
+	if nodes[2]["tag"] != "figure" {
+		t.Fatalf("expected figure tag at index 2, got %v", nodes[2]["tag"])
 	}
 }

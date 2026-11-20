@@ -71,32 +71,70 @@ func isMessageNotModifiedError(err error) bool {
 	return strings.Contains(up, "MESSAGE_NOT_MODIFIED")
 }
 
-func sendUserText(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, text string, threadID int) error {
-	replyToMsgID := commandReplyMsgID(ctx)
-	if replyTo := buildReplyTo(threadID, replyToMsgID); replyTo != nil {
-		req := &tg.MessagesSendMessageRequest{
-			Peer:     target,
-			Message:  text,
-			RandomID: randInt64(),
-			ReplyTo:  replyTo,
-		}
-		_, err := client.API().MessagesSendMessage(ctx, req)
-		if err != nil && replyToMsgID > 0 && isReplyTargetInvalidError(err) {
-			// Fallback jika pesan command dihapus sesaat sebelum userbot membalas.
-			if fallbackRT := buildReplyTo(threadID, 0); fallbackRT != nil {
-				req.ReplyTo = fallbackRT
-				_, err = client.API().MessagesSendMessage(ctx, req)
-			} else {
-				_, err = client.Sender().To(target).Text(ctx, text)
+func extractSentMessageID(updates tg.UpdatesClass) int {
+	if updates == nil {
+		return 0
+	}
+	scanList := func(items []tg.UpdateClass) int {
+		for _, item := range items {
+			switch v := item.(type) {
+			case *tg.UpdateMessageID:
+				return v.ID
+			case *tg.UpdateNewMessage:
+				if m, ok := v.Message.(*tg.Message); ok && m.ID > 0 {
+					return m.ID
+				}
+			case *tg.UpdateNewChannelMessage:
+				if m, ok := v.Message.(*tg.Message); ok && m.ID > 0 {
+					return m.ID
+				}
 			}
 		}
-		if err != nil {
-			log.Printf("[sendUserText] MTProto send failed (thread=%d reply=%d): %v", threadID, replyToMsgID, err)
-		}
-		return err
+		return 0
 	}
-	_, err := client.Sender().To(target).Text(ctx, text)
+	switch u := updates.(type) {
+	case *tg.UpdateShortSentMessage:
+		return u.ID
+	case *tg.Updates:
+		return scanList(u.Updates)
+	case *tg.UpdatesCombined:
+		return scanList(u.Updates)
+	}
+	return 0
+}
+
+func sendUserText(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, text string, threadID int) error {
+	_, err := sendUserStatusMessage(ctx, client, target, text, threadID)
+	if err != nil {
+		log.Printf("[sendUserText] MTProto send failed (thread=%d reply=%d): %v", threadID, commandReplyMsgID(ctx), err)
+	}
 	return err
+}
+
+func sendUserStatusMessage(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, text string, threadID int) (int, error) {
+	if client == nil || target == nil {
+		return 0, fmt.Errorf("parameter kirim pesan tidak valid")
+	}
+	cleanText, entities := formatUserbotResponse(text)
+	replyToMsgID := commandReplyMsgID(ctx)
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     target,
+		Message:  cleanText,
+		Entities: entities,
+		RandomID: randInt64(),
+	}
+	if replyTo := buildReplyTo(threadID, replyToMsgID); replyTo != nil {
+		req.ReplyTo = replyTo
+	}
+	upd, err := client.API().MessagesSendMessage(ctx, req)
+	if err != nil && replyToMsgID > 0 && isReplyTargetInvalidError(err) {
+		req.ReplyTo = buildReplyTo(threadID, 0)
+		upd, err = client.API().MessagesSendMessage(ctx, req)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return extractSentMessageID(upd), nil
 }
 
 // editUserText mengedit pesan milik sendiri berdasarkan msgID.
@@ -104,10 +142,12 @@ func editUserText(ctx context.Context, client *gobot.Client, target tg.InputPeer
 	if client == nil || target == nil || msgID <= 0 {
 		return fmt.Errorf("parameter edit pesan tidak valid")
 	}
+	cleanText, entities := formatUserbotResponse(text)
 	_, err := client.API().MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{
-		Peer:    target,
-		ID:      msgID,
-		Message: text,
+		Peer:     target,
+		ID:       msgID,
+		Message:  cleanText,
+		Entities: entities,
 	})
 	if isMessageNotModifiedError(err) {
 		return nil

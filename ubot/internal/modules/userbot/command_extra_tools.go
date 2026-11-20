@@ -1,7 +1,6 @@
 package userbot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -284,57 +283,6 @@ func (s *Service) aiCommand(ctx context.Context, client *gobot.Client, target tg
 		reply = string([]rune(reply)[:3900]) + "..."
 	}
 	return sendUserText(ctx, client, target, reply, threadID)
-}
-
-func (s *Service) telegraphCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
-	body := s.resolveArgOrReply(ctx, client, target, msg, args)
-	if body == "" {
-		return sendUserText(ctx, client, target, "Balas pesan teks atau tuliskan isi setelah !telegraph.", threadID)
-	}
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	postJSON := func(endpoint string, payload map[string]any) ([]byte, error) {
-		raw, _ := json.Marshal(payload)
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(raw))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := toolHTTPClient.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		defer resp.Body.Close()
-		return io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-	}
-	accRaw, err := postJSON("https://api.telegra.ph/createAccount", map[string]any{"short_name": "GotdBot", "author_name": "GotdBot UserBot"})
-	if err != nil {
-		return sendUserText(ctx, client, target, "Gagal terhubung ke Telegraph: "+err.Error(), threadID)
-	}
-	var accParsed struct {
-		OK     bool `json:"ok"`
-		Result struct{ AccessToken string `json:"access_token"` } `json:"result"`
-	}
-	if json.Unmarshal(accRaw, &accParsed) != nil || !accParsed.OK || accParsed.Result.AccessToken == "" {
-		return sendUserText(ctx, client, target, "Gagal membuat akun Telegraph sementara.", threadID)
-	}
-	pageRaw, err := postJSON("https://api.telegra.ph/createPage", map[string]any{
-		"access_token": accParsed.Result.AccessToken,
-		"title":        "GotdBot Note",
-		"author_name":  "GotdBot UserBot",
-		"content":      []map[string]any{{"tag": "p", "children": []string{body}}},
-	})
-	if err != nil {
-		return sendUserText(ctx, client, target, "Gagal membuat halaman Telegraph: "+err.Error(), threadID)
-	}
-	var pageParsed struct {
-		OK     bool `json:"ok"`
-		Result struct{ URL string `json:"url"` } `json:"result"`
-	}
-	if json.Unmarshal(pageRaw, &pageParsed) != nil || !pageParsed.OK || pageParsed.Result.URL == "" {
-		return sendUserText(ctx, client, target, "Gagal menerbitkan halaman ke Telegraph.", threadID)
-	}
-	return sendUserText(ctx, client, target, "Tautan Telegraph: "+pageParsed.Result.URL, threadID)
 }
 
 func (s *Service) quotlyCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, threadID int) error {

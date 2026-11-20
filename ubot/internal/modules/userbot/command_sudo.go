@@ -243,3 +243,104 @@ func (s *Service) clearSudoCommand(ctx context.Context, client *gobot.Client, ta
 	s.sudoMu.Unlock()
 	return sendUserText(ctx, client, target, fmt.Sprintf("Seluruh akses sudo dihapus (%d entri).", removed), threadID)
 }
+
+func (s *Service) dispatchExtendedCommand(ctx context.Context, client *gobot.Client, chatID int64, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, name, args string, threadID int) (bool, error) {
+	switch name {
+	case "lsudo":
+		return true, s.listSudoCommand(ctx, client, target, threadID)
+	case "clearsudo":
+		return true, s.clearSudoCommand(ctx, client, target, msg, threadID)
+	case "ban":
+		return true, s.banCommand(ctx, client, target, msg, entities, args, false, threadID)
+	case "unban":
+		return true, s.banCommand(ctx, client, target, msg, entities, args, true, threadID)
+	case "kick":
+		return true, s.kickCommand(ctx, client, target, msg, entities, args, threadID)
+	case "mute":
+		return true, s.muteCommand(ctx, client, target, msg, entities, args, false, threadID)
+	case "unmute":
+		return true, s.muteCommand(ctx, client, target, msg, entities, args, true, threadID)
+	case "promote", "fullpromote", "demote":
+		return true, s.adminRoleCommand(ctx, client, target, msg, entities, args, name, threadID)
+	case "pin":
+		return true, s.pinCommand(ctx, client, target, msg, args, false, threadID)
+	case "unpin":
+		return true, s.pinCommand(ctx, client, target, msg, args, true, threadID)
+	case "del":
+		return true, s.delCommand(ctx, client, target, msg, threadID)
+	case "purge":
+		return true, s.purgeCommand(ctx, client, target, msg, threadID)
+	case "dh":
+		return true, s.deleteHistoryCommand(ctx, client, target, msg, args, threadID)
+	case "zombies":
+		return true, s.zombiesCommand(ctx, client, target, threadID)
+	case "gban":
+		return true, s.gbanCommand(ctx, client, target, msg, entities, args, false, threadID)
+	case "ungban":
+		return true, s.gbanCommand(ctx, client, target, msg, entities, args, true, threadID)
+	case "gmute":
+		return true, s.gmuteCommand(ctx, client, target, msg, entities, args, false, threadID)
+	case "ungmute":
+		return true, s.gmuteCommand(ctx, client, target, msg, entities, args, true, threadID)
+	case "gkick":
+		return true, s.gkickCommand(ctx, client, target, msg, entities, args, threadID)
+	case "lsgban":
+		return true, s.listGlobalModCommand(ctx, client, target, "gban", threadID)
+	case "lsgmute":
+		return true, s.listGlobalModCommand(ctx, client, target, "gmute", threadID)
+	case "cancelall":
+		return true, s.cancelAllBroadcastsCommand(ctx, client, target, threadID)
+	case "ucast":
+		return true, s.broadcastCommand(ctx, client, target, msg, "-pc "+args, threadID)
+	case "fgcast", "fucast":
+		return true, s.forwardBroadcastCommand(ctx, client, target, msg, args, name, threadID)
+	case "spam":
+		return true, s.spamCommand(ctx, client, target, msg, args, threadID)
+	case "spamcast":
+		return true, s.spamcastCommand(ctx, client, target, msg, args, threadID)
+	case "memcast":
+		return true, s.memcastCommand(ctx, client, target, msg, args, threadID)
+	case "id":
+		return true, s.idCommand(ctx, client, chatID, target, msg, threadID)
+	case "info":
+		return true, s.infoCommand(ctx, client, target, msg, entities, args, threadID)
+	case "limit":
+		return true, s.limitCommand(ctx, client, target, threadID)
+	case "sg":
+		return true, s.sgCommand(ctx, client, target, msg, entities, args, threadID)
+	case "setbio":
+		return true, s.setBioCommand(ctx, client, target, msg, args, threadID)
+	case "setname":
+		return true, s.setNameCommand(ctx, client, target, msg, args, threadID)
+	case "setusername":
+		return true, s.setUsernameCommand(ctx, client, target, msg, args, threadID)
+	case "join":
+		return true, s.joinCommand(ctx, client, target, args, threadID)
+	case "kickme":
+		return true, s.kickmeCommand(ctx, client, target, threadID)
+	case "invite":
+		return true, s.inviteCommand(ctx, client, target, msg, entities, args, threadID)
+	case "fontlist":
+		return true, s.fontListCommand(ctx, client, target, threadID)
+	case "font":
+		return true, s.fontCommand(ctx, client, target, msg, args, threadID)
+	case "azan":
+		return true, s.azanCommand(ctx, client, target, args, threadID)
+	case "ai":
+		return true, s.aiCommand(ctx, client, target, msg, args, threadID)
+	case "telegraph":
+		return true, s.telegraphCommand(ctx, client, target, msg, args, threadID)
+	case "mirror":
+		return true, s.mirrorCommand(ctx, client, target, msg, args, threadID)
+	case "quotly":
+		return true, s.quotlyCommand(ctx, client, target, msg, threadID)
+	case "strinfo":
+		return true, s.strinfoCommand(ctx, client, target, msg, threadID)
+	case "kang":
+		return true, s.kangCommand(ctx, client, target, msg, args, threadID)
+	case "startvc", "stopvc", "setvc", "joinvc", "leavevc", "play", "video", "ytmusic", "ytvideo":
+		return true, s.vcCommand(ctx, client, target, msg, name, args, threadID)
+	default:
+		return false, nil
+	}
+}
