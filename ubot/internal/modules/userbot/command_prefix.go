@@ -8,6 +8,29 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+func matchUserCommand(text string) (string, string, bool) {
+	// Zero-allocation whitespace trim di awal
+	for len(text) > 0 && (text[0] == ' ' || text[0] == '\t' || text[0] == '\n' || text[0] == '\r') {
+		text = text[1:]
+	}
+	if text == "" {
+		return "", "", false
+	}
+	idx := strings.IndexAny(text, " \t\n\r")
+	if idx < 0 {
+		name := strings.ToLower(text)
+		if !isKnownUserbotCommand(name) {
+			return "", "", false
+		}
+		return name, "", true
+	}
+	name := strings.ToLower(text[:idx])
+	if !isKnownUserbotCommand(name) {
+		return "", "", false
+	}
+	return name, strings.TrimSpace(text[idx+1:]), true
+}
+
 func parseUserCommand(text, prefix string) (name, args string, ok bool) {
 	if text == "" {
 		return "", "", false
@@ -16,29 +39,15 @@ func parseUserCommand(text, prefix string) (name, args string, ok bool) {
 		if !strings.HasPrefix(text, prefix) {
 			return "", "", false
 		}
-		text = text[len(prefix):]
+		return matchUserCommand(text[len(prefix):])
 	}
-	// Zero-allocation whitespace trim di awal
-	for len(text) > 0 && (text[0] == ' ' || text[0] == '\t' || text[0] == '\n' || text[0] == '\r') {
-		text = text[1:]
+	if name, args, ok := matchUserCommand(text); ok {
+		return name, args, true
 	}
-	if text == "" {
-		return "", "", false
+	if strings.HasPrefix(text, "!") {
+		return matchUserCommand(text[1:])
 	}
-	idx := strings.IndexByte(text, ' ')
-	if idx < 0 {
-		name = strings.ToLower(text)
-		if _, exists := userbotCommandNames[name]; !exists {
-			return "", "", false
-		}
-		return name, "", true
-	}
-	name = strings.ToLower(text[:idx])
-	if _, exists := userbotCommandNames[name]; !exists {
-		return "", "", false
-	}
-	args = strings.TrimSpace(text[idx+1:])
-	return name, args, true
+	return "", "", false
 }
 
 func (s *Service) handleSetPrefix(ctx context.Context, client *gobot.Client, chatID int64, target tg.InputPeerClass, args string, threadID int) error {

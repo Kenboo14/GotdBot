@@ -122,3 +122,48 @@ func TestExtendedPluginsEnabledAndPMPermitDisabled(t *testing.T) {
 		}
 	}
 }
+
+func TestParseUserCommandAllRegisteredCommandsAndNoPrefixFallback(t *testing.T) {
+	if len(commandPluginMap) == 0 {
+		t.Fatal("commandPluginMap should not be empty")
+	}
+	for cmd := range commandPluginMap {
+		if _, exists := userbotCommandNames[cmd]; !exists {
+			t.Fatalf("command %q in commandPluginMap is missing from userbotCommandNames", cmd)
+		}
+		gotName, gotArgs, ok := parseUserCommand("!"+cmd, "!")
+		if !ok || gotName != cmd || gotArgs != "" {
+			t.Fatalf("parseUserCommand(%q, %q) = (%q, %q, %v), want (%q, \"\", true)", "!"+cmd, "!", gotName, gotArgs, ok, cmd)
+		}
+		gotName, gotArgs, ok = parseUserCommand("!"+cmd+" arg1\narg2", "!")
+		if !ok || gotName != cmd || gotArgs != "arg1\narg2" {
+			t.Fatalf("parseUserCommand multiline(%q, %q) = (%q, %q, %v)", "!"+cmd, "!", gotName, gotArgs, ok)
+		}
+		gotName, gotArgs, ok = parseUserCommand(cmd+" halo", "")
+		if !ok || gotName != cmd || gotArgs != "halo" {
+			t.Fatalf("parseUserCommand no-prefix(%q) = (%q, %q, %v)", cmd, gotName, gotArgs, ok)
+		}
+		gotName, gotArgs, ok = parseUserCommand("!"+cmd+" halo", "")
+		if !ok || gotName != cmd || gotArgs != "halo" {
+			t.Fatalf("parseUserCommand no-prefix bang-fallback(%q) = (%q, %q, %v)", "!"+cmd, gotName, gotArgs, ok)
+		}
+	}
+
+	if gotName, gotArgs, ok := parseUserCommand("!gcast\nHalo semua", "!"); !ok || gotName != "gcast" || gotArgs != "Halo semua" {
+		t.Fatalf("expected multiline gcast parse, got (%q, %q, %v)", gotName, gotArgs, ok)
+	}
+	if gotName, gotArgs, ok := parseUserCommand("!gcast\nHalo semua", ""); !ok || gotName != "gcast" || gotArgs != "Halo semua" {
+		t.Fatalf("expected multiline no-prefix fallback gcast parse, got (%q, %q, %v)", gotName, gotArgs, ok)
+	}
+	if gotName, _, ok := parseUserCommand(".ping", "."); !ok || gotName != "ping" {
+		t.Fatalf("expected custom prefix .ping to match, got (%q, %v)", gotName, ok)
+	}
+	if _, _, ok := parseUserCommand("!ping", "."); ok {
+		t.Fatalf("expected !ping to be rejected when custom prefix is '.'")
+	}
+	for _, bad := range []string{"", "!", "!tidakada", "tidakada", "!!ping"} {
+		if _, _, ok := parseUserCommand(bad, ""); ok {
+			t.Fatalf("expected %q to fail command parsing", bad)
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"log"
+	"strings"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -34,6 +35,10 @@ func (m *Init) Register(ctx context.Context, sqlite *databases.SQLiteClient, db 
 	if wid := m.Config.Worker.ID; wid != "" {
 		go redis.ListenerWithWorkers(ctx, "to:group:auth:"+wid, wid, "to:ubot:auth:"+wid, 4, service.Handle)
 		go redis.Listener(ctx, "to:group:cmd:"+wid, wid, "to:ubot:command:"+wid, service.HandleCommand)
+		if !strings.EqualFold(strings.TrimSpace(m.Config.Worker.Pool), "hell") {
+			go redis.ListenerWithWorkers(ctx, "to:group:ubot", wid, "to:ubot:auth", 2, service.Handle)
+			go redis.Listener(ctx, "to:group:command", wid, "to:ubot:command", service.HandleCommand)
+		}
 		go service.startWorkerHeartbeatLoop(ctx)
 		go service.startHeavyScoreMonitorLoop(ctx)
 		return
