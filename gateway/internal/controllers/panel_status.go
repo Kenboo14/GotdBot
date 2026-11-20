@@ -20,11 +20,6 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 	h.syncConfigMasaAktif(ctx, userID, cfg)
 	gCount, lCount := h.db.CountGroupsAndLists(ctx, userID)
 
-	skipFw := "Mati"
-	if cfg.SkipFloodWait {
-		skipFw = "Aktif"
-	}
-
 	safeMode := "Nonaktif"
 	if cfg.Safemode {
 		safeMode = "Aktif"
@@ -34,12 +29,12 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 		{Label: "🏷️ UserID", Value: fmt.Sprintf("%d", cfg.OwnerID)},
 		{Label: "🧩 Tipe", Value: html.EscapeString(cfg.Type)},
 		{Label: "👑 Mode", Value: html.EscapeString(cfg.Mode)},
-		{Label: "🕒 Jeda", Value: fmt.Sprintf("%d detik", cfg.Delay)},
+		{Label: "🕒 Jeda", Value: html.EscapeString(cfg.FormatJedaSummary(gCount))},
 		{Label: "🌐 Target Grup", Value: fmt.Sprintf("%d grup", gCount)},
 		{Label: "📚 Materi List", Value: fmt.Sprintf("%d list", lCount)},
 		{Label: "⚠️ Safemode", Value: safeMode},
-		{Label: "⏭️ Skip Flood", Value: skipFw},
-		{Label: "⏱️ Timer", Value: html.EscapeString(cfg.Timer)},
+		{Label: "⏭️ Skip Flood", Value: html.EscapeString(cfg.FormatSkipFloodWait())},
+		{Label: "⏱️ Timer", Value: html.EscapeString(cfg.FormatTimerDisplay())},
 		{Label: "🚀 Status", Value: html.EscapeString(cfg.Status)},
 		{Label: "🔥 Masa Aktif", Value: html.EscapeString(cfg.MasaAktif)},
 		{Label: "🔔 Notifikasi", Value: html.EscapeString(cfg.Notifikasi)},
@@ -55,28 +50,6 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.StatusMenuMarkup,
-	})
-}
-
-// PromptAturJeda displays delay settings
-func (h *Handler) PromptAturJeda(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
-	h.setPanelState(chatID, "waiting_set_jeda")
-	cfg := h.db.GetUserConfig(ctx, userID)
-
-	text := fmt.Sprintf(`<h1>⏱️ Atur Jeda Broadcast</h1>
-<table border="1">
-  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
-  <tr><td>⏳ Jeda Saat Ini</td><td><code>%d detik</code></td></tr>
-</table>
-<blockquote expandable>Pilih interval cepat dari tombol keyboard di bawah, atau ketik angka detik secara langsung.</blockquote>
-<hr/>
-<p>Silakan tentukan interval jeda siaran.</p>`, cfg.Delay)
-
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ParseMode:   "HTML",
-		ReplyMarkup: assets.AturJedaMarkup,
 	})
 }
 
@@ -311,33 +284,6 @@ func (h *Handler) PromptAdmin(ctx context.Context, b *botgotd.Bot, chatID, userI
 		Text:        text,
 		ParseMode:   "HTML",
 		ReplyMarkup: assets.CancelOnlyMarkup,
-	})
-}
-
-// PromptTimer prompts user for timer
-func (h *Handler) PromptTimer(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
-	h.setPanelState(chatID, "waiting_set_timer")
-	cfg := h.db.GetUserConfig(ctx, userID)
-
-	curr := "🔴 Nonaktif"
-	if cfg.Timer != "" {
-		curr = html.EscapeString(cfg.Timer)
-	}
-
-	text := fmt.Sprintf(`<h1>⏱️ Timer Siaran Otomatis</h1>
-<table border="1">
-  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
-  <tr><td>⏰ Jadwal Saat Ini</td><td><b>%s</b></td></tr>
-</table>
-<blockquote expandable>Pilih interval pengulangan siaran berkala otomatis dari tombol keyboard di bawah.</blockquote>
-<hr/>
-<p>Pilih interval timer yang diinginkan.</p>`, curr)
-
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ParseMode:   "HTML",
-		ReplyMarkup: assets.TimerMarkup,
 	})
 }
 

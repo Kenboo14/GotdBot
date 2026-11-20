@@ -36,7 +36,10 @@ type JasebConfig struct {
 	OwnerID          int64            `bson:"_id" json:"owner_id"`
 	Type             string           `bson:"type" json:"type"`
 	Delay            int              `bson:"delay" json:"delay"`
+	DelayMode        string           `bson:"delay_mode" json:"delay_mode"`
+	DelayAllGroups   int              `bson:"delay_all_groups" json:"delay_all_groups"`
 	SkipFloodWait    bool             `bson:"skip_floodwait" json:"skip_floodwait"`
+	SkipFloodWaitSec int              `bson:"skip_floodwait_sec" json:"skip_floodwait_sec"`
 	Timer            string           `bson:"timer" json:"timer"`
 	Extra            int              `bson:"extra" json:"extra"`
 	Mode             string           `bson:"mode" json:"mode"`

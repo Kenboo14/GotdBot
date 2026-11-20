@@ -357,14 +357,38 @@ func (h *Handler) handleControlCallback(ctx context.Context, b *botgotd.Bot, cha
 
 	case "set_jeda":
 		if len(parts) >= 4 {
-			sec, _ := strconv.Atoi(parts[3])
-			if sec > 0 {
-				cfg := h.db.GetUserConfig(ctx, targetID)
-				cfg.Delay = sec
+			rawVal := parts[3]
+			cfg := h.db.GetUserConfig(ctx, targetID)
+			gCount, _ := h.db.CountGroupsAndLists(ctx, targetID)
+			updated := false
+			switch rawVal {
+			case "aman":
+				cfg.DelayMode = "aman"
+				cfg.Delay = 0
+				cfg.DelayAllGroups = 0
+				updated = true
+			case "otomatis":
+				cfg.DelayMode = "otomatis"
+				cfg.Delay = 0
+				cfg.DelayAllGroups = 0
+				updated = true
+			case "0":
+				cfg.DelayMode = "manual"
+				cfg.Delay = 0
+				cfg.DelayAllGroups = 0
+				updated = true
+			default:
+				if sec, err := strconv.Atoi(rawVal); err == nil && sec > 0 {
+					cfg.DelayMode = "manual"
+					cfg.Delay = sec
+					updated = true
+				}
+			}
+			if updated {
 				_ = h.db.SaveUserConfig(ctx, cfg)
 				_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 					CallbackQueryID: cb.ID,
-					Text:            fmt.Sprintf("✅ Jeda diatur ke %d detik", sec),
+					Text:            fmt.Sprintf("✅ Jeda: %s", cfg.FormatJedaSummary(gCount)),
 				})
 				h.RenderControlJeda(ctx, b, chatID, messageID, targetID)
 				return

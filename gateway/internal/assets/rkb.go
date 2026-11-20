@@ -1,6 +1,10 @@
 package assets
 
-import "assterisk/gateway/internal/botgotd"
+import (
+	"strconv"
+
+	"assterisk/gateway/internal/botgotd"
+)
 
 // ─── Reply Keyboard Button Label Constants ───────────────────────────────────
 
@@ -58,14 +62,24 @@ const (
 	BtnResetKonfigurasi = "🗑️ Reset Konfigurasi 🗑️"
 )
 
-// Atur Jeda
 const (
-	BtnJeda3  = "⏱️ 3 Detik"
-	BtnJeda5  = "⏱️ 5 Detik"
-	BtnJeda10 = "⏱️ 10 Detik"
-	BtnJeda15 = "⏱️ 15 Detik"
-	BtnJeda30 = "⏱️ 30 Detik"
-	BtnJeda60 = "⏱️ 60 Detik"
+	BtnJedaAman         = "🎁 Jeda Aman"
+	BtnJedaOtomatis     = "💡 Jeda Otomatis"
+	BtnJedaPerGrup      = "🔗 Jeda Per Grup 🔗"
+	BtnJedaPerSemuaGrup = "🖇️ Jeda Per Semua Grup 🖇️"
+	BtnSkipFloodWait    = "⏭️ Skip FloodWait"
+	BtnMatikan          = "🔕 Matikan"
+	BtnSkipFW30s        = "⏱️ 30 Detik"
+	BtnSkipFW1m         = "⏱️ 1 Menit"
+	BtnSkipFW2m         = "⏱️ 2 Menit"
+	BtnSkipFW3m         = "⏱️ 3 Menit"
+	BtnSkipFW5m         = "⏱️ 5 Menit"
+	BtnSkipFW10m        = "⏱️ 10 Menit"
+	BtnTimerPreset1     = "⏰ 08:00 - 22:00"
+	BtnTimerPreset2     = "⏰ 07:00 - 23:00"
+	BtnTimerPreset3     = "⏰ 09:00 - 21:00"
+	BtnTimerPreset4     = "⏰ 06:00 - 22:00"
+	BtnTimerNonaktif    = BtnMatikan
 )
 
 // Ubah Mode
@@ -73,14 +87,6 @@ const (
 	BtnModeNormal = "👑 Normal"
 	BtnModeFast   = "⚡ Fast"
 	BtnModeSilent = "🔕 Silent"
-)
-
-// Timer
-const (
-	BtnTimerNonaktif = "⏱️ Nonaktifkan Timer"
-	BtnTimer1Jam     = "⏱️ Tiap 1 Jam"
-	BtnTimer2Jam     = "⏱️ Tiap 2 Jam"
-	BtnTimer3Jam     = "⏱️ Tiap 3 Jam"
 )
 
 // Install / Wizard
@@ -113,7 +119,10 @@ var (
 	CancelOnlyMarkup *botgotd.ReplyKeyboardMarkup
 
 	// AturJedaMarkup shows delay option buttons.
-	AturJedaMarkup *botgotd.ReplyKeyboardMarkup
+	AturJedaMarkup        *botgotd.ReplyKeyboardMarkup
+	JedaPerGrupMarkup     *botgotd.ReplyKeyboardMarkup
+	JedaPerSemuaGrupMarkup *botgotd.ReplyKeyboardMarkup
+	SkipFloodWaitMarkup   *botgotd.ReplyKeyboardMarkup
 
 	// UbahModeMarkup shows broadcasting mode options.
 	UbahModeMarkup *botgotd.ReplyKeyboardMarkup
@@ -194,8 +203,36 @@ func init() {
 
 	AturJedaMarkup = &botgotd.ReplyKeyboardMarkup{
 		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: BtnJeda3}, {Text: BtnJeda5}, {Text: BtnJeda10}},
-			{{Text: BtnJeda15}, {Text: BtnJeda30}, {Text: BtnJeda60}},
+			{{Text: BtnJedaAman}, {Text: BtnJedaOtomatis}},
+			{{Text: BtnJedaPerGrup}, {Text: BtnJedaPerSemuaGrup}},
+			{{Text: BtnSkipFloodWait}},
+			{{Text: BtnBatal}},
+		},
+		ResizeKeyboard: true,
+	}
+
+	perGrupRows := buildNumberRangeRows(5, 300, 5, 5)
+	perGrupRows = append(perGrupRows, []botgotd.KeyboardButton{{Text: BtnMatikan}})
+	perGrupRows = append(perGrupRows, []botgotd.KeyboardButton{{Text: BtnBatal}})
+	JedaPerGrupMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard:       perGrupRows,
+		ResizeKeyboard: true,
+	}
+
+	perSemuaRows := buildNumberRangeRows(2, 120, 2, 5)
+	perSemuaRows = append(perSemuaRows, []botgotd.KeyboardButton{{Text: "240"}, {Text: "360"}})
+	perSemuaRows = append(perSemuaRows, []botgotd.KeyboardButton{{Text: BtnMatikan}})
+	perSemuaRows = append(perSemuaRows, []botgotd.KeyboardButton{{Text: BtnBatal}})
+	JedaPerSemuaGrupMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard:       perSemuaRows,
+		ResizeKeyboard: true,
+	}
+
+	SkipFloodWaitMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard: [][]botgotd.KeyboardButton{
+			{{Text: BtnSkipFW30s}, {Text: BtnSkipFW1m}, {Text: BtnSkipFW2m}},
+			{{Text: BtnSkipFW3m}, {Text: BtnSkipFW5m}, {Text: BtnSkipFW10m}},
+			{{Text: BtnMatikan}},
 			{{Text: BtnBatal}},
 		},
 		ResizeKeyboard: true,
@@ -211,8 +248,9 @@ func init() {
 
 	TimerMarkup = &botgotd.ReplyKeyboardMarkup{
 		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: BtnTimerNonaktif}, {Text: BtnTimer1Jam}},
-			{{Text: BtnTimer2Jam}, {Text: BtnTimer3Jam}},
+			{{Text: BtnTimerPreset1}, {Text: BtnTimerPreset2}},
+			{{Text: BtnTimerPreset3}, {Text: BtnTimerPreset4}},
+			{{Text: BtnMatikan}},
 			{{Text: BtnBatal}},
 		},
 		ResizeKeyboard: true,
@@ -269,4 +307,20 @@ func init() {
 	}
 
 	RemoveKeyboard = &botgotd.ReplyKeyboardRemove{RemoveKeyboard: true}
+}
+
+func buildNumberRangeRows(start, end, step, cols int) [][]botgotd.KeyboardButton {
+	rows := make([][]botgotd.KeyboardButton, 0, ((end-start)/step+1)/cols+1)
+	row := make([]botgotd.KeyboardButton, 0, cols)
+	for v := start; v <= end; v += step {
+		row = append(row, botgotd.KeyboardButton{Text: strconv.Itoa(v)})
+		if len(row) == cols {
+			rows = append(rows, row)
+			row = make([]botgotd.KeyboardButton, 0, cols)
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return rows
 }

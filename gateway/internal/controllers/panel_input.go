@@ -192,6 +192,10 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 	}
 
+	if h.handleJedaTimerPanelInput(ctx, b, chatID, userID, state, text) {
+		return true
+	}
+
 	switch state {
 	case "waiting_add_list":
 		h.clearPanelPrompt(ctx, b, chatID)
@@ -408,31 +412,6 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		})
 		return true
 
-	case "waiting_set_jeda":
-		h.setPanelState(chatID, "")
-		clean := strings.TrimPrefix(text, "⏱️ ")
-		clean = strings.TrimSuffix(clean, " Detik")
-		clean = strings.TrimSpace(clean)
-		if sec, err := strconv.Atoi(clean); err == nil && sec > 0 {
-			cfg := h.db.GetUserConfig(ctx, userID)
-			cfg.Delay = sec
-			_ = h.db.SaveUserConfig(ctx, cfg)
-			b.SendMessage(ctx, &botgotd.SendMessageParams{
-				ChatID:      chatID,
-				Text:        fmt.Sprintf("✅ <b>Jeda diatur ke <code>%d detik</code>.</b>", sec),
-				ParseMode:   "HTML",
-				ReplyMarkup: mainMenuMarkup,
-			})
-			return true
-		}
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:      chatID,
-			Text:        "⚠️ Nilai jeda tidak valid. Masukkan angka detik yang benar.",
-			ParseMode:   "HTML",
-			ReplyMarkup: mainMenuMarkup,
-		})
-		return true
-
 	case "waiting_set_mode":
 		h.setPanelState(chatID, "")
 		mode := strings.TrimPrefix(text, "👑 ")
@@ -569,26 +548,6 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		})
 		return true
 
-	case "waiting_set_timer":
-		h.setPanelState(chatID, "")
-		cfg := h.db.GetUserConfig(ctx, userID)
-		clean := strings.TrimPrefix(text, "⏱️ ")
-		if clean == "Nonaktifkan Timer" {
-			cfg.Timer = "Belum diatur"
-		} else {
-			cfg.Timer = clean
-		}
-		_ = h.db.SaveUserConfig(ctx, cfg)
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: fmt.Sprintf(`<h1>✅ Timer Siaran Diperbarui</h1>
-<blockquote expandable>Jadwal timer siaran otomatis telah diatur ke: <code>%s</code>.</blockquote>
-<hr/>
-<p>GotdBot • Status Configuration</p>`, html.EscapeString(cfg.Timer)),
-			ParseMode:   "HTML",
-			ReplyMarkup: statusMenuMarkup,
-		})
-		return true
 	}
 
 	return false

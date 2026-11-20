@@ -862,7 +862,10 @@ type jasebConfigDoc struct {
 	OwnerID          int64               `bson:"_id" json:"owner_id"`
 	Type             string              `bson:"type" json:"type"`
 	Delay            int                 `bson:"delay" json:"delay"`
+	DelayMode        string              `bson:"delay_mode" json:"delay_mode"`
+	DelayAllGroups   int                 `bson:"delay_all_groups" json:"delay_all_groups"`
 	SkipFloodWait    bool                `bson:"skip_floodwait" json:"skip_floodwait"`
+	SkipFloodWaitSec int                 `bson:"skip_floodwait_sec" json:"skip_floodwait_sec"`
 	Timer            string              `bson:"timer" json:"timer"`
 	Extra            int                 `bson:"extra" json:"extra"`
 	Mode             string              `bson:"mode" json:"mode"`
@@ -924,32 +927,37 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 	groups, _ := json.Marshal(doc.Groups)
 	topics, _ := json.Marshal(doc.Topics)
 	topicLists, _ := json.Marshal(doc.TopicLists)
+	delayMode := strings.TrimSpace(doc.DelayMode)
+	if delayMode == "" {
+		delayMode = "manual"
+	}
 	updatedAt := doc.UpdatedAt
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()
 	}
 	_, _ = s.sqlite.DB.ExecContext(ctx, `
 		INSERT INTO jaseb_configurasi (
-			owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode,
-			status, masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id,
-			topic_enabled, tindakan_terkini, tindakan_terakhir, lists, groups, topics, topic_lists,
-			broadcast_index, broadcast_next_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			owner_id, type, delay, delay_mode, delay_all_groups, skip_floodwait, skip_floodwait_sec,
+			timer, extra, mode, safemode, status, masa_aktif, notifikasi, email, admin, watermark,
+			watermark_cache_id, topic_enabled, tindakan_terkini, tindakan_terakhir, lists, groups,
+			topics, topic_lists, broadcast_index, broadcast_next_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner_id) DO UPDATE SET
-			type=excluded.type, delay=excluded.delay, skip_floodwait=excluded.skip_floodwait,
-			timer=excluded.timer, extra=excluded.extra, mode=excluded.mode, safemode=excluded.safemode,
-			status=excluded.status, masa_aktif=excluded.masa_aktif, notifikasi=excluded.notifikasi,
-			email=excluded.email, admin=excluded.admin, watermark=excluded.watermark,
-			watermark_cache_id=excluded.watermark_cache_id, topic_enabled=excluded.topic_enabled,
-			tindakan_terkini=excluded.tindakan_terkini, tindakan_terakhir=excluded.tindakan_terakhir,
-			lists=excluded.lists, groups=excluded.groups, topics=excluded.topics, topic_lists=excluded.topic_lists,
-			broadcast_index=excluded.broadcast_index, broadcast_next_at=excluded.broadcast_next_at,
-			updated_at=excluded.updated_at`,
-		doc.OwnerID, doc.Type, doc.Delay, boolInt(doc.SkipFloodWait), doc.Timer, doc.Extra,
-		doc.Mode, boolInt(doc.Safemode), doc.Status, doc.MasaAktif, doc.Notifikasi, doc.Email,
-		doc.Admin, doc.Watermark, doc.WatermarkCacheID, boolInt(doc.TopicEnabled),
-		doc.TindakanTerkini, doc.TindakanTerakhir, string(lists), string(groups), string(topics), string(topicLists),
-		doc.BroadcastIndex, doc.BroadcastNextAt, updatedAt)
+			type=excluded.type, delay=excluded.delay, delay_mode=excluded.delay_mode,
+			delay_all_groups=excluded.delay_all_groups, skip_floodwait=excluded.skip_floodwait,
+			skip_floodwait_sec=excluded.skip_floodwait_sec, timer=excluded.timer, extra=excluded.extra,
+			mode=excluded.mode, safemode=excluded.safemode, status=excluded.status,
+			masa_aktif=excluded.masa_aktif, notifikasi=excluded.notifikasi, email=excluded.email,
+			admin=excluded.admin, watermark=excluded.watermark, watermark_cache_id=excluded.watermark_cache_id,
+			topic_enabled=excluded.topic_enabled, tindakan_terkini=excluded.tindakan_terkini,
+			tindakan_terakhir=excluded.tindakan_terakhir, lists=excluded.lists, groups=excluded.groups,
+			topics=excluded.topics, topic_lists=excluded.topic_lists, broadcast_index=excluded.broadcast_index,
+			broadcast_next_at=excluded.broadcast_next_at, updated_at=excluded.updated_at`,
+		doc.OwnerID, doc.Type, doc.Delay, delayMode, doc.DelayAllGroups, boolInt(doc.SkipFloodWait),
+		doc.SkipFloodWaitSec, doc.Timer, doc.Extra, doc.Mode, boolInt(doc.Safemode), doc.Status,
+		doc.MasaAktif, doc.Notifikasi, doc.Email, doc.Admin, doc.Watermark, doc.WatermarkCacheID,
+		boolInt(doc.TopicEnabled), doc.TindakanTerkini, doc.TindakanTerakhir, string(lists),
+		string(groups), string(topics), string(topicLists), doc.BroadcastIndex, doc.BroadcastNextAt, updatedAt)
 }
 
 func boolInt(value bool) int {
@@ -960,26 +968,23 @@ func boolInt(value bool) int {
 }
 
 func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfigDoc {
-	// SQLite menjadi sumber baca cepat. Mongo disinkronkan saat start/resume
-	// broadcast dan hanya dipakai sebagai fallback bila SQLite tidak tersedia.
-
-	// Fallback dari SQLite jika MongoDB tidak tersedia.
 	if s.sqlite != nil {
 		var listsJSON, groupsJSON, topicsJSON, topicListsJSON string
-		var delay, sfw, sfm, tpe, extra, wmCacheID int
-		var typ, timer, mode, status, masaAktif, notif, email, admin, watermark, tTerkini, tTerakhir string
+		var delay, delayAll, sfw, sfwSec, sfm, tpe, extra, wmCacheID int
+		var typ, delayMode, timer, mode, status, masaAktif, notif, email, admin, watermark, tTerkini, tTerakhir string
 		var broadcastIndex int
 		var broadcastNextAt int64
 		var updatedAt time.Time
 
-		query := `SELECT type, delay, skip_floodwait, timer, extra, mode, safemode, status,
+		query := `SELECT type, delay, COALESCE(delay_mode, 'manual'), COALESCE(delay_all_groups, 0),
+			skip_floodwait, COALESCE(skip_floodwait_sec, 0), timer, extra, mode, safemode, status,
 			masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
 			tindakan_terkini, tindakan_terakhir, lists, groups, topics, COALESCE(topic_lists, '[]'),
 			broadcast_index, broadcast_next_at, updated_at
 			FROM jaseb_configurasi WHERE owner_id = ? LIMIT 1;`
 
 		err := s.sqlite.DB.QueryRowContext(ctx, query, ownerID).Scan(
-			&typ, &delay, &sfw, &timer, &extra, &mode, &sfm, &status,
+			&typ, &delay, &delayMode, &delayAll, &sfw, &sfwSec, &timer, &extra, &mode, &sfm, &status,
 			&masaAktif, &notif, &email, &admin, &watermark, &wmCacheID, &tpe,
 			&tTerkini, &tTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON,
 			&broadcastIndex, &broadcastNextAt, &updatedAt,
@@ -989,7 +994,10 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 			doc.OwnerID = ownerID
 			doc.Type = typ
 			doc.Delay = delay
+			doc.DelayMode = delayMode
+			doc.DelayAllGroups = delayAll
 			doc.SkipFloodWait = sfw == 1
+			doc.SkipFloodWaitSec = sfwSec
 			doc.Timer = timer
 			doc.Extra = extra
 			doc.Mode = mode
@@ -1033,6 +1041,7 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 		OwnerID:          ownerID,
 		Type:             "Broadcast",
 		Delay:            5,
+		DelayMode:        "manual",
 		Timer:            "Belum diatur",
 		Mode:             "Normal",
 		Status:           "Berhenti",
@@ -1326,20 +1335,15 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		return
 	}
 
-	delaySec := cfg.Delay
-	if delaySec <= 0 {
-		delaySec = 5
-	}
-
 	if !resume {
 		s.reply(ctx, chatID, 0, fmt.Sprintf(`<h1>🚀 Siaran Otomatis Dimulai!</h1>
 <blockquote expandable>Tugas siaran promosi otomatis telah aktif dan berjalan di latar belakang.</blockquote>
 <table border="1">
-  <tr><th>Target Grup</th><th>Jeda Antar Grup</th></tr>
-  <tr><td><code>%d grup</code></td><td><code>%d detik</code></td></tr>
+  <tr><th>Target Grup</th><th>Jeda Siaran</th></tr>
+  <tr><td><code>%d grup</code></td><td><code>%s</code></td></tr>
 </table>
 <hr/>
-<p>GotdBot • Broadcast Worker</p>`, len(cfg.Groups), delaySec), "panel_notice")
+<p>GotdBot • Broadcast Worker</p>`, len(cfg.Groups), html.EscapeString(formatUbotJedaSummary(cfg))), "panel_notice")
 		s.setPanelBroadcastStatus(ctx, ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(cfg.Groups)))
 	}
 
@@ -1355,19 +1359,37 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 			s.setPanelBroadcastStatus(context.Background(), ownerID, "Berhenti", "Target atau materi kosong")
 			return
 		}
-		delaySec = cfg.Delay
-		if delaySec <= 0 {
-			delaySec = 5
-		}
 		totalWork := len(cfg.Lists) * len(cfg.Groups)
 		workIndex := cfg.BroadcastIndex
 		if workIndex < 0 || workIndex >= totalWork {
 			workIndex = 0
 		}
+		if paused, resumeAt, win := shouldPauseForDailyTimer(cfg.Timer, time.Now()); paused {
+			desiredTindakan := fmt.Sprintf("Dijeda Timer · mulai lagi %s WIB", win.StartStr)
+			if cfg.TindakanTerkini != desiredTindakan {
+				s.setPanelBroadcastStatus(context.Background(), ownerID, "Berjalan", desiredTindakan)
+			}
+			if !s.waitPanelTimerWindow(ctx, ownerID, cfg.Timer, resumeAt) {
+				return
+			}
+			s.savePanelBroadcastCheckpoint(context.Background(), ownerID, workIndex, time.Now())
+			fresh := s.getJasebConfig(ctx, ownerID)
+			if strings.EqualFold(strings.TrimSpace(fresh.Status), "Berjalan") {
+				s.setPanelBroadcastStatus(context.Background(), ownerID, "Berjalan", fmt.Sprintf("Sedang mengirim ke %d grup...", len(fresh.Groups)))
+			}
+			continue
+		}
 		listIndex := workIndex / len(cfg.Groups)
 		groupIndex := workIndex % len(cfg.Groups)
-		if cfg.BroadcastNextAt > time.Now().Unix() && !s.waitPanelBroadcast(ctx, ownerID, time.Unix(cfg.BroadcastNextAt, 0)) {
-			return
+		if cfg.BroadcastNextAt > time.Now().Unix() {
+			waitOK, changed := s.waitPanelBroadcastWithConfig(ctx, ownerID, time.Unix(cfg.BroadcastNextAt, 0), jedaConfigFingerprint(cfg))
+			if !waitOK {
+				return
+			}
+			if changed {
+				s.savePanelBroadcastCheckpoint(context.Background(), ownerID, workIndex, time.Now())
+				continue
+			}
 		}
 		grp := cfg.Groups[groupIndex]
 		select {
@@ -1379,7 +1401,7 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target, grp.AccessHash, grp.PeerType)
 		if err != nil {
 			log.Printf("[panelBroadcast] resolve target %s error: %v", grp.Target, err)
-			nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
+			nextAt := computeBroadcastNextAt(cfg, groupIndex)
 			s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
 			continue
 		}
@@ -1389,10 +1411,7 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 			return
 		}
 
-		nextAt := time.Now().Add(time.Duration(delaySec) * time.Second)
-		if cfg.Safemode {
-			nextAt = nextAt.Add(500 * time.Millisecond)
-		}
+		nextAt := computeBroadcastNextAt(cfg, groupIndex)
 		s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
 	}
 }
@@ -1454,9 +1473,54 @@ func (s *Service) cacheForwardIDs(ctx context.Context, client *gobot.Client, cac
 	return ids
 }
 
+func computeBroadcastNextAt(cfg jasebConfigDoc, groupIndex int) time.Time {
+	waitDur := computeNextBroadcastWait(cfg, groupIndex, len(cfg.Groups), nil)
+	if waitDur <= 0 {
+		return time.Now()
+	}
+	return time.Now().Add(waitDur)
+}
+
 func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due time.Time) bool {
+	keepRunning, _ := s.waitPanelBroadcastWithConfig(ctx, ownerID, due, "")
+	return keepRunning
+}
+
+func (s *Service) waitPanelBroadcastWithConfig(ctx context.Context, ownerID int64, due time.Time, initialFingerprint string) (bool, bool) {
 	for {
 		remaining := time.Until(due)
+		if remaining <= 0 {
+			return true, false
+		}
+		wait := remaining
+		if wait > 2500*time.Millisecond {
+			wait = 2500 * time.Millisecond
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, false
+		case <-timer.C:
+		}
+		if wait < remaining {
+			cfg := s.getJasebConfig(ctx, ownerID)
+			if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
+				return false, false
+			}
+			if paused, _, _ := shouldPauseForDailyTimer(cfg.Timer, time.Now()); paused {
+				return true, true
+			}
+			if initialFingerprint != "" && jedaConfigFingerprint(cfg) != initialFingerprint {
+				return true, true
+			}
+		}
+	}
+}
+
+func (s *Service) waitPanelTimerWindow(ctx context.Context, ownerID int64, initialTimer string, resumeAt time.Time) bool {
+	for {
+		remaining := time.Until(resumeAt)
 		if remaining <= 0 {
 			return true
 		}
@@ -1471,12 +1535,15 @@ func (s *Service) waitPanelBroadcast(ctx context.Context, ownerID int64, due tim
 			return false
 		case <-timer.C:
 		}
-		if wait < remaining {
-			// Hanya query status ke SQLite jika waktu tunggu masih panjang (menghemat >80% CPU & I/O)
-			cfg := s.getJasebConfig(ctx, ownerID)
-			if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
-				return false
-			}
+		cfg := s.getJasebConfig(ctx, ownerID)
+		if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
+			return false
+		}
+		if strings.TrimSpace(cfg.Timer) != strings.TrimSpace(initialTimer) {
+			return true
+		}
+		if paused, _, _ := shouldPauseForDailyTimer(cfg.Timer, time.Now()); !paused {
+			return true
 		}
 	}
 }

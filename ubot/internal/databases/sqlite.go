@@ -217,7 +217,10 @@ func (s *SQLiteClient) initTables() error {
 			owner_id INTEGER PRIMARY KEY,
 			type TEXT DEFAULT 'Broadcast',
 			delay INTEGER DEFAULT 5,
+			delay_mode TEXT DEFAULT 'manual',
+			delay_all_groups INTEGER DEFAULT 0,
 			skip_floodwait INTEGER DEFAULT 0,
+			skip_floodwait_sec INTEGER DEFAULT 0,
 			timer TEXT DEFAULT 'Belum diatur',
 			extra INTEGER DEFAULT 0,
 			mode TEXT DEFAULT 'Normal',
@@ -301,6 +304,9 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_index INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN broadcast_next_at INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN topic_lists TEXT DEFAULT '[]';`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN delay_mode TEXT DEFAULT 'manual';`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN delay_all_groups INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN skip_floodwait_sec INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`INSERT OR IGNORE INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
 		SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM sessions WHERE prefix_set = 1;`)
 

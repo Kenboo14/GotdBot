@@ -147,11 +147,6 @@ func (h *Handler) RenderControlStatus(ctx context.Context, b *botgotd.Bot, chatI
 	h.syncConfigMasaAktif(ctx, targetID, cfg)
 	gCount, lCount := h.db.CountGroupsAndLists(ctx, targetID)
 
-	skipFw := "Mati"
-	if cfg.SkipFloodWait {
-		skipFw = "Aktif"
-	}
-
 	safeMode := "Nonaktif"
 	if cfg.Safemode {
 		safeMode = "Aktif"
@@ -166,12 +161,12 @@ func (h *Handler) RenderControlStatus(ctx context.Context, b *botgotd.Bot, chatI
 		{Label: "🏷️ UserID", Value: fmt.Sprintf("%d", targetID)},
 		{Label: "🚀 Status", Value: html.EscapeString(cfg.Status)},
 		{Label: "👑 Mode", Value: html.EscapeString(cfg.Mode)},
-		{Label: "🕒 Jeda", Value: fmt.Sprintf("%d detik", cfg.Delay)},
+		{Label: "🕒 Jeda", Value: html.EscapeString(cfg.FormatJedaSummary(gCount))},
 		{Label: "🌐 Target Grup", Value: fmt.Sprintf("%d grup", gCount)},
 		{Label: "📚 Materi List", Value: fmt.Sprintf("%d list", lCount)},
 		{Label: "⚠️ Safemode", Value: safeMode},
-		{Label: "⏭️ Skip Flood", Value: skipFw},
-		{Label: "⏱️ Timer", Value: html.EscapeString(cfg.Timer)},
+		{Label: "⏭️ Skip Flood", Value: html.EscapeString(cfg.FormatSkipFloodWait())},
+		{Label: "⏱️ Timer", Value: html.EscapeString(cfg.FormatTimerDisplay())},
 		{Label: "🔥 Masa Aktif", Value: html.EscapeString(cfg.MasaAktif)},
 	}
 	tbl := assets.RichStatusTable(rows)
@@ -519,12 +514,13 @@ func (h *Handler) RenderControlJeda(ctx context.Context, b *botgotd.Bot, chatID 
 	h.setPanelState(chatID, "")
 
 	cfg := h.db.GetUserConfig(ctx, targetID)
+	gCount, _ := h.db.CountGroupsAndLists(ctx, targetID)
 	targetName := h.GetAccountName(targetID)
 	if targetName == "" {
 		targetName = fmt.Sprintf("Akun [%d]", targetID)
 	}
 
-	text := assets.TxtControlJeda(targetName, targetID, cfg.Delay)
+	text := assets.TxtControlJeda(targetName, targetID, cfg.FormatJedaSummary(gCount))
 	inlineMarkup := assets.CtrlJedaIKB(targetID)
 
 	if messageID > 0 {

@@ -828,7 +828,8 @@ func resolveGroupTopicDeliveries(cfg jasebConfigDoc, grp jasebGroupDoc) []groupT
 func (s *Service) deliverGroupBroadcast(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, mainMsgID int, rotator *topicPlayTracker) bool {
 	deliveries := resolveGroupTopicDeliveries(cfg, grp)
 	if len(deliveries) == 0 {
-		return s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, mainMsgID, 0)
+		ok, _ := s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, mainMsgID, 0)
+		return ok
 	}
 
 	for i, d := range deliveries {
@@ -861,15 +862,19 @@ func (s *Service) deliverGroupBroadcast(ctx context.Context, client *gobot.Clien
 				case <-timer.C:
 				}
 			}
-			if !s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, pid, d.TopicID) {
+			ok, skipped := s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, pid, d.TopicID)
+			if !ok {
 				return false
+			}
+			if skipped {
+				return true
 			}
 		}
 	}
 	return true
 }
 
-func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, msgID, topicID int) bool {
+func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, msgID, topicID int) (bool, bool) {
 	forwardIDs := s.cacheForwardIDs(ctx, client, cachePeer, msgID)
 	randomIDs := make([]int64, len(forwardIDs))
 	for i := range randomIDs {
@@ -892,13 +897,17 @@ func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Clie
 	_, err := client.API().MessagesForwardMessages(ctx, req)
 	if err != nil {
 		log.Printf("[panelBroadcast] forward to %s (%d, topic=%d) error: %v", grp.Title, grp.ChatID, topicID, err)
-		if flood, ok := tgerr.AsFloodWait(err); ok && !cfg.SkipFloodWait {
+		if flood, ok := tgerr.AsFloodWait(err); ok {
+			if shouldSkipFloodWait(cfg, flood) {
+				log.Printf("[panelBroadcast] skip group %s (%d): FloodWait %v melebihi batas (%ds)", grp.Title, grp.ChatID, flood, cfg.SkipFloodWaitSec)
+				return true, true
+			}
 			sleepDur := flood + time.Second
 			timer := time.NewTimer(sleepDur)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return false
+				return false, false
 			case <-timer.C:
 			}
 			_, err = client.API().MessagesForwardMessages(ctx, req)
@@ -907,5 +916,5 @@ func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Clie
 			}
 		}
 	}
-	return true
+	return true, false
 }

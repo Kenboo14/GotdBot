@@ -275,13 +275,13 @@ func TxtControlHapusGrupDone(targetName string, targetID int64) string {
 }
 
 // TxtControlJeda returns the jeda picker text.
-func TxtControlJeda(targetName string, targetID int64, currentDelay int) string {
+func TxtControlJeda(targetName string, targetID int64, currentSummary string) string {
 	return fmt.Sprintf(
 		`<h1>⏱️ Atur Jeda Siaran (Remote)</h1>`+
 			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
-			`<blockquote expandable>⏱️ <b>Jeda saat ini:</b> <code>%d detik</code></blockquote>`+
-			`<p>Pilih durasi jeda antar pesan siaran:</p>`,
-		html.EscapeString(targetName), targetID, currentDelay,
+			`<blockquote expandable>⏱️ <b>Jeda saat ini:</b> <code>%s</code></blockquote>`+
+			`<p>Pilih mode atau durasi jeda antar pesan siaran:</p>`,
+		html.EscapeString(targetName), targetID, html.EscapeString(currentSummary),
 	)
 }
 

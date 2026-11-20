@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -84,7 +85,10 @@ func (s *SQLiteClient) initTables() error {
 			owner_id INTEGER PRIMARY KEY,
 			type TEXT DEFAULT 'Broadcast',
 			delay INTEGER DEFAULT 5,
+			delay_mode TEXT DEFAULT 'manual',
+			delay_all_groups INTEGER DEFAULT 0,
 			skip_floodwait INTEGER DEFAULT 0,
+			skip_floodwait_sec INTEGER DEFAULT 0,
 			timer TEXT DEFAULT 'Belum diatur',
 			extra INTEGER DEFAULT 0,
 			mode TEXT DEFAULT 'Normal',
@@ -139,6 +143,9 @@ func (s *SQLiteClient) initTables() error {
 	}
 	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN account_name TEXT DEFAULT '';")
 	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN topic_lists TEXT DEFAULT '[]';")
+	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN delay_mode TEXT DEFAULT 'manual';")
+	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN delay_all_groups INTEGER DEFAULT 0;")
+	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN skip_floodwait_sec INTEGER DEFAULT 0;")
 	return nil
 }
 
@@ -153,7 +160,7 @@ func (s *SQLiteClient) HasSession(ctx context.Context, ownerID int64) (bool, err
 }
 
 func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConfig, error) {
-	query := `SELECT owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode, status,
+	query := `SELECT owner_id, type, delay, COALESCE(delay_mode, 'manual'), COALESCE(delay_all_groups, 0), skip_floodwait, COALESCE(skip_floodwait_sec, 0), timer, extra, mode, safemode, status,
 		masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
 		tindakan_terkini, tindakan_terakhir, lists, groups, topics, COALESCE(topic_lists, '[]'), updated_at
 		FROM jaseb_configurasi WHERE owner_id = ? LIMIT 1;`
@@ -163,7 +170,7 @@ func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConf
 	var listsJSON, groupsJSON, topicsJSON, topicListsJSON string
 
 	err := s.DB.QueryRowContext(ctx, query, ownerID).Scan(
-		&c.OwnerID, &c.Type, &c.Delay, &sfw, &c.Timer, &c.Extra, &c.Mode, &sfm, &c.Status,
+		&c.OwnerID, &c.Type, &c.Delay, &c.DelayMode, &c.DelayAllGroups, &sfw, &c.SkipFloodWaitSec, &c.Timer, &c.Extra, &c.Mode, &sfm, &c.Status,
 		&c.MasaAktif, &c.Notifikasi, &c.Email, &c.Admin, &c.Watermark, &c.WatermarkCacheID, &tpe,
 		&c.TindakanTerkini, &c.TindakanTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON, &c.UpdatedAt,
 	)
@@ -208,14 +215,17 @@ func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConf
 
 func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	query := `INSERT INTO jaseb_configurasi (
-		owner_id, type, delay, skip_floodwait, timer, extra, mode, safemode, status,
+		owner_id, type, delay, delay_mode, delay_all_groups, skip_floodwait, skip_floodwait_sec, timer, extra, mode, safemode, status,
 		masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
 		tindakan_terkini, tindakan_terakhir, lists, groups, topics, topic_lists, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(owner_id) DO UPDATE SET
 		type = excluded.type,
 		delay = excluded.delay,
+		delay_mode = excluded.delay_mode,
+		delay_all_groups = excluded.delay_all_groups,
 		skip_floodwait = excluded.skip_floodwait,
+		skip_floodwait_sec = excluded.skip_floodwait_sec,
 		timer = excluded.timer,
 		extra = excluded.extra,
 		mode = excluded.mode,
@@ -248,6 +258,10 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	if c.TopicEnabled {
 		tpe = 1
 	}
+	delayMode := strings.TrimSpace(c.DelayMode)
+	if delayMode == "" {
+		delayMode = "manual"
+	}
 	if c.UpdatedAt.IsZero() {
 		c.UpdatedAt = time.Now()
 	}
@@ -258,7 +272,7 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	topicListsBytes, _ := json.Marshal(c.TopicLists)
 
 	_, err := s.DB.ExecContext(ctx, query,
-		c.OwnerID, c.Type, c.Delay, sfw, c.Timer, c.Extra, c.Mode, sfm, c.Status,
+		c.OwnerID, c.Type, c.Delay, delayMode, c.DelayAllGroups, sfw, c.SkipFloodWaitSec, c.Timer, c.Extra, c.Mode, sfm, c.Status,
 		c.MasaAktif, c.Notifikasi, c.Email, c.Admin, c.Watermark, c.WatermarkCacheID, tpe,
 		c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), c.UpdatedAt,
 	)

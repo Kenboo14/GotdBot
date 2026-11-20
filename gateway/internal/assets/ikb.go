@@ -187,14 +187,18 @@ func CtrlJedaIKB(targetID int64) *botgotd.InlineKeyboardMarkup {
 	return &botgotd.InlineKeyboardMarkup{
 		InlineKeyboard: [][]botgotd.InlineKeyboardButton{
 			{
-				btn(IkbJeda3, "ctrl:set_jeda:"+t+":3"),
-				btn(IkbJeda5, "ctrl:set_jeda:"+t+":5"),
-				btn(IkbJeda10, "ctrl:set_jeda:"+t+":10"),
+				btn("🎁 Jeda Aman", "ctrl:set_jeda:"+t+":aman"),
+				btn("💡 Jeda Otomatis", "ctrl:set_jeda:"+t+":otomatis"),
 			},
 			{
+				btn(IkbJeda5, "ctrl:set_jeda:"+t+":5"),
 				btn(IkbJeda15, "ctrl:set_jeda:"+t+":15"),
 				btn(IkbJeda30, "ctrl:set_jeda:"+t+":30"),
+			},
+			{
 				btn(IkbJeda60, "ctrl:set_jeda:"+t+":60"),
+				btn("⏳ 120 detik", "ctrl:set_jeda:"+t+":120"),
+				btn("🔕 Matikan", "ctrl:set_jeda:"+t+":0"),
 			},
 			{btn(IkbKembali, "ctrl:menu:"+t)},
 		},

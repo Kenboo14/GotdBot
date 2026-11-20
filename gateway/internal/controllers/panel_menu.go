@@ -63,6 +63,7 @@ func (h *Handler) ShowExpertExtra(ctx context.Context, b *botgotd.Bot, chatID in
 	text := `<h1>⚡ Expert Extra Features</h1>
 <table border="1">
   <tr><th>🛠️ Fitur</th><th>📌 Keterangan</th></tr>
+  <tr><td>⏳ Jeda &amp; Skip FloodWait</td><td>Pengaturan Jeda &amp; Skip FloodWait berlaku juga untuk set Expert Extra</td></tr>
   <tr><td>🛡️ FloodWait Bypass</td><td>Antrean adaptif saat sinyal flood Telegram</td></tr>
   <tr><td>🔍 Anti-Duplicate</td><td>Cegah pesan ganda ke dialog sama</td></tr>
   <tr><td>⚡ Pure-Go MTProto</td><td>High performance gotd/td + SQLite WAL</td></tr>
@@ -151,6 +152,11 @@ func isKnownPanelButton(text string) bool {
 		assets.BtnExpert,
 		assets.BtnReset,
 		assets.BtnAturJeda,
+		assets.BtnJedaAman,
+		assets.BtnJedaOtomatis,
+		assets.BtnJedaPerGrup,
+		assets.BtnJedaPerSemuaGrup,
+		assets.BtnSkipFloodWait,
 		assets.BtnSettings,
 		assets.BtnFeed,
 		assets.BtnWebapp,
@@ -299,6 +305,26 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		h.PromptAturJeda(ctx, b, chatID, effectiveUserID)
 		return true
 
+	case assets.BtnJedaAman:
+		h.applyJedaAman(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnJedaOtomatis:
+		h.applyJedaOtomatis(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnJedaPerGrup:
+		h.PromptJedaPerGrup(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnJedaPerSemuaGrup:
+		h.PromptJedaPerSemuaGrup(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnSkipFloodWait:
+		h.PromptSkipFloodWait(ctx, b, chatID, effectiveUserID)
+		return true
+
 	case assets.BtnBantuan:
 		h.ShowBantuan(ctx, b, chatID, effectiveUserID)
 		return true
@@ -422,7 +448,10 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 			OwnerID:          effectiveUserID,
 			Type:             "Broadcast",
 			Delay:            5,
+			DelayMode:        "manual",
+			DelayAllGroups:   0,
 			SkipFloodWait:    false,
+			SkipFloodWaitSec: 0,
 			Timer:            "Belum diatur",
 			Extra:            0,
 			Mode:             "Normal",
