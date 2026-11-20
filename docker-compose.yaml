@@ -1,9 +1,46 @@
+x-ubot-base: &ubot-base
+  build:
+    context: ./ubot
+    dockerfile: Dockerfile
+  image: ghcr.io/kenboo14/gotdbot-ubot:latest
+  restart: unless-stopped
+  user: "0:0"
+  volumes:
+    - ./data:/app/data
+  depends_on:
+    redis:
+      condition: service_healthy
+
+x-ubot-env: &ubot-env
+  BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
+  OWNER: ${OWNER:-}
+  OWNER_ID: ${OWNER_ID:-${OWNER:-}}
+  LOGBOT_TOKEN: ${LOGBOT_TOKEN:-}
+  REDIS_ADDR: redis:6379
+  REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
+  API_ID: ${API_ID:?Set API_ID in .env before installing a userbot}
+  API_HASH: ${API_HASH:?Set API_HASH in .env before installing a userbot}
+  SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?Set SESSION_ENCRYPTION_KEY in .env}
+  SQLITE_PATH: /app/data/userbot.db
+  MONGO_BACKUP_URI: ${MONGO_BACKUP_URI:-}
+  MONGO_BACKUP_DB: ${MONGO_BACKUP_DB:-gotdbot_backup}
+  GROUP_CACHE: ${GROUP_CACHE:-AiotdCaches}
+  NOTES_CACHE: ${NOTES_CACHE:-7157}
+  TEKS_CACHE: ${TEKS_CACHE:-3325}
+  TOPIC_CACHE: ${TOPIC_CACHE:-}
+  WATERMARK_CACHE: ${WATERMARK_CACHE:-6847}
+  SESSION_CACHE: ${SESSION_CACHE:-7073}
+  IMGBB_API_KEY: ${IMGBB_API_KEY:-}
+  SESSION_HEARTBEAT_SECONDS: ${SESSION_HEARTBEAT_SECONDS:-60}
+  GOGC: ${GOGC:-30}
+
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASS:-change-me-for-local-dev}
-    mem_limit: 80m
+    command: redis-server --appendonly yes --maxmemory 72mb --maxmemory-policy volatile-lru --requirepass ${REDIS_PASS:-change-me-for-local-dev}
+    mem_limit: 96m
+    cpu_shares: 1024
     volumes:
       - redis_data:/data
     healthcheck:
@@ -19,7 +56,8 @@ services:
     image: ghcr.io/kenboo14/gotdbot-gateway:latest
     restart: unless-stopped
     user: "0:0"
-    mem_limit: 80m
+    mem_limit: 110m
+    cpu_shares: 1024
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
       OWNER: ${OWNER:-}
@@ -45,57 +83,48 @@ services:
       MONITOR_INVOICE: ${MONITOR_INVOICE:-}
       MONITOR_DATABASE: ${MONITOR_DATABASE:-}
       GROUP_CACHE: ${GROUP_CACHE:-AiotdCaches}
-      GOMEMLIMIT: ${GOMEMLIMIT:-700MiB}
+      GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-85MiB}
       GOGC: ${GOGC:-30}
     volumes:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
-
     depends_on:
       redis:
         condition: service_healthy
 
-  ubot:
-    build:
-      context: ./ubot
-      dockerfile: Dockerfile
-    image: ghcr.io/kenboo14/gotdbot-ubot:latest
-    restart: unless-stopped
-    user: "0:0"
-    mem_limit: 1250m
+  ubot-1:
+    <<: *ubot-base
+    mem_limit: 460m
+    cpu_shares: 1024
     environment:
-      BOT_TOKEN: ${BOT_TOKEN:?Set BOT_TOKEN in .env before starting}
-      OWNER: ${OWNER:-}
-      OWNER_ID: ${OWNER_ID:-${OWNER:-}}
-      LOGBOT_TOKEN: ${LOGBOT_TOKEN:-}
-      REDIS_ADDR: redis:6379
-      REDIS_PASS: ${REDIS_PASS:-change-me-for-local-dev}
+      <<: *ubot-env
+      WORKER_ID: ubot-1
+      WORKER_POOL: normal
+      MAX_ACTIVE_SESSIONS: ${NORMAL_WORKER_MAX_SESSIONS:-100}
+      GOMEMLIMIT: 360MiB
 
-      API_ID: ${API_ID:?Set API_ID in .env before installing a userbot}
-      API_HASH: ${API_HASH:?Set API_HASH in .env before installing a userbot}
-      SESSION_ENCRYPTION_KEY: ${SESSION_ENCRYPTION_KEY:?Set SESSION_ENCRYPTION_KEY in .env}
+  ubot-2:
+    <<: *ubot-base
+    mem_limit: 460m
+    cpu_shares: 1024
+    environment:
+      <<: *ubot-env
+      WORKER_ID: ubot-2
+      WORKER_POOL: normal
+      MAX_ACTIVE_SESSIONS: ${NORMAL_WORKER_MAX_SESSIONS:-100}
+      GOMEMLIMIT: 360MiB
 
-      SQLITE_PATH: /app/data/userbot.db
-      MONGO_BACKUP_URI: ${MONGO_BACKUP_URI:-}
-      MONGO_BACKUP_DB: ${MONGO_BACKUP_DB:-gotdbot_backup}
-
-      GROUP_CACHE: ${GROUP_CACHE:-AiotdCaches}
-      NOTES_CACHE: ${NOTES_CACHE:-7157}
-      TEKS_CACHE: ${TEKS_CACHE:-3325}
-      TOPIC_CACHE: ${TOPIC_CACHE:-}
-      WATERMARK_CACHE: ${WATERMARK_CACHE:-6847}
-      SESSION_CACHE: ${SESSION_CACHE:-7073}
-      IMGBB_API_KEY: ${IMGBB_API_KEY:-}
-
-      MAX_ACTIVE_SESSIONS: ${MAX_ACTIVE_SESSIONS:-300}
-      SESSION_HEARTBEAT_SECONDS: ${SESSION_HEARTBEAT_SECONDS:-60}
-      GOMEMLIMIT: ${GOMEMLIMIT:-700MiB}
-      GOGC: ${GOGC:-30}
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      redis:
-        condition: service_healthy
+  ubot-hell:
+    <<: *ubot-base
+    mem_limit: 520m
+    cpu_shares: 512
+    cpus: "0.45"
+    environment:
+      <<: *ubot-env
+      WORKER_ID: ubot-hell
+      WORKER_POOL: hell
+      MAX_ACTIVE_SESSIONS: ${HELL_WORKER_MAX_SESSIONS:-50}
+      GOMEMLIMIT: 400MiB
 
 volumes:
   redis_data:

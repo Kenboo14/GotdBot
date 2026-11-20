@@ -28,14 +28,14 @@ func NewSQLiteClient(path string) (*SQLiteClient, error) {
 		}
 	}
 
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-8000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(33554432)&_pragma=wal_autocheckpoint(1000)", path)
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=cache_size(-2000)&_pragma=temp_store(MEMORY)&_pragma=mmap_size(0)&_pragma=wal_autocheckpoint(1000)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open sqlite: %w", err)
 	}
 
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
+	db.SetMaxOpenConns(3)
+	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err := db.Ping(); err != nil {
@@ -46,10 +46,10 @@ func NewSQLiteClient(path string) (*SQLiteClient, error) {
 	pragmas := []string{
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
-		"PRAGMA busy_timeout = 5000;",
-		"PRAGMA cache_size = -8000;",
+		"PRAGMA busy_timeout = 10000;",
+		"PRAGMA cache_size = -2000;",
 		"PRAGMA temp_store = MEMORY;",
-		"PRAGMA mmap_size = 33554432;",
+		"PRAGMA mmap_size = 0;",
 		"PRAGMA wal_autocheckpoint = 1000;",
 	}
 	for _, p := range pragmas {
@@ -170,6 +170,16 @@ func (s *SQLiteClient) initTables() error {
 			topic_lists TEXT DEFAULT '[]',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS worker_assignments (
+			owner_id INTEGER PRIMARY KEY,
+			worker_id TEXT NOT NULL,
+			pool TEXT DEFAULT 'normal',
+			heavy_score INTEGER DEFAULT 0,
+			migrated_at INTEGER DEFAULT 0,
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_worker_assignments_wid ON worker_assignments(worker_id);`,
 	}
 
 	for _, q := range queries {
@@ -310,12 +320,122 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	topicsBytes, _ := json.Marshal(c.Topics)
 	topicListsBytes, _ := json.Marshal(c.TopicLists)
 
-	_, err := s.DB.ExecContext(ctx, query,
-		c.OwnerID, c.Type, c.Delay, delayMode, c.DelayAllGroups, sfw, c.SkipFloodWaitSec, c.Timer, c.Extra, c.Mode, sfm, c.Status,
-		c.MasaAktif, c.Notifikasi, c.Email, c.Admin, c.Watermark, c.WatermarkCacheID, tpe,
-		c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), c.ActiveTokenSHA, c.UpdatedAt,
-	)
+	err := s.execWithBusyRetry(ctx, func() error {
+		_, execErr := s.DB.ExecContext(ctx, query,
+			c.OwnerID, c.Type, c.Delay, delayMode, c.DelayAllGroups, sfw, c.SkipFloodWaitSec, c.Timer, c.Extra, c.Mode, sfm, c.Status,
+			c.MasaAktif, c.Notifikasi, c.Email, c.Admin, c.Watermark, c.WatermarkCacheID, tpe,
+			c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), c.ActiveTokenSHA, c.UpdatedAt,
+		)
+		return execErr
+	})
 	return err
+}
+
+type WorkerAssignment struct {
+	OwnerID    int64
+	WorkerID   string
+	Pool       string
+	HeavyScore int
+	MigratedAt int64
+	UpdatedAt  time.Time
+}
+
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToUpper(err.Error())
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "DATABASE IS LOCKED")
+}
+
+func (s *SQLiteClient) execWithBusyRetry(ctx context.Context, fn func() error) error {
+	var err error
+	backoffs := []time.Duration{40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond}
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		err = fn()
+		if err == nil || !isSQLiteBusyError(err) || attempt == len(backoffs) {
+			return err
+		}
+		timer := time.NewTimer(backoffs[attempt])
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+func (s *SQLiteClient) GetWorkerAssignment(ctx context.Context, ownerID int64) (*WorkerAssignment, error) {
+	if s == nil || s.DB == nil || ownerID == 0 {
+		return nil, nil
+	}
+	var a WorkerAssignment
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT owner_id, worker_id, COALESCE(pool, 'normal'), COALESCE(heavy_score, 0), COALESCE(migrated_at, 0), updated_at FROM worker_assignments WHERE owner_id = ? LIMIT 1;`,
+		ownerID,
+	).Scan(&a.OwnerID, &a.WorkerID, &a.Pool, &a.HeavyScore, &a.MigratedAt, &a.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get worker assignment: %w", err)
+	}
+	return &a, nil
+}
+
+func (s *SQLiteClient) SaveWorkerAssignment(ctx context.Context, a *WorkerAssignment) error {
+	if s == nil || s.DB == nil || a == nil || a.OwnerID == 0 || strings.TrimSpace(a.WorkerID) == "" {
+		return nil
+	}
+	pool := strings.ToLower(strings.TrimSpace(a.Pool))
+	if pool == "" {
+		pool = "normal"
+	}
+	now := time.Now()
+	if a.UpdatedAt.IsZero() {
+		a.UpdatedAt = now
+	}
+	return s.execWithBusyRetry(ctx, func() error {
+		_, execErr := s.DB.ExecContext(ctx,
+			`INSERT INTO worker_assignments (owner_id, worker_id, pool, heavy_score, migrated_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(owner_id) DO UPDATE SET
+				worker_id = excluded.worker_id,
+				pool = excluded.pool,
+				heavy_score = excluded.heavy_score,
+				migrated_at = excluded.migrated_at,
+				updated_at = excluded.updated_at;`,
+			a.OwnerID, strings.TrimSpace(a.WorkerID), pool, a.HeavyScore, a.MigratedAt, a.UpdatedAt,
+		)
+		if execErr != nil {
+			return fmt.Errorf("save worker assignment: %w", execErr)
+		}
+		return nil
+	})
+}
+
+func (s *SQLiteClient) ListWorkerAssignmentsByWorker(ctx context.Context, workerID string) ([]*WorkerAssignment, error) {
+	if s == nil || s.DB == nil || strings.TrimSpace(workerID) == "" {
+		return nil, nil
+	}
+	rows, err := s.DB.QueryContext(ctx,
+		`SELECT owner_id, worker_id, COALESCE(pool, 'normal'), COALESCE(heavy_score, 0), COALESCE(migrated_at, 0), updated_at FROM worker_assignments WHERE worker_id = ? ORDER BY owner_id ASC;`,
+		strings.TrimSpace(workerID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list worker assignments: %w", err)
+	}
+	defer rows.Close()
+	var list []*WorkerAssignment
+	for rows.Next() {
+		var a WorkerAssignment
+		if scanErr := rows.Scan(&a.OwnerID, &a.WorkerID, &a.Pool, &a.HeavyScore, &a.MigratedAt, &a.UpdatedAt); scanErr == nil {
+			list = append(list, &a)
+		}
+	}
+	return list, nil
 }
 
 func (s *SQLiteClient) SaveTokenMaster(ctx context.Context, tm *TokenMaster) error {

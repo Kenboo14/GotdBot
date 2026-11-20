@@ -29,8 +29,8 @@ func TestLogRouteSaveAndGet(t *testing.T) {
 	if err := client.DB.QueryRow("PRAGMA cache_size;").Scan(&cacheSize); err != nil {
 		t.Fatalf("failed to query cache_size: %v", err)
 	}
-	if cacheSize != -8000 {
-		t.Fatalf("expected cache_size -8000, got %d", cacheSize)
+	if cacheSize != -2000 {
+		t.Fatalf("expected cache_size -2000, got %d", cacheSize)
 	}
 
 	ctx := context.Background()

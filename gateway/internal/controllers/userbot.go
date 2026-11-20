@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -465,12 +466,19 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			session.State = "waiting_" + session.State
 		}
 		h.Sessions.mu.Unlock()
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: `<h1>❌ Layanan Pemasangan Tidak Tersedia</h1>
+		errText := `<h1>❌ Layanan Pemasangan Tidak Tersedia</h1>
 <blockquote expandable>Gagal menghubungi worker service userbot. Silakan coba sesaat lagi.</blockquote>
 <hr/>
-<p>Tekan tombol <b>⬅️ Batal ⬅️</b> untuk membatalkan pemasangan.</p>`,
+<p>Tekan tombol <b>⬅️ Batal ⬅️</b> untuk membatalkan pemasangan.</p>`
+		if errors.Is(err, broker.ErrWorkerPoolFull) {
+			errText = `<h1>⏳ Kapasitas Worker Penuh</h1>
+<blockquote expandable>Seluruh worker normal saat ini mencapai batas aman kapasitas sesi aktif (100 user per worker).</blockquote>
+<hr/>
+<p>Silakan coba lagi beberapa saat atau hubungi Owner. Tekan <b>⬅️ Batal ⬅️</b> untuk kembali.</p>`
+		}
+		b.SendMessage(ctx, &botgotd.SendMessageParams{
+			ChatID:      chatID,
+			Text:        errText,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.CancelOnlyMarkup,
 		})

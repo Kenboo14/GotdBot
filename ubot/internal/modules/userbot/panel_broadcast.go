@@ -120,6 +120,7 @@ func storeCachedPanelMsg(msg *tg.Message) {
 // publishConfigUpdated memberitahu gateway via Redis Pub/Sub bahwa config ownerID berubah di MongoDB.
 // Gateway akan fetch ulang 1 doc ini dari MongoDB ke SQLite-nya.
 func (s *Service) publishConfigUpdated(ctx context.Context, ownerID int64) {
+	s.invalidateConfigCache(ctx, ownerID, true)
 	if s.redis == nil {
 		return
 	}
@@ -145,6 +146,7 @@ func (s *Service) clearPanelData(ctx context.Context, ownerID int64, lists bool)
 		}
 		_, _ = s.sqlite.DB.ExecContext(ctx, fmt.Sprintf("UPDATE jaseb_configurasi SET %s = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?", field), "[]", ownerID)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func (s *Service) deletePanelList(ctx context.Context, ownerID int64, cacheIDText string) {
@@ -173,6 +175,7 @@ func (s *Service) deletePanelList(ctx context.Context, ownerID int64, cacheIDTex
 		listsJSON, _ := json.Marshal(filtered)
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET lists = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(listsJSON), ownerID)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey string) {
@@ -198,6 +201,7 @@ func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey 
 		groupsJSON, _ := json.Marshal(filtered)
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET groups = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(groupsJSON), ownerID)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func (s *Service) handleListDetail(ctx context.Context, client *gobot.Client, chatID, ownerID int64, taskID string) {
@@ -596,6 +600,7 @@ func (s *Service) normalizePanelListIDs(ctx context.Context, client *gobot.Clien
 		listsJSON, _ := json.Marshal(result)
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET lists = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(listsJSON), ownerID)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 	return result
 }
 
@@ -910,6 +915,7 @@ func (s *Service) syncAddListToSQLite(ctx context.Context, ownerID int64, cacheM
 	query := `INSERT INTO jaseb_configurasi (owner_id, lists, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
 	ON CONFLICT(owner_id) DO UPDATE SET lists = excluded.lists, updated_at = CURRENT_TIMESTAMP;`
 	_, _ = s.sqlite.DB.ExecContext(ctx, query, ownerID, string(listsBytes))
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func (s *Service) countLists(ctx context.Context, ownerID int64) int {
@@ -960,6 +966,7 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 		doc.MasaAktif, doc.Notifikasi, doc.Email, doc.Admin, doc.Watermark, doc.WatermarkCacheID,
 		boolInt(doc.TopicEnabled), doc.TindakanTerkini, doc.TindakanTerakhir, string(lists),
 		string(groups), string(topics), string(topicLists), doc.BroadcastIndex, doc.BroadcastNextAt, doc.ActiveTokenSHA, updatedAt)
+	s.cfgCache.Delete(ownerID)
 }
 
 func boolInt(value bool) int {
@@ -970,6 +977,9 @@ func boolInt(value bool) int {
 }
 
 func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfigDoc {
+	if cached, ok := s.cfgCache.Get(ownerID); ok {
+		return cached
+	}
 	if s.sqlite != nil {
 		var listsJSON, groupsJSON, topicsJSON, topicListsJSON string
 		var delay, delayAll, sfw, sfwSec, sfm, tpe, extra, wmCacheID int
@@ -1029,12 +1039,14 @@ func (s *Service) getJasebConfig(ctx context.Context, ownerID int64) jasebConfig
 			if topicListsJSON != "" {
 				_ = json.Unmarshal([]byte(topicListsJSON), &doc.TopicLists)
 			}
+			s.cfgCache.Set(ownerID, doc)
 			return doc
 		}
 	}
 	if s.db != nil {
 		var doc jasebConfigDoc
 		if err := s.db.Collection("jaseb_configurasi").FindOne(ctx, bson.M{"_id": ownerID}).Decode(&doc); err == nil {
+			s.cfgCache.Set(ownerID, doc)
 			return doc
 		}
 	}
@@ -1082,6 +1094,7 @@ func (s *Service) setPanelBroadcastStatus(ctx context.Context, ownerID int64, st
 		ON CONFLICT(owner_id) DO UPDATE SET status = excluded.status, tindakan_terkini = excluded.tindakan_terkini, tindakan_terakhir = excluded.tindakan_terakhir, updated_at = excluded.updated_at;`
 		_, _ = s.sqlite.DB.ExecContext(ctx, query, ownerID, status, tindakan, tLast, now)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int64, nextIndex int, nextAt time.Time) {
@@ -1089,6 +1102,7 @@ func (s *Service) savePanelBroadcastCheckpoint(ctx context.Context, ownerID int6
 	if s.sqlite != nil {
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET broadcast_index = ?, broadcast_next_at = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, nextIndex, nextAt.Unix(), ownerID)
 	}
+	s.cfgCache.Delete(ownerID)
 
 	// 2. Simpan ke MongoDB Atlas di background (async) agar latensi internet tidak memblokir perputaran broadcast
 	if s.db != nil {

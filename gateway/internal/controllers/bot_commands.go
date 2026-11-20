@@ -15,6 +15,7 @@ func registerBotCommands(b *botgotd.Bot, h *Handler) {
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "!server", botgotd.MatchTypeExact, h.ServerCommand)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "!code", botgotd.MatchTypePrefix, h.CodeCommand)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/token", botgotd.MatchTypePrefix, h.TokenCommand)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/worker", botgotd.MatchTypePrefix, h.WorkerCommand)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "token_set_duration:", botgotd.MatchTypePrefix, h.TokenCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_help:", botgotd.MatchTypePrefix, h.HelpCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_server:", botgotd.MatchTypePrefix, h.HelpCallback)

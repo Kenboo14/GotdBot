@@ -90,6 +90,7 @@ func (s *Service) clearPanelWatermark(ctx context.Context, ownerID int64) {
 	if s.sqlite != nil {
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET watermark = '', watermark_cache_id = 0, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, ownerID)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func (s *Service) saveTopicLists(ctx context.Context, ownerID int64, lists []jasebTopicListDoc) {
@@ -106,6 +107,7 @@ func (s *Service) saveTopicLists(ctx context.Context, ownerID int64, lists []jas
 		raw, _ := json.Marshal(lists)
 		_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET topic_lists = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(raw), ownerID)
 	}
+	s.invalidateConfigCache(ctx, ownerID, true)
 }
 
 func forumTopicsCacheKey(ownerID, chatID int64) string {
@@ -370,6 +372,7 @@ func (s *Service) handleFetchForumGroups(ctx context.Context, client *gobot.Clie
 			raw, _ := json.Marshal(cfg.Groups)
 			_, _ = s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET groups = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, string(raw), ownerID)
 		}
+		s.invalidateConfigCache(ctx, ownerID, true)
 		if s.db != nil {
 			groupsCopy := append([]jasebGroupDoc(nil), cfg.Groups...)
 			go func() {
@@ -917,5 +920,6 @@ func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Clie
 			}
 		}
 	}
+	s.recordHeavyBroadcastResult(cfg.OwnerID, err == nil)
 	return true, false
 }

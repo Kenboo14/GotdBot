@@ -52,6 +52,12 @@ type Config struct {
 		SessionCache   int    `yaml:"session_cache"`
 	} `yaml:"cache"`
 
+	Worker struct {
+		ID          string `yaml:"id"`
+		Pool        string `yaml:"pool"`
+		MaxSessions int    `yaml:"max_sessions"`
+	} `yaml:"worker"`
+
 	OwnerID int64 `yaml:"owner_id"`
 }
 
@@ -180,5 +186,19 @@ func applyEnv(cfg *Config) {
 
 	if value := os.Getenv("OWNER"); value != "" {
 		_, _ = fmt.Sscanf(value, "%d", &cfg.OwnerID)
+	}
+	if value := strings.TrimSpace(os.Getenv("WORKER_ID")); value != "" {
+		cfg.Worker.ID = value
+	}
+	if value := strings.TrimSpace(os.Getenv("WORKER_POOL")); value != "" {
+		cfg.Worker.Pool = strings.ToLower(value)
+	}
+	if cfg.Worker.Pool == "" {
+		cfg.Worker.Pool = "normal"
+	} else if cfg.Worker.Pool != "hell" {
+		cfg.Worker.Pool = "normal"
+	}
+	if value := os.Getenv("MAX_ACTIVE_SESSIONS"); value != "" {
+		_, _ = fmt.Sscanf(value, "%d", &cfg.Worker.MaxSessions)
 	}
 }

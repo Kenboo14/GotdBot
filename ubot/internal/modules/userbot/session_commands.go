@@ -100,6 +100,66 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		s.handleAlivePingJob(job)
 		return
 	}
+	if job.Type == "migrate_out" {
+		targetOwner := job.OwnerID
+		if targetOwner == 0 {
+			targetOwner = job.UserID
+		}
+		if targetOwner == 0 {
+			targetOwner = job.ChatID
+		}
+		_ = s.migrateSessionToWorker(ctx, job.ChatID, targetOwner, job.Text, job.TaskID, 0, "manual_or_drain")
+		return
+	}
+	if job.Type == "activate_migrated_session" {
+		targetOwner := job.OwnerID
+		if targetOwner == 0 {
+			targetOwner = job.UserID
+		}
+		if targetOwner == 0 {
+			targetOwner = job.ChatID
+		}
+		chatTarget := job.ChatID
+		if chatTarget == 0 {
+			chatTarget = targetOwner
+		}
+		if s.sqlite != nil {
+			row, err := s.sqlite.GetSessionByChat(ctx, chatTarget)
+			if err != nil || row == nil {
+				row, err = s.sqlite.GetSessionByAccount(ctx, targetOwner)
+			}
+			if err == nil && row != nil {
+				accID := row.AccountID
+				if accID == 0 {
+					accID = row.OwnerID
+				}
+				if accID == 0 {
+					accID = row.ChatID
+				}
+				prefix := "!"
+				if st, stErr := s.sqlite.GetUserbotSettings(ctx, row.ChatID); stErr == nil && st != nil && st.PrefixSet {
+					prefix = st.Prefix
+				} else if row.PrefixSet {
+					prefix = row.Prefix
+				}
+				s.mu.Lock()
+				s.prefixes[row.ChatID] = prefix
+				s.owners[row.ChatID] = accID
+				s.mu.Unlock()
+				targetOwner = accID
+				chatTarget = row.ChatID
+			}
+		}
+		_, curPool := s.workerIdentity()
+		if curPool == "hell" {
+			s.heavyMu.Lock()
+			st := s.getOrCreateHeavyStateLocked(chatTarget)
+			st.enteredHellAt = time.Now()
+			s.heavyMu.Unlock()
+		}
+		s.activate(chatTarget, targetOwner)
+		return
+	}
 	targetOwner := job.OwnerID
 	if targetOwner == 0 {
 		targetOwner = job.UserID
@@ -355,6 +415,7 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 
 	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
 	s.publishConfigUpdated(ctx, ownerID)
+	s.invalidateConfigCache(ctx, ownerID, true)
 
 	capNote := ""
 	if cappedFree {

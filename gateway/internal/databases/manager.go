@@ -61,6 +61,9 @@ type DataManager struct {
 	sqlite          *SQLiteClient
 	mu              sync.RWMutex
 	mongo           *MongoClient
+	rdb             *redis.Client
+	cfgCache        *boundedCache[int64, *JasebConfig]
+	licCache        *boundedCache[int64, *UserLicense]
 	mongoSaveSem    chan struct{}
 	pendingMongoCfg map[int64]*JasebConfig
 	inFlightMongo   map[int64]bool
@@ -139,6 +142,8 @@ func (dm *DataManager) CheckHealth(ctx context.Context, mongoConfigured bool) DB
 // initCtx: context pendek hanya untuk inisialisasi SQLite.
 func NewDataManager(bgCtx context.Context, initCtx context.Context, mongoURI, mongoDBName, sqlitePath string) (*DataManager, error) {
 	dm := &DataManager{
+		cfgCache:        newBoundedCache[int64, *JasebConfig](maxGatewayCacheSize, cfgCacheTTL),
+		licCache:        newBoundedCache[int64, *UserLicense](maxGatewayCacheSize, licCacheTTL),
 		mongoSaveSem:    make(chan struct{}, 8),
 		pendingMongoCfg: make(map[int64]*JasebConfig),
 		inFlightMongo:   make(map[int64]bool),
@@ -195,6 +200,7 @@ func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) *J
 			log.Printf("⚠️ SyncOneFromMongoDB ownerID=%d simpan SQLite: %v", ownerID, saveErr)
 		} else {
 			log.Printf("🔄 SyncOneFromMongoDB: ownerID=%d berhasil di-cache ke SQLite", ownerID)
+			dm.cacheSetConfig(ctx, cfg, false)
 		}
 	}
 	return cfg
@@ -204,11 +210,11 @@ func (dm *DataManager) SyncOneFromMongoDB(ctx context.Context, ownerID int64) *J
 // Saat ubot mengubah MongoDB, ubot publish ownerID ke channel ini.
 // Gateway lalu fetch ulang 1 doc user tersebut dari MongoDB dan update SQLite.
 func (dm *DataManager) WatchConfigUpdates(ctx context.Context, rdb *redis.Client) {
-	const channel = "config:updated"
-	pubsub := rdb.Subscribe(ctx, channel)
+	dm.AttachRedisCache(rdb)
+	pubsub := rdb.Subscribe(ctx, "config:updated", cacheInvChannel)
 	defer pubsub.Close()
 
-	log.Printf("👂 Gateway watching Redis channel: %s", channel)
+	log.Printf("👂 Gateway watching Redis channels: config:updated, %s", cacheInvChannel)
 	ch := pubsub.Channel()
 	for {
 		select {
@@ -218,11 +224,19 @@ func (dm *DataManager) WatchConfigUpdates(ctx context.Context, rdb *redis.Client
 			if !ok {
 				return
 			}
+			if msg.Channel == cacheInvChannel {
+				var inv cacheInvalidationEvent
+				if json.Unmarshal([]byte(msg.Payload), &inv) == nil {
+					dm.handleCacheInvalidation(inv)
+				}
+				continue
+			}
 			var evt ConfigUpdateEvent
 			if err := json.Unmarshal([]byte(msg.Payload), &evt); err != nil {
 				log.Printf("⚠️ config:updated bad payload: %v", err)
 				continue
 			}
+			dm.cacheInvalidateConfig(ctx, evt.OwnerID, false)
 			go dm.SyncOneFromMongoDB(ctx, evt.OwnerID)
 		}
 	}
@@ -256,16 +270,21 @@ func (m *DataManager) HasActiveSession(ctx context.Context, ownerID int64) bool 
 }
 
 func (m *DataManager) GetUserConfig(ctx context.Context, ownerID int64) *JasebConfig {
+	if cached := m.cacheGetConfig(ctx, ownerID); cached != nil {
+		return cached
+	}
 	// 1. Cek SQLite lokal dulu (cache) — jika ada, langsung kembalikan (0 hit ke MongoDB)
 	if m.sqlite != nil {
 		cfg, err := m.sqlite.GetConfig(ctx, ownerID)
 		if err == nil && cfg != nil {
+			m.cacheSetConfig(ctx, cfg, false)
 			return cfg
 		}
 	}
 
 	// 2. Cache miss di SQLite: ambil hanya untuk user ini dari MongoDB (1x hit per user)
 	if cfg := m.SyncOneFromMongoDB(ctx, ownerID); cfg != nil {
+		m.cacheSetConfig(ctx, cfg, false)
 		return cfg
 	}
 
@@ -319,6 +338,7 @@ func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) erro
 			}
 		}
 	}
+	m.cacheSetConfig(ctx, cfg, true)
 
 	// 2. Simpan ke MongoDB di background — deep copy + per-owner coalescing
 	if mg := m.getMongo(); mg != nil {
@@ -603,7 +623,14 @@ func (m *DataManager) SaveUserLicense(ctx context.Context, ul *UserLicense) erro
 	}
 	// 2. Simpan lisensi user ke SQLite lokal
 	if m.sqlite != nil {
-		return m.sqlite.SaveUserLicense(ctx, ul)
+		err := m.sqlite.SaveUserLicense(ctx, ul)
+		if err == nil && ul != nil {
+			m.cacheInvalidateLicense(ctx, ul.OwnerChatID, true)
+		}
+		return err
+	}
+	if ul != nil {
+		m.cacheInvalidateLicense(ctx, ul.OwnerChatID, true)
 	}
 	return nil
 }
@@ -631,10 +658,14 @@ func (m *DataManager) GetUserLicenseBySHA(ctx context.Context, tokenSHA string) 
 }
 
 func (m *DataManager) GetActiveUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
+	if cached, hit := m.cacheGetActiveLicense(ctx, ownerChatID); hit && cached != nil {
+		return cached, nil
+	}
 	// 1. Cek SQLite lokal terlebih dahulu
 	if m.sqlite != nil {
 		ul, err := m.sqlite.GetActiveUserLicense(ctx, ownerChatID)
 		if err == nil && ul != nil {
+			m.cacheSetActiveLicense(ctx, ownerChatID, ul)
 			return ul, nil
 		}
 	}
@@ -646,6 +677,7 @@ func (m *DataManager) GetActiveUserLicense(ctx context.Context, ownerChatID int6
 			if m.sqlite != nil {
 				_ = m.sqlite.SaveUserLicense(ctx, ul)
 			}
+			m.cacheSetActiveLicense(ctx, ownerChatID, ul)
 			return ul, nil
 		}
 	}
@@ -706,14 +738,21 @@ func (m *DataManager) ListExpiredUserLicenses(ctx context.Context, now time.Time
 }
 
 func (m *DataManager) MarkUserLicenseExpired(ctx context.Context, tokenSHA string) error {
+	var ownerChatID int64
+	if ul, _ := m.GetUserLicenseBySHA(ctx, tokenSHA); ul != nil {
+		ownerChatID = ul.OwnerChatID
+	}
 	if mg := m.getMongo(); mg != nil {
 		if err := mg.MarkUserLicenseExpired(ctx, tokenSHA); err != nil {
 			log.Printf("⚠️ MarkUserLicenseExpired MongoDB err: %v", err)
 		}
 	}
 	if m.sqlite != nil {
-		return m.sqlite.MarkUserLicenseExpired(ctx, tokenSHA)
+		err := m.sqlite.MarkUserLicenseExpired(ctx, tokenSHA)
+		m.cacheInvalidateLicense(ctx, ownerChatID, true)
+		return err
 	}
+	m.cacheInvalidateLicense(ctx, ownerChatID, true)
 	return nil
 }
 
@@ -751,8 +790,17 @@ func (m *DataManager) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID
 	}
 	// 2. Relink di SQLite lokal
 	if m.sqlite != nil {
-		return m.sqlite.RelinkUserData(ctx, oldOwnerID, newOwnerID)
+		err := m.sqlite.RelinkUserData(ctx, oldOwnerID, newOwnerID)
+		m.cacheInvalidateConfig(ctx, oldOwnerID, true)
+		m.cacheInvalidateConfig(ctx, newOwnerID, true)
+		m.cacheInvalidateLicense(ctx, oldOwnerID, true)
+		m.cacheInvalidateLicense(ctx, newOwnerID, true)
+		return err
 	}
+	m.cacheInvalidateConfig(ctx, oldOwnerID, true)
+	m.cacheInvalidateConfig(ctx, newOwnerID, true)
+	m.cacheInvalidateLicense(ctx, oldOwnerID, true)
+	m.cacheInvalidateLicense(ctx, newOwnerID, true)
 	return nil
 }
 
@@ -763,20 +811,30 @@ func (m *DataManager) SupersedeOtherUserLicenses(ctx context.Context, ownerChatI
 		}
 	}
 	if m.sqlite != nil {
-		return m.sqlite.SupersedeOtherUserLicenses(ctx, ownerChatID, keepTokenSHA)
+		err := m.sqlite.SupersedeOtherUserLicenses(ctx, ownerChatID, keepTokenSHA)
+		m.cacheInvalidateLicense(ctx, ownerChatID, true)
+		return err
 	}
+	m.cacheInvalidateLicense(ctx, ownerChatID, true)
 	return nil
 }
 
 func (m *DataManager) MarkUserLicenseStatus(ctx context.Context, tokenSHA, status string) error {
+	var ownerChatID int64
+	if ul, _ := m.GetUserLicenseBySHA(ctx, tokenSHA); ul != nil {
+		ownerChatID = ul.OwnerChatID
+	}
 	if mg := m.getMongo(); mg != nil {
 		if err := mg.MarkUserLicenseStatus(ctx, tokenSHA, status); err != nil {
 			log.Printf("⚠️ MarkUserLicenseStatus MongoDB err: %v", err)
 		}
 	}
 	if m.sqlite != nil {
-		return m.sqlite.MarkUserLicenseStatus(ctx, tokenSHA, status)
+		err := m.sqlite.MarkUserLicenseStatus(ctx, tokenSHA, status)
+		m.cacheInvalidateLicense(ctx, ownerChatID, true)
+		return err
 	}
+	m.cacheInvalidateLicense(ctx, ownerChatID, true)
 	return nil
 }
 

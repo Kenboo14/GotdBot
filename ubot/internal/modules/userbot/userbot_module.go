@@ -26,7 +26,18 @@ func (m *Init) Register(ctx context.Context, sqlite *databases.SQLiteClient, db 
 		ensureMongoIndexes(ctx, db)
 	}
 	service := NewService(ctx, sqlite, db, redis, m.Config.Userbot.APIID, m.Config.Userbot.APIHash, key, m.Config.Telegram.BotToken, m.Config.Telegram.LogBotToken, m.Config.OwnerID)
+	service.ConfigureWorker(m.Config.Worker.ID, m.Config.Worker.Pool, m.Config.Worker.MaxSessions)
+	if redis != nil {
+		go service.startCacheInvalidationLoop(ctx)
+	}
 	go service.Restore(ctx)
+	if wid := m.Config.Worker.ID; wid != "" {
+		go redis.ListenerWithWorkers(ctx, "to:group:auth:"+wid, wid, "to:ubot:auth:"+wid, 4, service.Handle)
+		go redis.Listener(ctx, "to:group:cmd:"+wid, wid, "to:ubot:command:"+wid, service.HandleCommand)
+		go service.startWorkerHeartbeatLoop(ctx)
+		go service.startHeavyScoreMonitorLoop(ctx)
+		return
+	}
 	go redis.ListenerWithWorkers(ctx, "to:group:ubot", "to:worker:auth", "to:ubot:auth", 4, service.Handle)
 	go redis.Listener(ctx, "to:group:command", "to:worker:command", "to:ubot:command", service.HandleCommand)
 }

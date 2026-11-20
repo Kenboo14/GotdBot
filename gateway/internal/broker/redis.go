@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"log"
 	"log/slog"
 	"runtime/debug"
@@ -17,8 +18,21 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+var ErrWorkerPoolFull = errors.New("worker pool full")
+
 type Redis struct {
-	Client *redis.Client
+	Client         *redis.Client
+	mu             sync.RWMutex
+	streamResolver func(context.Context, string, models.PToService) (string, error)
+}
+
+func (r *Redis) SetStreamResolver(fn func(context.Context, string, models.PToService) (string, error)) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.streamResolver = fn
+	r.mu.Unlock()
 }
 
 func NewRedis(ctx context.Context, addr string, pwd string, useTLS bool) (*Redis, error) {
@@ -47,7 +61,25 @@ func NewRedis(ctx context.Context, addr string, pwd string, useTLS bool) (*Redis
 }
 
 func (r *Redis) To(ctx context.Context, stream string, data models.PToService) error {
+	targetStream := stream
+	if stream == "to:ubot:command" || stream == "to:ubot:auth" {
+		r.mu.RLock()
+		resolver := r.streamResolver
+		r.mu.RUnlock()
+		if resolver != nil {
+			resolved, err := resolver(ctx, stream, data)
+			if err != nil {
+				return err
+			}
+			if resolved != "" {
+				targetStream = resolved
+			}
+		}
+	}
+	return r.ToStream(ctx, targetStream, data)
+}
 
+func (r *Redis) ToStream(ctx context.Context, stream string, data models.PToService) error {
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		utils.LogError("JSON Marshal failed", err, nil)
@@ -55,7 +87,7 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 	}
 
 	payload := map[string]interface{}{
-		"payload": string(jsonData), // Simpan sebagai string JSON
+		"payload": string(jsonData),
 		"ts":      time.Now().Unix(),
 	}
 
@@ -73,7 +105,6 @@ func (r *Redis) To(ctx context.Context, stream string, data models.PToService) e
 	}
 
 	return nil
-
 }
 
 func (r *Redis) Listener(ctx context.Context, b *botgotd.Bot, group string, worker string, stream string, callback func(context.Context, *botgotd.Bot, redis.XMessage)) {

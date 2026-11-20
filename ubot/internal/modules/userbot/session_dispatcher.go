@@ -16,6 +16,7 @@ type userbotUpdateHandler struct {
 
 func (h *userbotUpdateHandler) Handle(ctx context.Context, u tg.UpdatesClass) error {
 	h.s.recordIncomingUpdate(h.chatID)
+	h.s.recordHeavyUpdate(h.chatID)
 
 	switch upd := u.(type) {
 	case *tg.UpdateShort:

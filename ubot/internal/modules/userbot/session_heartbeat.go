@@ -18,6 +18,7 @@ func (s *Service) recordFloodWait(chatID int64, dur time.Duration) {
 	// Tambahkan jitter 500ms agar request berikutnya tidak menembak serentak tepat di detik ke-0
 	until := time.Now().Add(dur + 500*time.Millisecond)
 	s.floodCooldowns.Store(chatID, until)
+	s.recordHeavyFlood(chatID)
 	slog.Warn("flood_wait cooldown active",
 		slog.Int64("chat_id", chatID),
 		slog.Duration("duration", dur),

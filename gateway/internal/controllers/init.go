@@ -15,6 +15,7 @@ type Init struct {
 type Handler struct {
 	broker           *broker.Redis
 	db               *databases.DataManager
+	lb               *WorkerLoadBalancer
 	Sessions         *SessionManager
 	broadcastMu      sync.Mutex
 	broadcastTasks   map[string]broadcastMonitor
@@ -39,9 +40,14 @@ type Handler struct {
 }
 
 func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
+	lb := NewWorkerLoadBalancer(broker, db)
+	if broker != nil {
+		broker.SetStreamResolver(lb.ResolveStream)
+	}
 	return &Handler{
 		broker:           broker,
 		db:               db,
+		lb:               lb,
 		Sessions:         NewSessionManager(),
 		broadcastTasks:   make(map[string]broadcastMonitor),
 		panelStates:      make(map[int64]string),
@@ -64,6 +70,7 @@ func (m *Init) Register(ctx context.Context, b *botgotd.Bot, r *broker.Redis) {
 	go startSessionEventWebSocket(ctx, r)
 	go startTelemetryDashboard(ctx, b, r)
 	go h.startLicenseExpiryMonitor(ctx, b)
+	go h.lb.StartFailoverLoop(ctx)
 
 	// Listener dari ubot
 	go r.Listener(ctx, b, "from:group:ubot", "from:worker:ubot", "from:ubot", h.SendMessage)

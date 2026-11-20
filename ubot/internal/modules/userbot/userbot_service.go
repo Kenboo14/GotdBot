@@ -155,6 +155,12 @@ type Service struct {
 	monitorDedup        map[string]time.Time
 	forumTopicsMu       sync.RWMutex
 	forumTopicsCache    map[string]cachedForumTopics
+	workerID            string
+	workerPool          string
+	workerMaxSessions   int
+	cfgCache            *ubotConfigCache
+	heavyMu             sync.Mutex
+	heavyStates         map[int64]*heavyChatState
 }
 
 // publishSessionState mengirimkan perubahan lifecycle akun sebagai event
@@ -373,6 +379,9 @@ func NewService(root context.Context, sqlite *databases.SQLiteClient, db *mongo.
 		monitorSem:          make(chan struct{}, 4),
 		monitorDedup:        make(map[string]time.Time),
 		forumTopicsCache:    make(map[string]cachedForumTopics),
+		workerPool:          "normal",
+		cfgCache:            newUbotConfigCache(ubotCfgCacheMaxEntries, ubotCfgCacheTTL),
+		heavyStates:         make(map[int64]*heavyChatState),
 		peers:               gobot.DefaultPool().Peers,
 	}
 }
@@ -538,18 +547,21 @@ func (s *Service) Restore(ctx context.Context) {
 	}
 
 	for _, row := range sessions {
-		prefix := "!"
-		if st, stErr := s.sqlite.GetUserbotSettings(ctx, row.ChatID); stErr == nil && st != nil && st.PrefixSet {
-			prefix = st.Prefix
-		} else if row.PrefixSet {
-			prefix = row.Prefix
-		}
 		accID := row.AccountID
 		if accID == 0 {
 			accID = row.OwnerID
 		}
 		if accID == 0 {
 			accID = row.ChatID
+		}
+		if !s.isSessionOwnedByThisWorker(ctx, accID) {
+			continue
+		}
+		prefix := "!"
+		if st, stErr := s.sqlite.GetUserbotSettings(ctx, row.ChatID); stErr == nil && st != nil && st.PrefixSet {
+			prefix = st.Prefix
+		} else if row.PrefixSet {
+			prefix = row.Prefix
 		}
 		s.mu.Lock()
 		s.prefixes[row.ChatID] = prefix
@@ -561,15 +573,8 @@ func (s *Service) Restore(ctx context.Context) {
 
 	// Aktifkan session MTProto secara bertahap (batasi oleh maxActiveSession di activate()).
 	// Jeda waktu antar sesi mencegah lonjakan koneksi/CPU serentak (staggered startup).
-	for i, row := range sessions {
-		if i > 0 && len(sessions) > 1 {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(40*time.Millisecond + randJitterMs(40)):
-			}
-		}
-
+	activated := 0
+	for _, row := range sessions {
 		accID := row.AccountID
 		if accID == 0 {
 			accID = row.OwnerID
@@ -577,7 +582,26 @@ func (s *Service) Restore(ctx context.Context) {
 		if accID == 0 {
 			accID = row.ChatID
 		}
-
+		if !s.isSessionOwnedByThisWorker(ctx, accID) {
+			continue
+		}
+		if activated > 0 && len(sessions) > 1 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(40*time.Millisecond + randJitterMs(40)):
+			}
+		}
+		activated++
+		_, curPool := s.workerIdentity()
+		if curPool == "hell" {
+			s.heavyMu.Lock()
+			st := s.getOrCreateHeavyStateLocked(row.ChatID)
+			if st.enteredHellAt.IsZero() {
+				st.enteredHellAt = time.Now()
+			}
+			s.heavyMu.Unlock()
+		}
 		s.activate(row.ChatID, accID)
 	}
 	// Jalankan background reaper khusus membersihkan resource sementara (stale jobs/logins)
@@ -617,8 +641,8 @@ func (s *Service) activate(chatID int64, knownOwnerID ...int64) {
 		ownerID = s.owners[chatID]
 	}
 	// Admission limit: tolak aktivasi baru jika kapasitas penuh, jangan pernah putus akun aktif
-	if len(s.active)+len(s.connecting) >= maxActiveSessions {
-		slog.Warn("pool capacity reached, rejecting activation", slog.Int("max_active", maxActiveSessions), slog.Int64("chat_id", chatID))
+	if len(s.active)+len(s.connecting) >= s.effectiveMaxSessionsLocked() {
+		slog.Warn("pool capacity reached, rejecting activation", slog.Int("max_active", s.effectiveMaxSessionsLocked()), slog.Int64("chat_id", chatID))
 		s.mu.Unlock()
 		return
 	}

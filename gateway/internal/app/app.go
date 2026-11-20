@@ -71,6 +71,10 @@ func Run(ctx context.Context) {
 	// 6. Bot instance
 	botInstance := botgotd.NewEngineBot(nil, token, peerStorage)
 
+	if dbManager != nil && redis != nil {
+		dbManager.AttachRedisCache(redis.Client)
+	}
+
 	// 7. Register Modules
 	modules := []Module{
 		&controllers.Init{DB: dbManager},
