@@ -196,8 +196,20 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		return true
 	}
 
+	if h.handleSettingsPanelInput(ctx, b, chatID, userID, state, text) {
+		return true
+	}
+
 	switch state {
 	case "waiting_add_list":
+		if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && policy.MaxLists > 0 {
+			if _, lCount := h.db.CountGroupsAndLists(ctx, userID); lCount >= policy.MaxLists {
+				h.clearPanelPrompt(ctx, b, chatID)
+				h.setPanelState(chatID, "")
+				h.denyTierFeature(ctx, b, chatID, policy.Tier, fmt.Sprintf("Tambah List (> %d list)", policy.MaxLists), "Pro", grupListMenuMarkup)
+				return true
+			}
+		}
 		h.clearPanelPrompt(ctx, b, chatID)
 		if message == nil || message.MediaGroupID == "" {
 			h.setPanelState(chatID, "")
@@ -230,9 +242,18 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	case "waiting_add_group_manual":
 		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "")
+		policy, enforced := h.getEffectiveTierPolicy(ctx, userID)
+		currentCount := 0
+		if enforced && policy.MaxGroups > 0 {
+			currentCount, _ = h.db.CountGroupsAndLists(ctx, userID)
+		}
 		lines := strings.Split(text, "\n")
 		addedCount := 0
+		capReached := false
 		for _, l := range lines {
+			if capReached {
+				break
+			}
 			l = strings.TrimSpace(l)
 			if l == "" {
 				continue
@@ -243,6 +264,10 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 				if p == "" {
 					continue
 				}
+				if enforced && policy.MaxGroups > 0 && currentCount >= policy.MaxGroups {
+					capReached = true
+					break
+				}
 				var chatIDVal int64
 				if id, parseErr := strconv.ParseInt(p, 10, 64); parseErr == nil {
 					chatIDVal = id
@@ -250,6 +275,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 				err := h.db.AddGroup(ctx, userID, p, p, chatIDVal)
 				if err == nil {
 					addedCount++
+					currentCount++
 				}
 			}
 		}
@@ -259,16 +285,20 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "sync_panel_config"})
 
 		gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
+		limitNote := ""
+		if capReached {
+			limitNote = fmt.Sprintf("<br/>⚠️ <i>Batas paket %s maksimal <b>%d grup</b> telah tercapai. Gunakan ⚙️ Settings → 🔑 Upgrade untuk menambah lebih banyak grup.</i>", html.EscapeString(policy.Tier), policy.MaxGroups)
+		}
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID: chatID,
 			Text: fmt.Sprintf(`<h1>✅ Grup Berhasil Ditambahkan</h1>
-<blockquote expandable>Ditambahkan: <code>%d</code> grup baru.<br/>Total grup tersimpan: <code>%d</code> grup.</blockquote>
+<blockquote expandable>Ditambahkan: <code>%d</code> grup baru.<br/>Total grup tersimpan: <code>%d</code> grup.%s</blockquote>
 <table border="1">
   <tr><th>📌 Status</th><th>Total Grup</th></tr>
   <tr><td>Aktif</td><td><code>%d grup</code></td></tr>
 </table>
 <hr/>
-<p>GotdBot • Group Target Manager</p>`, addedCount, gCount, gCount),
+<p>GotdBot • Group Target Manager</p>`, addedCount, gCount, limitNote, gCount),
 			ParseMode:   "HTML",
 			ReplyMarkup: grupListMenuMarkup,
 		})
@@ -417,8 +447,15 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 		mode := strings.TrimPrefix(text, "👑 ")
 		mode = strings.TrimPrefix(mode, "⚡ ")
 		mode = strings.TrimPrefix(mode, "🔕 ")
+		mode = strings.TrimPrefix(mode, "📨 ")
 		mode = strings.TrimSpace(mode)
-		if mode == "Normal" || mode == "Fast" || mode == "Silent" {
+		if mode == "Forward" {
+			if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowForwardMode {
+				h.denyTierFeature(ctx, b, chatID, policy.Tier, "Mode Forward", "Pro++", statusMenuMarkup)
+				return true
+			}
+		}
+		if mode == "Normal" || mode == "Fast" || mode == "Silent" || mode == "Forward" {
 			cfg := h.db.GetUserConfig(ctx, userID)
 			cfg.Mode = mode
 			_ = h.db.SaveUserConfig(ctx, cfg)

@@ -195,7 +195,16 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 					Text: fmt.Sprintf(`<h1>❌ Token SHA Kedaluwarsa</h1>
 <blockquote expandable>Masa aktif token lisensi ini telah habis pada <b>%s</b> dan tidak dapat digunakan kembali.</blockquote>
 <hr/>
-<p>Silakan hubungi Owner untuk mendapatkan token lisensi baru.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
+<p>Gunakan token voucher baru untuk mengaktifkan akun, lalu gunakan <b>⚙️ Settings → ♻️ Restore Data</b> dengan kode backup <code>GOTD_BKP:</code> jika Anda ingin memulihkan data list &amp; grup.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
+					ParseMode:   "HTML",
+					ReplyMarkup: assets.CancelOnlyMarkup,
+				})
+				return
+			}
+			if !databases.GetTierPolicy(lic.Tier).AllowLicenseToken && lic.OwnerChatID != chatID {
+				b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID:      chatID,
+					Text:        "🔒 <b>Token Free Tidak Dapat Dipindahkan ke Akun Lain</b>\n\nSilakan klaim paket 🆓 Free di akun baru lalu gunakan <b>⚙️ Settings → ♻️ Restore Data</b> memakai kode backup <code>GOTD_BKP:</code>.",
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -338,9 +347,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				globalDevMonitor.NotifyTraceback("gateway", "SaveUserLicense Failed", saveErr.Error())
 			} else {
 				_ = h.db.IncrementTokenMasterClaim(ctx, tm.Token)
-				cfg := h.db.GetUserConfig(ctx, chatID)
-				cfg.MasaAktif = formatLicenseMasaAktif(lic)
-				_ = h.db.SaveUserConfig(ctx, cfg)
+				_ = h.switchUserActiveToken(ctx, chatID, lic)
 			}
 
 			h.Sessions.mu.Lock()

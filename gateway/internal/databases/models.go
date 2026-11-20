@@ -58,6 +58,7 @@ type JasebConfig struct {
 	Groups           []GroupEntry     `bson:"groups" json:"groups"`
 	Topics           []TopicEntry     `bson:"topics" json:"topics"`
 	TopicLists       []TopicListEntry `bson:"topic_lists" json:"topic_lists"`
+	ActiveTokenSHA   string           `bson:"active_token_sha" json:"active_token_sha"`
 	UpdatedAt        time.Time        `bson:"updated_at" json:"updated_at"`
 }
 
@@ -88,4 +89,40 @@ type UserLicense struct {
 	ExpiresAt          time.Time `bson:"expires_at" json:"expires_at"`
 	CreatedAt          time.Time `bson:"created_at" json:"created_at"`
 	Status             string    `bson:"status" json:"status"` // active | expired
+}
+
+type DataBackupCode struct {
+	Code       string           `bson:"_id" json:"code"`
+	OwnerID    int64            `bson:"owner_id" json:"owner_id"`
+	Lists      []int            `bson:"lists" json:"lists"`
+	Groups     []GroupEntry     `bson:"groups" json:"groups"`
+	Topics     []TopicEntry     `bson:"topics" json:"topics"`
+	TopicLists []TopicListEntry `bson:"topic_lists" json:"topic_lists"`
+	CreatedAt  time.Time        `bson:"created_at" json:"created_at"`
+}
+
+type TokenProfile struct {
+	TokenSHA         string           `bson:"_id" json:"token_sha"`
+	OwnerChatID      int64            `bson:"owner_chat_id" json:"owner_chat_id"`
+	Type             string           `bson:"type" json:"type"`
+	Delay            int              `bson:"delay" json:"delay"`
+	DelayMode        string           `bson:"delay_mode" json:"delay_mode"`
+	DelayAllGroups   int              `bson:"delay_all_groups" json:"delay_all_groups"`
+	SkipFloodWait    bool             `bson:"skip_floodwait" json:"skip_floodwait"`
+	SkipFloodWaitSec int              `bson:"skip_floodwait_sec" json:"skip_floodwait_sec"`
+	Timer            string           `bson:"timer" json:"timer"`
+	Extra            int              `bson:"extra" json:"extra"`
+	Mode             string           `bson:"mode" json:"mode"`
+	Safemode         bool             `bson:"safemode" json:"safemode"`
+	Notifikasi       string           `bson:"notifikasi" json:"notifikasi"`
+	Email            string           `bson:"email" json:"email"`
+	Admin            string           `bson:"admin" json:"admin"`
+	Watermark        string           `bson:"watermark" json:"watermark"`
+	WatermarkCacheID int              `bson:"watermark_cache_id" json:"watermark_cache_id"`
+	TopicEnabled     bool             `bson:"topic_enabled" json:"topic_enabled"`
+	Lists            []int            `bson:"lists" json:"lists"`
+	Groups           []GroupEntry     `bson:"groups" json:"groups"`
+	Topics           []TopicEntry     `bson:"topics" json:"topics"`
+	TopicLists       []TopicListEntry `bson:"topic_lists" json:"topic_lists"`
+	UpdatedAt        time.Time        `bson:"updated_at" json:"updated_at"`
 }

@@ -406,25 +406,12 @@ func (m *MongoClient) GetActiveUserLicense(ctx context.Context, ownerChatID int6
 	if m == nil || m.Database == nil {
 		return nil, nil
 	}
-	col := m.Database.Collection("user_licenses")
-	filter := bson.M{
-		"$or": []bson.M{
-			{"owner_chat_id": ownerChatID},
-			{"userbot_id": ownerChatID},
-		},
-		"status":     "active",
-		"expires_at": bson.M{"$gt": time.Now()},
-	}
-	opts := options.FindOne().SetSort(bson.M{"expires_at": -1})
-	var ul UserLicense
-	err := col.FindOne(ctx, filter, opts).Decode(&ul)
-	if err == mongo.ErrNoDocuments {
-		return nil, nil
-	}
+	list, err := m.ListActiveUserLicenses(ctx, ownerChatID)
 	if err != nil {
 		return nil, err
 	}
-	return &ul, nil
+	activeSHA, _ := m.GetActiveTokenSHA(ctx, ownerChatID)
+	return selectActiveLicense(list, activeSHA), nil
 }
 
 func (m *MongoClient) GetLatestUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
@@ -524,4 +511,157 @@ func (m *MongoClient) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID
 		_, _ = colCfg.DeleteOne(ctx, bson.M{"_id": oldOwnerID})
 	}
 	return nil
+}
+
+func (m *MongoClient) SupersedeOtherUserLicenses(ctx context.Context, ownerChatID int64, keepTokenSHA string) error {
+	if m == nil || m.Database == nil || ownerChatID == 0 {
+		return nil
+	}
+	_, err := m.Database.Collection("user_licenses").UpdateMany(ctx,
+		bson.M{
+			"$or": []bson.M{
+				{"owner_chat_id": ownerChatID},
+				{"userbot_id": ownerChatID},
+			},
+			"status": "active",
+			"_id":    bson.M{"$ne": keepTokenSHA},
+		},
+		bson.M{"$set": bson.M{"status": "superseded"}},
+	)
+	return err
+}
+
+func (m *MongoClient) MarkUserLicenseStatus(ctx context.Context, tokenSHA, status string) error {
+	if m == nil || m.Database == nil || tokenSHA == "" {
+		return nil
+	}
+	_, err := m.Database.Collection("user_licenses").UpdateOne(ctx,
+		bson.M{"_id": tokenSHA},
+		bson.M{"$set": bson.M{"status": status}},
+	)
+	return err
+}
+
+func (m *MongoClient) RevokeTokenMaster(ctx context.Context, token string) error {
+	if m == nil || m.Database == nil || token == "" {
+		return nil
+	}
+	_, err := m.Database.Collection("tokens_master").UpdateOne(ctx,
+		bson.M{"_id": token},
+		bson.M{"$set": bson.M{"status": "revoked"}},
+	)
+	return err
+}
+
+func (m *MongoClient) SaveDataBackup(ctx context.Context, b *DataBackupCode) error {
+	if m == nil || m.Database == nil || b == nil {
+		return nil
+	}
+	opts := options.Update().SetUpsert(true)
+	_, err := m.Database.Collection("data_backups").UpdateOne(ctx,
+		bson.M{"_id": b.Code},
+		bson.M{"$set": b},
+		opts,
+	)
+	return err
+}
+
+func (m *MongoClient) GetDataBackup(ctx context.Context, code string) (*DataBackupCode, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	var b DataBackupCode
+	err := m.Database.Collection("data_backups").FindOne(ctx, bson.M{"_id": code}).Decode(&b)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (m *MongoClient) SaveTokenProfile(ctx context.Context, p *TokenProfile) error {
+	if m == nil || m.Database == nil || p == nil || p.TokenSHA == "" {
+		return nil
+	}
+	cp := cloneTokenProfile(p)
+	if cp.UpdatedAt.IsZero() {
+		cp.UpdatedAt = time.Now()
+	}
+	coll := m.Database.Collection("token_profiles")
+	opts := options.Replace().SetUpsert(true)
+	if _, err := coll.ReplaceOne(ctx, bson.M{"_id": cp.TokenSHA}, cp, opts); err != nil {
+		return fmt.Errorf("mongo save token profile: %w", err)
+	}
+	return nil
+}
+
+func (m *MongoClient) GetTokenProfile(ctx context.Context, tokenSHA string) (*TokenProfile, error) {
+	if m == nil || m.Database == nil || tokenSHA == "" {
+		return nil, nil
+	}
+	coll := m.Database.Collection("token_profiles")
+	var p TokenProfile
+	err := coll.FindOne(ctx, bson.M{"_id": tokenSHA}).Decode(&p)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("mongo get token profile: %w", err)
+	}
+	return cloneTokenProfile(&p), nil
+}
+
+func (m *MongoClient) GetActiveTokenSHA(ctx context.Context, ownerID int64) (string, error) {
+	if m == nil || m.Database == nil || ownerID == 0 {
+		return "", nil
+	}
+	coll := m.Database.Collection("jaseb_configurasi")
+	var doc struct {
+		ActiveTokenSHA string `bson:"active_token_sha"`
+	}
+	opts := options.FindOne().SetProjection(bson.M{"active_token_sha": 1})
+	err := coll.FindOne(ctx, bson.M{"_id": ownerID}, opts).Decode(&doc)
+	if err == mongo.ErrNoDocuments {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("mongo get active token sha: %w", err)
+	}
+	return doc.ActiveTokenSHA, nil
+}
+
+func (m *MongoClient) ListActiveUserLicenses(ctx context.Context, ownerChatID int64) ([]*UserLicense, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	coll := m.Database.Collection("user_licenses")
+	filter := bson.M{
+		"$or": []bson.M{
+			{"owner_chat_id": ownerChatID},
+			{"userbot_id": ownerChatID},
+		},
+		"status":     "active",
+		"expires_at": bson.M{"$gt": time.Now()},
+	}
+	cur, err := coll.Find(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("mongo list active user licenses: %w", err)
+	}
+	defer cur.Close(ctx)
+
+	var result []*UserLicense
+	for cur.Next(ctx) {
+		var lic UserLicense
+		if err := cur.Decode(&lic); err == nil {
+			cp := lic
+			result = append(result, &cp)
+		}
+	}
+	if err := cur.Err(); err != nil {
+		return nil, fmt.Errorf("mongo list active user licenses cursor: %w", err)
+	}
+	sortActiveLicenses(result)
+	return result, nil
 }

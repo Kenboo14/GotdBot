@@ -7,6 +7,7 @@ import (
 	"assterisk/gateway/internal/models"
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"strings"
 	"time"
@@ -84,6 +85,11 @@ func (h *Handler) expireSingleLicense(ctx context.Context, b *botgotd.Bot, lic *
 	if h == nil || h.db == nil || lic == nil {
 		return
 	}
+	cfg := h.db.GetUserConfig(ctx, lic.OwnerChatID)
+	wasActiveSlot := cfg.ActiveTokenSHA == lic.TokenSHA
+	if wasActiveSlot {
+		h.snapshotCurrentTokenProfile(ctx, lic.OwnerChatID, "")
+	}
 	if err := h.db.MarkUserLicenseExpired(ctx, lic.TokenSHA); err != nil {
 		log.Printf("⚠️ [license] MarkUserLicenseExpired (%s) error: %v", lic.TokenSHA, err)
 		globalDevMonitor.NotifyTraceback("gateway", "MarkUserLicenseExpired Error", err.Error())
@@ -97,15 +103,24 @@ func (h *Handler) expireSingleLicense(ctx context.Context, b *botgotd.Bot, lic *
 		}
 	}
 
-	otherActive, _ := h.db.GetActiveUserLicense(ctx, lic.OwnerChatID)
+	remaining, _ := h.db.ListActiveUserLicenses(ctx, lic.OwnerChatID)
+	otherActive := pickFallbackActiveLicense(remaining, lic.TokenSHA)
 	if otherActive != nil {
-		cfg := h.db.GetUserConfig(ctx, lic.OwnerChatID)
-		cfg.MasaAktif = formatLicenseMasaAktif(otherActive)
-		_ = h.db.SaveUserConfig(ctx, cfg)
+		if wasActiveSlot || cfg.ActiveTokenSHA == "" {
+			_ = h.switchUserActiveToken(ctx, lic.OwnerChatID, otherActive)
+			if b != nil && lic.OwnerChatID != 0 {
+				_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
+					ChatID: lic.OwnerChatID,
+					Text: fmt.Sprintf("⏳ Slot token <code>%s</code> telah berakhir.\n🔄 Sistem otomatis memindahkan akun ke slot aktif berikutnya: <b>%s</b>.",
+						html.EscapeString(lic.Tier), html.EscapeString(databases.NormalizeTier(otherActive.Tier))),
+					ParseMode: "HTML",
+				})
+			}
+		}
 		return
 	}
 
-	cfg := h.db.GetUserConfig(ctx, lic.OwnerChatID)
+	cfg.ActiveTokenSHA = ""
 	cfg.Status = "Berhenti"
 	cfg.MasaAktif = formatLicenseMasaAktif(lic)
 	cfg.TindakanTerkini = "Sesi dicabut (token kedaluwarsa)"

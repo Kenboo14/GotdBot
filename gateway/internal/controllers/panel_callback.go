@@ -87,6 +87,10 @@ func (h *Handler) PanelCallback(ctx context.Context, b *botgotd.Bot, update *bot
 		h.handleTopicListCallback(ctx, b, chatID, messageID, cb)
 		return
 	}
+	if strings.HasPrefix(cb.Data, "panel:token:switch:") {
+		h.handleTokenSwitchCallback(ctx, b, chatID, int64(messageID), cb)
+		return
+	}
 	if cb.Data == "panel:watermark:delete" {
 		effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
 		cfg := h.db.GetUserConfig(ctx, effectiveID)

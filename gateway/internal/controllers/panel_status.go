@@ -3,6 +3,7 @@ package controllers
 import (
 	"assterisk/gateway/internal/assets"
 	"assterisk/gateway/internal/botgotd"
+	"assterisk/gateway/internal/databases"
 	"assterisk/gateway/internal/models"
 	"context"
 	"fmt"
@@ -25,8 +26,15 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 		safeMode = "Aktif"
 	}
 
+	policy, enforced := h.getEffectiveTierPolicy(ctx, userID)
+	tierDisplay := "Belum diatur"
+	if enforced {
+		tierDisplay = policy.Tier
+	}
+
 	rows := []assets.StatusRow{
 		{Label: "🏷️ UserID", Value: fmt.Sprintf("%d", cfg.OwnerID)},
+		{Label: "🎖️ Paket", Value: html.EscapeString(tierDisplay)},
 		{Label: "🧩 Tipe", Value: html.EscapeString(cfg.Type)},
 		{Label: "👑 Mode", Value: html.EscapeString(cfg.Mode)},
 		{Label: "🕒 Jeda", Value: html.EscapeString(cfg.FormatJedaSummary(gCount))},
@@ -37,10 +45,15 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 		{Label: "⏱️ Timer", Value: html.EscapeString(cfg.FormatTimerDisplay())},
 		{Label: "🚀 Status", Value: html.EscapeString(cfg.Status)},
 		{Label: "🔥 Masa Aktif", Value: html.EscapeString(cfg.MasaAktif)},
-		{Label: "🔔 Notifikasi", Value: html.EscapeString(cfg.Notifikasi)},
-		{Label: "✉️ Email", Value: html.EscapeString(cfg.Email)},
-		{Label: "👤 Admin", Value: html.EscapeString(cfg.Admin)},
 	}
+	if enforced && policy.DailySendLimit > 0 {
+		rows = append(rows, assets.StatusRow{Label: "📨 Kuota Harian", Value: fmt.Sprintf("Maks %d pesan/hari (reset 00:00 WIB)", policy.DailySendLimit)})
+	}
+	rows = append(rows,
+		assets.StatusRow{Label: "🔔 Notifikasi", Value: html.EscapeString(cfg.Notifikasi)},
+		assets.StatusRow{Label: "✉️ Email", Value: html.EscapeString(cfg.Email)},
+		assets.StatusRow{Label: "👤 Admin", Value: html.EscapeString(cfg.Admin)},
+	)
 
 	tbl := assets.RichStatusTable(rows)
 	text := assets.RichStatusDashboard(tbl, html.EscapeString(cfg.TindakanTerkini), html.EscapeString(cfg.TindakanTerakhir))
@@ -92,6 +105,7 @@ func (h *Handler) PromptUbahMode(ctx context.Context, b *botgotd.Bot, chatID, us
   <tr><td>👑 Normal</td><td>Kecepatan seimbang &amp; interval stabil</td></tr>
   <tr><td>⚡ Fast</td><td>Kecepatan tinggi, minim jeda waktu</td></tr>
   <tr><td>🔕 Silent</td><td>Tanpa notifikasi suara di grup target</td></tr>
+  <tr><td>📨 Forward</td><td>Diteruskan dari pesan asli (khusus Pro++ / Vip)</td></tr>
 </table>
 <blockquote expandable>Mode aktif saat ini: <b>%s</b></blockquote>
 <hr/>
@@ -173,19 +187,17 @@ func (h *Handler) ToggleNotifikasi(ctx context.Context, b *botgotd.Bot, chatID, 
 	})
 }
 
-// PromptWatermark prompts user for watermark text
 func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
-	lic, _ := h.db.GetActiveUserLicense(ctx, chatID)
+	lic, _ := h.db.GetActiveUserLicense(ctx, userID)
+	if lic == nil && chatID != userID {
+		lic, _ = h.db.GetActiveUserLicense(ctx, chatID)
+	}
 	tier := "Free"
 	if lic != nil && lic.Tier != "" {
-		tier = lic.Tier
+		tier = databases.NormalizeTier(lic.Tier)
 	}
-	if tier == "Free" || tier == "Pro" {
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID:    chatID,
-			Text:      fmt.Sprintf("⚠️ Lisensi Anda (<b>%s</b>) tidak mendukung Custom Watermark. Silakan upgrade ke lisensi <b>PRO++</b> atau <b>VIP</b>.", tier),
-			ParseMode: "HTML",
-		})
+	if !databases.GetTierPolicy(tier).AllowCustomWatermark {
+		h.denyTierFeature(ctx, b, chatID, tier, "Custom Watermark", "Pro++", assets.StatusMenuMarkup)
 		return
 	}
 
@@ -229,8 +241,11 @@ func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, u
 	}
 }
 
-// PromptEmail prompts user for email
 func (h *Handler) PromptEmail(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowEmailBackup {
+		h.denyTierFeature(ctx, b, chatID, policy.Tier, "Email Cadangan Darurat", "Pro", assets.StatusMenuMarkup)
+		return
+	}
 	h.setPanelState(chatID, "waiting_set_email")
 	cfg := h.db.GetUserConfig(ctx, userID)
 

@@ -880,12 +880,13 @@ func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Clie
 	for i := range randomIDs {
 		randomIDs[i] = time.Now().UnixNano() + int64(i)
 	}
+	dropAuthor := !strings.EqualFold(strings.TrimSpace(cfg.Mode), "Forward")
 	req := &tg.MessagesForwardMessagesRequest{
 		FromPeer:   cachePeer,
 		ID:         forwardIDs,
 		RandomID:   randomIDs,
 		ToPeer:     targetPeer,
-		DropAuthor: true,
+		DropAuthor: dropAuthor,
 	}
 	if cfg.Mode == "Silent" {
 		req.Silent = true

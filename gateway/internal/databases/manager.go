@@ -313,6 +313,11 @@ func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) erro
 			log.Printf("⚠️ SQLite SyncConfig error: %v", err)
 			return err
 		}
+		if cfg.ActiveTokenSHA != "" {
+			if err := m.sqlite.SaveTokenProfile(ctx, TokenProfileFromConfig(cfg.ActiveTokenSHA, cfg)); err != nil {
+				log.Printf("⚠️ SQLite SaveTokenProfile error: %v", err)
+			}
+		}
 	}
 
 	// 2. Simpan ke MongoDB di background — deep copy + per-owner coalescing
@@ -356,6 +361,11 @@ func (m *DataManager) SaveUserConfig(ctx context.Context, cfg *JasebConfig) erro
 					mongoCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					if err := currentMg.SaveConfig(mongoCtx, curCfg); err != nil {
 						log.Printf("⚠️ MongoDB SaveConfig error (owner=%d): %v", oid, err)
+					}
+					if curCfg.ActiveTokenSHA != "" {
+						if err := currentMg.SaveTokenProfile(mongoCtx, TokenProfileFromConfig(curCfg.ActiveTokenSHA, curCfg)); err != nil {
+							log.Printf("⚠️ MongoDB SaveTokenProfile error (owner=%d): %v", oid, err)
+						}
 					}
 					cancel()
 					if m.mongoSaveSem != nil {
@@ -746,6 +756,73 @@ func (m *DataManager) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerID
 	return nil
 }
 
+func (m *DataManager) SupersedeOtherUserLicenses(ctx context.Context, ownerChatID int64, keepTokenSHA string) error {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.SupersedeOtherUserLicenses(ctx, ownerChatID, keepTokenSHA); err != nil {
+			log.Printf("⚠️ SupersedeOtherUserLicenses MongoDB err: %v", err)
+		}
+	}
+	if m.sqlite != nil {
+		return m.sqlite.SupersedeOtherUserLicenses(ctx, ownerChatID, keepTokenSHA)
+	}
+	return nil
+}
+
+func (m *DataManager) MarkUserLicenseStatus(ctx context.Context, tokenSHA, status string) error {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.MarkUserLicenseStatus(ctx, tokenSHA, status); err != nil {
+			log.Printf("⚠️ MarkUserLicenseStatus MongoDB err: %v", err)
+		}
+	}
+	if m.sqlite != nil {
+		return m.sqlite.MarkUserLicenseStatus(ctx, tokenSHA, status)
+	}
+	return nil
+}
+
+func (m *DataManager) RevokeTokenMaster(ctx context.Context, token string) error {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.RevokeTokenMaster(ctx, token); err != nil {
+			log.Printf("⚠️ RevokeTokenMaster MongoDB err: %v", err)
+		}
+	}
+	if m.sqlite != nil {
+		return m.sqlite.RevokeTokenMaster(ctx, token)
+	}
+	return nil
+}
+
+func (m *DataManager) SaveDataBackup(ctx context.Context, b *DataBackupCode) error {
+	if mg := m.getMongo(); mg != nil {
+		if err := mg.SaveDataBackup(ctx, b); err != nil {
+			log.Printf("⚠️ SaveDataBackup MongoDB err: %v", err)
+		}
+	}
+	if m.sqlite != nil {
+		return m.sqlite.SaveDataBackup(ctx, b)
+	}
+	return nil
+}
+
+func (m *DataManager) GetDataBackup(ctx context.Context, code string) (*DataBackupCode, error) {
+	if m.sqlite != nil {
+		b, err := m.sqlite.GetDataBackup(ctx, code)
+		if err == nil && b != nil {
+			return b, nil
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		b, err := mg.GetDataBackup(ctx, code)
+		if err == nil && b != nil {
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveDataBackup(ctx, b)
+			}
+			return b, nil
+		}
+	}
+	return nil, nil
+}
+
 type AccountControlInfo struct {
 	OwnerID int64
 	Name    string
@@ -864,4 +941,76 @@ func (m *DataManager) Close() error {
 		}
 	}
 	return nil
+}
+
+func (m *DataManager) SaveTokenProfile(ctx context.Context, p *TokenProfile) error {
+	if m == nil || p == nil || strings.TrimSpace(p.TokenSHA) == "" {
+		return nil
+	}
+	cp := cloneTokenProfile(p)
+	if m.sqlite != nil {
+		if err := m.sqlite.SaveTokenProfile(ctx, cp); err != nil {
+			return fmt.Errorf("save token profile sqlite: %w", err)
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		if m.mongoSaveSem != nil {
+			m.mongoSaveSem <- struct{}{}
+		}
+		go func(prof *TokenProfile) {
+			if m.mongoSaveSem != nil {
+				defer func() { <-m.mongoSaveSem }()
+			}
+			bgCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = mg.SaveTokenProfile(bgCtx, prof)
+		}(cp)
+	}
+	return nil
+}
+
+func (m *DataManager) GetTokenProfile(ctx context.Context, tokenSHA string) (*TokenProfile, error) {
+	if m == nil || strings.TrimSpace(tokenSHA) == "" {
+		return nil, nil
+	}
+	if m.sqlite != nil {
+		p, err := m.sqlite.GetTokenProfile(ctx, tokenSHA)
+		if err == nil && p != nil {
+			return p, nil
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		p, err := mg.GetTokenProfile(ctx, tokenSHA)
+		if err == nil && p != nil {
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveTokenProfile(ctx, p)
+			}
+			return p, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *DataManager) ListActiveUserLicenses(ctx context.Context, ownerChatID int64) ([]*UserLicense, error) {
+	if m == nil {
+		return nil, nil
+	}
+	if m.sqlite != nil {
+		list, err := m.sqlite.ListActiveUserLicenses(ctx, ownerChatID)
+		if err == nil && len(list) > 0 {
+			return list, nil
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		list, err := mg.ListActiveUserLicenses(ctx, ownerChatID)
+		if err == nil && len(list) > 0 {
+			if m.sqlite != nil {
+				for _, lic := range list {
+					_ = m.sqlite.SaveUserLicense(ctx, lic)
+				}
+			}
+			return list, nil
+		}
+	}
+	return nil, nil
 }

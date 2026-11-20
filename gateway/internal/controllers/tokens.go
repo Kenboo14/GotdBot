@@ -155,6 +155,10 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
   <tr><td><code>/token pro &lt;durasi&gt;</code></td><td>Voucher tier Pro (Personal)</td></tr>
   <tr><td><code>/token pro++ &lt;durasi&gt;</code></td><td>Voucher tier Pro++ (Custom WM)</td></tr>
   <tr><td><code>/token vip &lt;durasi&gt;</code></td><td>Voucher tier VIP Unlimited</td></tr>
+  <tr><td><code>/token upgrade &lt;uid&gt; &lt;tier&gt; &lt;durasi&gt;</code></td><td>Upgrade langsung akun user</td></tr>
+  <tr><td><code>/token extend &lt;uid&gt; &lt;durasi&gt;</code></td><td>Tambah masa aktif user</td></tr>
+  <tr><td><code>/token info &lt;uid|token&gt;</code></td><td>Cek status lisensi / voucher</td></tr>
+  <tr><td><code>/token revoke &lt;uid|token&gt;</code></td><td>Cabut lisensi / voucher</td></tr>
 </table>
 <hr/>
 <p>Format durasi: <code>h</code> (Hari), <code>j</code> (Jam), <code>m</code> (Menit). Contoh: <code>/token pro++ 30h</code></p>`
@@ -163,6 +167,10 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 			Text:      helpText,
 			ParseMode: "HTML",
 		})
+		return
+	}
+
+	if h.handleOwnerTokenManage(ctx, b, chatID, senderID, fields) {
 		return
 	}
 

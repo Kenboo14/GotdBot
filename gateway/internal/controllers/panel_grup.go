@@ -255,6 +255,13 @@ func (h *Handler) SebarKeRC(ctx context.Context, b *botgotd.Bot, chatID, userID 
 
 // FetchAllGroupsFromAccount communicates with ubot via Redis to import all groups
 func (h *Handler) FetchAllGroupsFromAccount(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && policy.MaxGroups > 0 {
+		gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
+		if gCount >= policy.MaxGroups {
+			h.denyTierFeature(ctx, b, chatID, policy.Tier, fmt.Sprintf("Import Grup (> %d grup)", policy.MaxGroups), "Pro", assets.GrupListMenuMarkup)
+			return
+		}
+	}
 	h.resetTopicForumScan(chatID)
 	h.sendProgress(ctx, b, chatID, &botgotd.SendMessageParams{
 		ChatID:      chatID,

@@ -886,6 +886,7 @@ type jasebConfigDoc struct {
 	TopicLists       []jasebTopicListDoc `bson:"topic_lists" json:"topic_lists"`
 	BroadcastIndex   int                 `bson:"broadcast_index" json:"broadcast_index"`
 	BroadcastNextAt  int64               `bson:"broadcast_next_at" json:"broadcast_next_at"`
+	ActiveTokenSHA   string              `bson:"active_token_sha" json:"active_token_sha"`
 	UpdatedAt        time.Time           `bson:"updated_at" json:"updated_at"`
 }
 
@@ -940,8 +941,8 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 			owner_id, type, delay, delay_mode, delay_all_groups, skip_floodwait, skip_floodwait_sec,
 			timer, extra, mode, safemode, status, masa_aktif, notifikasi, email, admin, watermark,
 			watermark_cache_id, topic_enabled, tindakan_terkini, tindakan_terakhir, lists, groups,
-			topics, topic_lists, broadcast_index, broadcast_next_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			topics, topic_lists, broadcast_index, broadcast_next_at, active_token_sha, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(owner_id) DO UPDATE SET
 			type=excluded.type, delay=excluded.delay, delay_mode=excluded.delay_mode,
 			delay_all_groups=excluded.delay_all_groups, skip_floodwait=excluded.skip_floodwait,
@@ -952,12 +953,12 @@ func (s *Service) syncJasebConfigFromMongo(ctx context.Context, ownerID int64) {
 			topic_enabled=excluded.topic_enabled, tindakan_terkini=excluded.tindakan_terkini,
 			tindakan_terakhir=excluded.tindakan_terakhir, lists=excluded.lists, groups=excluded.groups,
 			topics=excluded.topics, topic_lists=excluded.topic_lists, broadcast_index=excluded.broadcast_index,
-			broadcast_next_at=excluded.broadcast_next_at, updated_at=excluded.updated_at`,
+			broadcast_next_at=excluded.broadcast_next_at, active_token_sha=excluded.active_token_sha, updated_at=excluded.updated_at`,
 		doc.OwnerID, doc.Type, doc.Delay, delayMode, doc.DelayAllGroups, boolInt(doc.SkipFloodWait),
 		doc.SkipFloodWaitSec, doc.Timer, doc.Extra, doc.Mode, boolInt(doc.Safemode), doc.Status,
 		doc.MasaAktif, doc.Notifikasi, doc.Email, doc.Admin, doc.Watermark, doc.WatermarkCacheID,
 		boolInt(doc.TopicEnabled), doc.TindakanTerkini, doc.TindakanTerakhir, string(lists),
-		string(groups), string(topics), string(topicLists), doc.BroadcastIndex, doc.BroadcastNextAt, updatedAt)
+		string(groups), string(topics), string(topicLists), doc.BroadcastIndex, doc.BroadcastNextAt, doc.ActiveTokenSHA, updatedAt)
 }
 
 func boolInt(value bool) int {
@@ -1355,9 +1356,24 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		if !strings.EqualFold(strings.TrimSpace(cfg.Status), "Berjalan") {
 			return
 		}
+		activeTier := s.getActiveTier(ctx, ownerID)
+		cfg = enforceTierBroadcastConfig(cfg, activeTier)
 		if len(cfg.Groups) == 0 || len(cfg.Lists) == 0 {
 			s.setPanelBroadcastStatus(context.Background(), ownerID, "Berhenti", "Target atau materi kosong")
 			return
+		}
+		if dailyLimit := freeDailyLimitForTier(activeTier); dailyLimit > 0 && s.sqlite != nil {
+			todayKey := todayWIBKey(time.Now())
+			if sent, qErr := s.sqlite.GetDailySendCount(ctx, ownerID, todayKey); qErr == nil && sent >= dailyLimit {
+				quotaMsg := fmt.Sprintf("Kuota Free %d/%d habis · lanjut 00:00 WIB", sent, dailyLimit)
+				if cfg.TindakanTerkini != quotaMsg {
+					s.setPanelBroadcastStatus(context.Background(), ownerID, "Berjalan", quotaMsg)
+				}
+				if !s.waitUntilQuotaResetOrUpgrade(ctx, ownerID, activeTier, todayKey, nextMidnightWIB(time.Now())) {
+					return
+				}
+				continue
+			}
 		}
 		totalWork := len(cfg.Lists) * len(cfg.Groups)
 		workIndex := cfg.BroadcastIndex
@@ -1409,6 +1425,9 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		msgID := cfg.Lists[listIndex]
 		if !s.deliverGroupBroadcast(ctx, client, cachePeer, targetPeer, cfg, grp, msgID, topicRotator) {
 			return
+		}
+		if freeDailyLimitForTier(activeTier) > 0 && s.sqlite != nil {
+			_, _ = s.sqlite.IncrementDailySendCount(context.Background(), ownerID, todayWIBKey(time.Now()))
 		}
 
 		nextAt := computeBroadcastNextAt(cfg, groupIndex)

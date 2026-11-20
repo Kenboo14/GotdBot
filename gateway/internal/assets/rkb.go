@@ -82,11 +82,19 @@ const (
 	BtnTimerNonaktif    = BtnMatikan
 )
 
-// Ubah Mode
 const (
-	BtnModeNormal = "👑 Normal"
-	BtnModeFast   = "⚡ Fast"
-	BtnModeSilent = "🔕 Silent"
+	BtnModeNormal  = "👑 Normal"
+	BtnModeFast    = "⚡ Fast"
+	BtnModeSilent  = "🔕 Silent"
+	BtnModeForward = "📨 Forward"
+)
+
+const (
+	BtnUpgradeToken = "🔑 Tambah Token"
+	BtnGantiToken   = "🔄 Ganti Token"
+	BtnAmbilToken   = "🔒 Ambil Token"
+	BtnBackupData   = "📎 Backup Data"
+	BtnRestoreData  = "♻️ Restore Data"
 )
 
 // Install / Wizard
@@ -103,11 +111,9 @@ const (
 // ─── Pre-built Reply Keyboard Markups ────────────────────────────────────────
 
 var (
-	// MainMenuMarkup is the main bot control panel keyboard.
-	MainMenuMarkup *botgotd.ReplyKeyboardMarkup
-
-	// StatusMenuMarkup is the Status sub-menu keyboard.
-	StatusMenuMarkup *botgotd.ReplyKeyboardMarkup
+	MainMenuMarkup       *botgotd.ReplyKeyboardMarkup
+	StatusMenuMarkup     *botgotd.ReplyKeyboardMarkup
+	SettingsMenuMarkup   *botgotd.ReplyKeyboardMarkup
 
 	// GrupListMenuMarkup is the Grup & List sub-menu keyboard.
 	GrupListMenuMarkup *botgotd.ReplyKeyboardMarkup
@@ -240,8 +246,19 @@ func init() {
 
 	UbahModeMarkup = &botgotd.ReplyKeyboardMarkup{
 		Keyboard: [][]botgotd.KeyboardButton{
-			{{Text: BtnModeNormal}, {Text: BtnModeFast}, {Text: BtnModeSilent}},
+			{{Text: BtnModeNormal}, {Text: BtnModeFast}},
+			{{Text: BtnModeSilent}, {Text: BtnModeForward}},
 			{{Text: BtnBatal}},
+		},
+		ResizeKeyboard: true,
+	}
+
+	SettingsMenuMarkup = &botgotd.ReplyKeyboardMarkup{
+		Keyboard: [][]botgotd.KeyboardButton{
+			{{Text: BtnUpgradeToken}, {Text: BtnGantiToken}},
+			{{Text: BtnBackupData}, {Text: BtnRestoreData}},
+			{{Text: BtnAmbilToken}},
+			{{Text: BtnStatus}, {Text: BtnHome}},
 		},
 		ResizeKeyboard: true,
 	}

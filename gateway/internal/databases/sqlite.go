@@ -107,6 +107,32 @@ func (s *SQLiteClient) initTables() error {
 			groups TEXT DEFAULT '[]',
 			topics TEXT DEFAULT '[]',
 			topic_lists TEXT DEFAULT '[]',
+			active_token_sha TEXT DEFAULT '',
+			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS token_profiles (
+			token_sha TEXT PRIMARY KEY,
+			owner_chat_id INTEGER NOT NULL,
+			type TEXT DEFAULT 'Broadcast',
+			delay INTEGER DEFAULT 5,
+			delay_mode TEXT DEFAULT 'manual',
+			delay_all_groups INTEGER DEFAULT 0,
+			skip_floodwait INTEGER DEFAULT 0,
+			skip_floodwait_sec INTEGER DEFAULT 0,
+			timer TEXT DEFAULT 'Belum diatur',
+			extra INTEGER DEFAULT 0,
+			mode TEXT DEFAULT 'Normal',
+			safemode INTEGER DEFAULT 0,
+			notifikasi TEXT DEFAULT 'Aktif · Kirim ke Saya',
+			email TEXT DEFAULT 'Belum diatur',
+			admin TEXT DEFAULT 'Belum diatur',
+			watermark TEXT DEFAULT '',
+			watermark_cache_id INTEGER DEFAULT 0,
+			topic_enabled INTEGER DEFAULT 0,
+			lists TEXT DEFAULT '[]',
+			groups TEXT DEFAULT '[]',
+			topics TEXT DEFAULT '[]',
+			topic_lists TEXT DEFAULT '[]',
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 
@@ -134,6 +160,16 @@ func (s *SQLiteClient) initTables() error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_licenses_owner ON user_licenses(owner_chat_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_licenses_userbot ON user_licenses(userbot_id);`,
+
+		`CREATE TABLE IF NOT EXISTS data_backups (
+			code TEXT PRIMARY KEY,
+			owner_id INTEGER NOT NULL,
+			lists TEXT DEFAULT '[]',
+			groups TEXT DEFAULT '[]',
+			topics TEXT DEFAULT '[]',
+			topic_lists TEXT DEFAULT '[]',
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);`,
 	}
 
 	for _, q := range queries {
@@ -146,6 +182,8 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN delay_mode TEXT DEFAULT 'manual';")
 	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN delay_all_groups INTEGER DEFAULT 0;")
 	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN skip_floodwait_sec INTEGER DEFAULT 0;")
+	_, _ = s.DB.Exec("ALTER TABLE jaseb_configurasi ADD COLUMN active_token_sha TEXT DEFAULT '';")
+	_, _ = s.DB.Exec("CREATE INDEX IF NOT EXISTS idx_token_profiles_owner ON token_profiles(owner_chat_id);")
 	return nil
 }
 
@@ -162,7 +200,7 @@ func (s *SQLiteClient) HasSession(ctx context.Context, ownerID int64) (bool, err
 func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConfig, error) {
 	query := `SELECT owner_id, type, delay, COALESCE(delay_mode, 'manual'), COALESCE(delay_all_groups, 0), skip_floodwait, COALESCE(skip_floodwait_sec, 0), timer, extra, mode, safemode, status,
 		masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
-		tindakan_terkini, tindakan_terakhir, lists, groups, topics, COALESCE(topic_lists, '[]'), updated_at
+		tindakan_terkini, tindakan_terakhir, lists, groups, topics, COALESCE(topic_lists, '[]'), COALESCE(active_token_sha, ''), updated_at
 		FROM jaseb_configurasi WHERE owner_id = ? LIMIT 1;`
 
 	var c JasebConfig
@@ -172,7 +210,7 @@ func (s *SQLiteClient) GetConfig(ctx context.Context, ownerID int64) (*JasebConf
 	err := s.DB.QueryRowContext(ctx, query, ownerID).Scan(
 		&c.OwnerID, &c.Type, &c.Delay, &c.DelayMode, &c.DelayAllGroups, &sfw, &c.SkipFloodWaitSec, &c.Timer, &c.Extra, &c.Mode, &sfm, &c.Status,
 		&c.MasaAktif, &c.Notifikasi, &c.Email, &c.Admin, &c.Watermark, &c.WatermarkCacheID, &tpe,
-		&c.TindakanTerkini, &c.TindakanTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON, &c.UpdatedAt,
+		&c.TindakanTerkini, &c.TindakanTerakhir, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON, &c.ActiveTokenSHA, &c.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -217,8 +255,8 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	query := `INSERT INTO jaseb_configurasi (
 		owner_id, type, delay, delay_mode, delay_all_groups, skip_floodwait, skip_floodwait_sec, timer, extra, mode, safemode, status,
 		masa_aktif, notifikasi, email, admin, watermark, watermark_cache_id, topic_enabled,
-		tindakan_terkini, tindakan_terakhir, lists, groups, topics, topic_lists, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		tindakan_terkini, tindakan_terakhir, lists, groups, topics, topic_lists, active_token_sha, updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(owner_id) DO UPDATE SET
 		type = excluded.type,
 		delay = excluded.delay,
@@ -244,6 +282,7 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 		groups = excluded.groups,
 		topics = excluded.topics,
 		topic_lists = excluded.topic_lists,
+		active_token_sha = excluded.active_token_sha,
 		updated_at = excluded.updated_at;`
 
 	sfw := 0
@@ -274,7 +313,7 @@ func (s *SQLiteClient) SaveConfig(ctx context.Context, c *JasebConfig) error {
 	_, err := s.DB.ExecContext(ctx, query,
 		c.OwnerID, c.Type, c.Delay, delayMode, c.DelayAllGroups, sfw, c.SkipFloodWaitSec, c.Timer, c.Extra, c.Mode, sfm, c.Status,
 		c.MasaAktif, c.Notifikasi, c.Email, c.Admin, c.Watermark, c.WatermarkCacheID, tpe,
-		c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), c.UpdatedAt,
+		c.TindakanTerkini, c.TindakanTerakhir, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), c.ActiveTokenSHA, c.UpdatedAt,
 	)
 	return err
 }
@@ -349,8 +388,11 @@ func (s *SQLiteClient) SaveUserLicense(ctx context.Context, ul *UserLicense) err
 	query := `INSERT INTO user_licenses (token_sha, master_token, owner_chat_id, userbot_id, tier, can_custom_watermark, expires_at, created_at, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(token_sha) DO UPDATE SET
+			master_token = excluded.master_token,
 			owner_chat_id = excluded.owner_chat_id,
 			userbot_id = excluded.userbot_id,
+			tier = excluded.tier,
+			can_custom_watermark = excluded.can_custom_watermark,
 			expires_at = excluded.expires_at,
 			status = excluded.status;`
 	canWM := 0
@@ -383,34 +425,12 @@ func (s *SQLiteClient) GetUserLicenseBySHA(ctx context.Context, tokenSHA string)
 }
 
 func (s *SQLiteClient) GetActiveUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
-	query := `SELECT token_sha, master_token, owner_chat_id, userbot_id, tier, can_custom_watermark, expires_at, created_at, status
-		FROM user_licenses WHERE (owner_chat_id = ? OR userbot_id = ?) AND status = 'active'
-		ORDER BY expires_at DESC;`
-	rows, err := s.DB.QueryContext(ctx, query, ownerChatID, ownerChatID)
+	list, err := s.ListActiveUserLicenses(ctx, ownerChatID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	now := time.Now()
-	var best *UserLicense
-	for rows.Next() {
-		var ul UserLicense
-		var canWM int
-		if scanErr := rows.Scan(
-			&ul.TokenSHA, &ul.MasterToken, &ul.OwnerChatID, &ul.UserbotID, &ul.Tier, &canWM, &ul.ExpiresAt, &ul.CreatedAt, &ul.Status,
-		); scanErr != nil {
-			continue
-		}
-		ul.CanCustomWatermark = canWM == 1
-		if ul.ExpiresAt.After(now) {
-			if best == nil || ul.ExpiresAt.After(best.ExpiresAt) {
-				copyUL := ul
-				best = &copyUL
-			}
-		}
-	}
-	return best, rows.Err()
+	activeSHA, _ := s.GetActiveTokenSHA(ctx, ownerChatID)
+	return selectActiveLicense(list, activeSHA), nil
 }
 
 func (s *SQLiteClient) GetLatestUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
@@ -482,9 +502,95 @@ func (s *SQLiteClient) RelinkUserData(ctx context.Context, oldOwnerID, newOwnerI
 	if oldOwnerID == 0 || newOwnerID == 0 || oldOwnerID == newOwnerID {
 		return nil
 	}
-	_, _ = s.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET owner_id = ? WHERE owner_id = ?;`, newOwnerID, oldOwnerID)
+	var oldCfgCount int
+	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM jaseb_configurasi WHERE owner_id = ?;`, oldOwnerID).Scan(&oldCfgCount); err == nil && oldCfgCount > 0 {
+		_, _ = s.DB.ExecContext(ctx, `DELETE FROM jaseb_configurasi WHERE owner_id = ?;`, newOwnerID)
+		_, _ = s.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET owner_id = ? WHERE owner_id = ?;`, newOwnerID, oldOwnerID)
+	}
+	_, _ = s.DB.ExecContext(ctx, `UPDATE user_licenses SET owner_chat_id = ? WHERE owner_chat_id = ?;`, newOwnerID, oldOwnerID)
 	_, _ = s.DB.ExecContext(ctx, `UPDATE user_licenses SET userbot_id = ? WHERE userbot_id = ?;`, newOwnerID, oldOwnerID)
 	return nil
+}
+
+func (s *SQLiteClient) SupersedeOtherUserLicenses(ctx context.Context, ownerChatID int64, keepTokenSHA string) error {
+	if ownerChatID == 0 {
+		return nil
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE user_licenses SET status = 'superseded' WHERE (owner_chat_id = ? OR userbot_id = ?) AND status = 'active' AND token_sha != ?;`,
+		ownerChatID, ownerChatID, keepTokenSHA,
+	)
+	return err
+}
+
+func (s *SQLiteClient) MarkUserLicenseStatus(ctx context.Context, tokenSHA, status string) error {
+	if tokenSHA == "" {
+		return nil
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE user_licenses SET status = ? WHERE token_sha = ?;`, status, tokenSHA)
+	return err
+}
+
+func (s *SQLiteClient) RevokeTokenMaster(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	_, err := s.DB.ExecContext(ctx, `UPDATE tokens_master SET status = 'revoked' WHERE token = ?;`, token)
+	return err
+}
+
+func (s *SQLiteClient) SaveDataBackup(ctx context.Context, b *DataBackupCode) error {
+	if b == nil || b.Code == "" {
+		return nil
+	}
+	if b.CreatedAt.IsZero() {
+		b.CreatedAt = time.Now()
+	}
+	listsBytes, _ := json.Marshal(b.Lists)
+	groupsBytes, _ := json.Marshal(b.Groups)
+	topicsBytes, _ := json.Marshal(b.Topics)
+	topicListsBytes, _ := json.Marshal(b.TopicLists)
+	_, err := s.DB.ExecContext(ctx,
+		`INSERT INTO data_backups (code, owner_id, lists, groups, topics, topic_lists, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(code) DO UPDATE SET
+			owner_id = excluded.owner_id,
+			lists = excluded.lists,
+			groups = excluded.groups,
+			topics = excluded.topics,
+			topic_lists = excluded.topic_lists,
+			created_at = excluded.created_at;`,
+		b.Code, b.OwnerID, string(listsBytes), string(groupsBytes), string(topicsBytes), string(topicListsBytes), b.CreatedAt,
+	)
+	return err
+}
+
+func (s *SQLiteClient) GetDataBackup(ctx context.Context, code string) (*DataBackupCode, error) {
+	var b DataBackupCode
+	var listsJSON, groupsJSON, topicsJSON, topicListsJSON string
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT code, owner_id, lists, groups, topics, COALESCE(topic_lists, '[]'), created_at FROM data_backups WHERE code = ? LIMIT 1;`,
+		code,
+	).Scan(&b.Code, &b.OwnerID, &listsJSON, &groupsJSON, &topicsJSON, &topicListsJSON, &b.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if listsJSON != "" {
+		_ = json.Unmarshal([]byte(listsJSON), &b.Lists)
+	}
+	if groupsJSON != "" {
+		_ = json.Unmarshal([]byte(groupsJSON), &b.Groups)
+	}
+	if topicsJSON != "" {
+		_ = json.Unmarshal([]byte(topicsJSON), &b.Topics)
+	}
+	if topicListsJSON != "" {
+		_ = json.Unmarshal([]byte(topicListsJSON), &b.TopicLists)
+	}
+	return &b, nil
 }
 
 type AdminAccountRow struct {

@@ -103,11 +103,6 @@ func (h *Handler) ShowBantuan(ctx context.Context, b *botgotd.Bot, chatID, userI
 	})
 }
 
-// ShowSettings delegates to ShowStatus
-func (h *Handler) ShowSettings(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
-	h.ShowStatus(ctx, b, chatID, userID)
-}
-
 // ShowFeed displays updates feed
 func (h *Handler) ShowFeed(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	var sb strings.Builder
@@ -158,6 +153,11 @@ func isKnownPanelButton(text string) bool {
 		assets.BtnJedaPerSemuaGrup,
 		assets.BtnSkipFloodWait,
 		assets.BtnSettings,
+		assets.BtnUpgradeToken,
+		assets.BtnGantiToken,
+		assets.BtnAmbilToken,
+		assets.BtnBackupData,
+		assets.BtnRestoreData,
 		assets.BtnFeed,
 		assets.BtnWebapp,
 		assets.BtnCustomWatermark,
@@ -294,6 +294,10 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case assets.BtnExpert:
+		if policy, enforced := h.getEffectiveTierPolicy(ctx, effectiveUserID); enforced && !policy.AllowExpertExtra {
+			h.denyTierFeature(ctx, b, chatID, policy.Tier, "Expert Extra", "Pro", assets.MainMenuMarkup)
+			return true
+		}
 		h.ShowExpertExtra(ctx, b, chatID)
 		return true
 
@@ -331,6 +335,26 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 
 	case assets.BtnSettings:
 		h.ShowSettings(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnUpgradeToken:
+		h.PromptUpgradeToken(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnGantiToken:
+		h.ShowSwitchTokenMenu(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnAmbilToken:
+		h.HandleAmbilToken(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnBackupData:
+		h.HandleCreateDataBackup(ctx, b, chatID, effectiveUserID)
+		return true
+
+	case assets.BtnRestoreData:
+		h.PromptRestoreDataBackup(ctx, b, chatID)
 		return true
 
 	case assets.BtnFeed:
@@ -384,6 +408,12 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case assets.BtnTambahList:
+		if policy, enforced := h.getEffectiveTierPolicy(ctx, effectiveUserID); enforced && policy.MaxLists > 0 {
+			if _, lCount := h.db.CountGroupsAndLists(ctx, effectiveUserID); lCount >= policy.MaxLists {
+				h.denyTierFeature(ctx, b, chatID, policy.Tier, fmt.Sprintf("Tambah List (> %d list)", policy.MaxLists), "Pro", assets.GrupListMenuMarkup)
+				return true
+			}
+		}
 		h.PromptTambahList(ctx, b, chatID)
 		return true
 
@@ -400,14 +430,23 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 		return true
 
 	case assets.BtnCekTopic:
+		if !h.allowTopicFeature(ctx, b, chatID, effectiveUserID) {
+			return true
+		}
 		h.CekTopic(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case assets.BtnTopic:
+		if !h.allowTopicFeature(ctx, b, chatID, effectiveUserID) {
+			return true
+		}
 		h.StartTopicMenu(ctx, b, chatID, effectiveUserID)
 		return true
 
 	case assets.BtnListTopic:
+		if !h.allowTopicFeature(ctx, b, chatID, effectiveUserID) {
+			return true
+		}
 		h.ShowListTopic(ctx, b, chatID, effectiveUserID, 0)
 		return true
 
@@ -479,4 +518,12 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 	}
 
 	return false
+}
+
+func (h *Handler) allowTopicFeature(ctx context.Context, b *botgotd.Bot, chatID, userID int64) bool {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowTopic {
+		h.denyTierFeature(ctx, b, chatID, policy.Tier, "Topic Forum & List Topic", "Pro", assets.GrupListMenuMarkup)
+		return false
+	}
+	return true
 }

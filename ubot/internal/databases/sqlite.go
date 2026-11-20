@@ -241,6 +241,7 @@ func (s *SQLiteClient) initTables() error {
 			topic_lists TEXT DEFAULT '[]',
 			broadcast_index INTEGER DEFAULT 0,
 			broadcast_next_at INTEGER DEFAULT 0,
+			active_token_sha TEXT DEFAULT '',
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
 
@@ -288,6 +289,25 @@ func (s *SQLiteClient) initTables() error {
 			access_hash INTEGER NOT NULL,
 			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
+
+		`CREATE TABLE IF NOT EXISTS user_licenses (
+			token_sha TEXT PRIMARY KEY,
+			master_token TEXT NOT NULL,
+			owner_chat_id INTEGER NOT NULL,
+			userbot_id INTEGER NOT NULL,
+			tier TEXT NOT NULL,
+			can_custom_watermark INTEGER DEFAULT 0,
+			expires_at TIMESTAMP NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			status TEXT DEFAULT 'active'
+		);`,
+
+		`CREATE TABLE IF NOT EXISTS daily_send_quota (
+			owner_id INTEGER NOT NULL,
+			date_wib TEXT NOT NULL,
+			sent_count INTEGER DEFAULT 0,
+			PRIMARY KEY (owner_id, date_wib)
+		);`,
 	}
 
 	for _, query := range queries {
@@ -307,6 +327,7 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN delay_mode TEXT DEFAULT 'manual';`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN delay_all_groups INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN skip_floodwait_sec INTEGER DEFAULT 0;`)
+	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN active_token_sha TEXT DEFAULT '';`)
 	_, _ = s.DB.Exec(`INSERT OR IGNORE INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
 		SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM sessions WHERE prefix_set = 1;`)
 
@@ -885,4 +906,37 @@ func (s *SQLiteClient) LoadAllPeers(ctx context.Context) (map[int64]int64, map[i
 		}
 	}
 	return users, channels, rows.Err()
+}
+
+func (s *SQLiteClient) GetDailySendCount(ctx context.Context, ownerID int64, dateWIB string) (int, error) {
+	if s == nil || s.DB == nil {
+		return 0, nil
+	}
+	var count int
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT sent_count FROM daily_send_quota WHERE owner_id = ? AND date_wib = ? LIMIT 1;`,
+		ownerID, dateWIB,
+	).Scan(&count)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("get daily send count: %w", err)
+	}
+	return count, nil
+}
+
+func (s *SQLiteClient) IncrementDailySendCount(ctx context.Context, ownerID int64, dateWIB string) (int, error) {
+	if s == nil || s.DB == nil {
+		return 0, nil
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`INSERT INTO daily_send_quota (owner_id, date_wib, sent_count) VALUES (?, ?, 1)
+		ON CONFLICT(owner_id, date_wib) DO UPDATE SET sent_count = sent_count + 1;`,
+		ownerID, dateWIB,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("increment daily send count: %w", err)
+	}
+	return s.GetDailySendCount(ctx, ownerID, dateWIB)
 }

@@ -121,6 +121,8 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			userbotID = data.ChatID
 		}
 
+		var alreadyTransferred bool
+		var lic *databases.UserLicense
 		if pendingSess != nil && pendingSess.PendingTokenSHA != "" {
 			tokenSHA = pendingSess.PendingTokenSHA
 			tier = pendingSess.PendingTier
@@ -135,9 +137,55 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 				expiresAt = time.Now().Add(7 * 24 * time.Hour)
 			}
 			if pendingSess.OldOwnerID > 0 && pendingSess.OldOwnerID != data.ChatID {
-				_ = h.db.RelinkUserData(ctx, pendingSess.OldOwnerID, data.ChatID)
+				oldOwnerID := pendingSess.OldOwnerID
+				srcLic := pendingSess.ClaimedLicense
+				if srcLic == nil {
+					srcLic = &databases.UserLicense{
+						TokenSHA:           pendingSess.PendingTokenSHA,
+						MasterToken:        masterToken,
+						OwnerChatID:        oldOwnerID,
+						UserbotID:          oldUserbotID,
+						Tier:               tier,
+						CanCustomWatermark: (tier == "Pro++" || tier == "Vip"),
+						ExpiresAt:          expiresAt,
+						CreatedAt:          time.Now(),
+						Status:             "active",
+					}
+				}
+				newLic, txErr := h.transferTokenSlotBetweenAccounts(ctx, oldOwnerID, data.ChatID, userbotID, srcLic)
+				if txErr != nil {
+					log.Printf("[license] transferTokenSlotBetweenAccounts failed: %v", txErr)
+				} else if newLic != nil {
+					lic = newLic
+					tokenSHA = newLic.TokenSHA
+					alreadyTransferred = true
+					remOld, _ := h.db.ListActiveUserLicenses(ctx, oldOwnerID)
+					if len(remOld) > 0 {
+						b.SendMessage(ctx, &botgotd.SendMessageParams{
+							ChatID:    oldOwnerID,
+							Text:      fmt.Sprintf("🔄 <b>Slot Token Dipindahkan</b>\n\nSlot paket <code>%s</code> telah dipindahkan ke akun Telegram baru. Slot token aktif Anda yang lain tetap berjalan normal.", html.EscapeString(tier)),
+							ParseMode: "HTML",
+						})
+					} else {
+						b.SendMessage(ctx, &botgotd.SendMessageParams{
+							ChatID:      oldOwnerID,
+							Text:        "🔄 <b>Lisensi Akun Dipindahkan</b>\n\nPaket dan data userbot Anda telah dipindahkan menggunakan Token Backup ke akun Telegram baru. Sesi lama pada akun ini telah diputus demi keamanan.",
+							ParseMode:   "HTML",
+							ReplyMarkup: assets.RemoveKeyboard,
+						})
+						if h.broker != nil {
+							_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
+								ChatID:       data.ChatID,
+								UserID:       userbotID,
+								OwnerID:      oldOwnerID,
+								OldUserbotID: oldUserbotID,
+								Type:         "relink_user_data",
+							})
+						}
+					}
+				}
 			}
-			if pendingSess.OldOwnerID > 0 && (pendingSess.OldOwnerID != data.ChatID || (oldUserbotID > 0 && oldUserbotID != userbotID)) {
+			if !alreadyTransferred && pendingSess.OldOwnerID > 0 && pendingSess.OldOwnerID == data.ChatID && oldUserbotID > 0 && oldUserbotID != userbotID {
 				if h.broker != nil {
 					_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
 						ChatID:       data.ChatID,
@@ -179,21 +227,26 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		}
 		canCustomWM := (tier == "Pro++" || tier == "Vip")
 
-		lic := &databases.UserLicense{
-			TokenSHA:           tokenSHA,
-			MasterToken:        masterToken,
-			OwnerChatID:        data.ChatID,
-			UserbotID:          userbotID,
-			Tier:               tier,
-			CanCustomWatermark: canCustomWM,
-			ExpiresAt:          expiresAt,
-			CreatedAt:          time.Now(),
-			Status:             "active",
+		if !alreadyTransferred {
+			lic = &databases.UserLicense{
+				TokenSHA:           tokenSHA,
+				MasterToken:        masterToken,
+				OwnerChatID:        data.ChatID,
+				UserbotID:          userbotID,
+				Tier:               tier,
+				CanCustomWatermark: canCustomWM,
+				ExpiresAt:          expiresAt,
+				CreatedAt:          time.Now(),
+				Status:             "active",
+			}
+			if saveErr := h.db.SaveUserLicense(ctx, lic); saveErr != nil {
+				log.Printf("[license] failed saving user license for chat %d: %v", data.ChatID, saveErr)
+				globalDevMonitor.NotifyTraceback("gateway", "SaveUserLicense Failed", saveErr.Error())
+			} else {
+				_ = h.switchUserActiveToken(ctx, data.ChatID, lic)
+			}
 		}
-		if saveErr := h.db.SaveUserLicense(ctx, lic); saveErr != nil {
-			log.Printf("[license] failed saving user license for chat %d: %v", data.ChatID, saveErr)
-			globalDevMonitor.NotifyTraceback("gateway", "SaveUserLicense Failed", saveErr.Error())
-		} else {
+		if lic != nil {
 			shouldNotifyCollected := (pendingSess != nil && !pendingSess.TokenCollected) || (pendingSess == nil && isAutoFreeNew)
 			if shouldNotifyCollected {
 				isRecovery := pendingSess != nil && pendingSess.PendingTokenSHA != "" && pendingSess.OldOwnerID > 0 && pendingSess.OldOwnerID != data.ChatID
@@ -202,9 +255,6 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 			globalDevMonitor.NotifyBackupToken(lic)
 			globalDevMonitor.NotifyUserbotConnected(data.ChatID, userbotID, fmt.Sprintf("Userbot aktif (Tier %s)", tier))
 		}
-		cfg := h.db.GetUserConfig(ctx, data.ChatID)
-		cfg.MasaAktif = formatLicenseMasaAktif(lic)
-		_ = h.db.SaveUserConfig(ctx, cfg)
 
 		sisaDur := FormatDurationID(time.Until(expiresAt))
 		expFormatted := expiresAt.Local().Format("02-01-2006 15:04:05")
@@ -217,6 +267,7 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	case "session_revoked":
 		params.ParseMode = "HTML"
 		params.ReplyMarkup = assets.RemoveKeyboard
+		go h.dispatchSessionRevokedBackup(b, data.ChatID, data.Text)
 	case "panel_notice":
 		params.ParseMode = "HTML"
 		params.ReplyMarkup = assets.GrupListMenuMarkup

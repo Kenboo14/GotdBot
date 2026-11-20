@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	gobot "github.com/Kenboo14/GoBot"
@@ -89,6 +90,10 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 	}
 	if job.Type == "revoke_expired_session" {
 		s.revokeExpiredSession(ctx, job.ChatID, job.UserID, job.Text)
+		return
+	}
+	if job.Type == "revoke_transferred_session" {
+		s.revokeSessionWithReason(ctx, job.ChatID, job.UserID, job.Text)
 		return
 	}
 	if job.Type == "alive_ping" {
@@ -322,6 +327,12 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 		slog.Error("dialogs error during fetchAccountGroups", slog.String("error", err.Error()))
 	}
 
+	cappedFree := false
+	if strings.EqualFold(s.getActiveTier(ctx, ownerID), "Free") && len(allGroups) > 30 {
+		allGroups = allGroups[:30]
+		cappedFree = true
+	}
+
 	// 1. Simpan ke MongoDB jaseb_configurasi (koleksi tunggal terpadu)
 	if s.db != nil {
 		col := s.db.Collection("jaseb_configurasi")
@@ -345,18 +356,33 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 	// 3. Beritahu Gateway via Redis Pub/Sub bahwa config ownerID telah diperbarui di MongoDB
 	s.publishConfigUpdated(ctx, ownerID)
 
+	capNote := ""
+	if cappedFree {
+		capNote = "<br/>⚠️ <i>Batas paket Free maksimal <b>30 grup</b> diterapkan.</i>"
+	}
 	report := fmt.Sprintf(`<h1>✅ Sinkronisasi Grup Berhasil</h1>
-<blockquote expandable>Sebanyak <code>%d</code> grup dari akun Telegram Anda telah berhasil diimpor ke daftar target broadcast.</blockquote>
+<blockquote expandable>Sebanyak <code>%d</code> grup dari akun Telegram Anda telah berhasil diimpor ke daftar target broadcast.%s</blockquote>
 <table border="1">
   <tr><th>📌 Sumber</th><th>Total Grup Terimpor</th></tr>
   <tr><td>Akun Userbot</td><td><code>%d grup</code></td></tr>
 </table>
 <hr/>
-<p>GotdBot • Group Target Manager</p>`, len(allGroups), len(allGroups))
+<p>GotdBot • Group Target Manager</p>`, len(allGroups), capNote, len(allGroups))
 	s.reply(ctx, chatID, 0, report, "panel_notice")
 }
 
 func (s *Service) revokeExpiredSession(ctx context.Context, chatID, userbotID int64, expiredAt string) {
+	reason := "Masa aktif token berakhir"
+	if expiredAt != "" {
+		reason = "Masa aktif token berakhir pada " + expiredAt
+	}
+	s.revokeSessionWithReason(ctx, chatID, userbotID, reason)
+}
+
+func (s *Service) revokeSessionWithReason(ctx context.Context, chatID, userbotID int64, reason string) {
+	if strings.TrimSpace(reason) == "" {
+		reason = "Sesi dicabut oleh sistem"
+	}
 	var targetChatIDs []int64
 	seen := make(map[int64]bool)
 	addTarget := func(cid int64) {
@@ -379,11 +405,6 @@ func (s *Service) revokeExpiredSession(ctx context.Context, chatID, userbotID in
 		if row, err := s.sqlite.GetSessionByAccount(ctx, userbotID); err == nil && row != nil {
 			addTarget(row.ChatID)
 		}
-	}
-
-	reason := "Masa aktif token berakhir"
-	if expiredAt != "" {
-		reason = "Masa aktif token berakhir pada " + expiredAt
 	}
 
 	for _, uid := range []int64{chatID, userbotID} {

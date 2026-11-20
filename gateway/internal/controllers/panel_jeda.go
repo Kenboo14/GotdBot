@@ -54,6 +54,10 @@ func (h *Handler) applyJedaAman(ctx context.Context, b *botgotd.Bot, chatID, use
 }
 
 func (h *Handler) applyJedaOtomatis(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowManualJeda {
+		h.denyTierFeature(ctx, b, chatID, policy.Tier, "Jeda Otomatis", "Pro", assets.AturJedaMarkup)
+		return
+	}
 	h.setPanelState(chatID, "")
 	cfg := h.db.GetUserConfig(ctx, userID)
 	cfg.DelayMode = "otomatis"
@@ -64,6 +68,10 @@ func (h *Handler) applyJedaOtomatis(ctx context.Context, b *botgotd.Bot, chatID,
 }
 
 func (h *Handler) PromptJedaPerGrup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowManualJeda {
+		h.denyTierFeature(ctx, b, chatID, policy.Tier, "Jeda Per Grup", "Pro", assets.AturJedaMarkup)
+		return
+	}
 	h.setPanelState(chatID, "waiting_jeda_per_grup")
 	cfg := h.db.GetUserConfig(ctx, userID)
 	gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
@@ -87,6 +95,10 @@ Pilih tombol (5–300 detik) atau ketik angka 5–300.`, html.EscapeString(cfg.F
 }
 
 func (h *Handler) PromptJedaPerSemuaGrup(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowManualJeda {
+		h.denyTierFeature(ctx, b, chatID, policy.Tier, "Jeda Per Semua Grup", "Pro", assets.AturJedaMarkup)
+		return
+	}
 	h.setPanelState(chatID, "waiting_jeda_per_semua_grup")
 	cfg := h.db.GetUserConfig(ctx, userID)
 	gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
@@ -110,6 +122,10 @@ Pilih tombol (2–120 menit, atau 240/360 menit) atau ketik angka.`, html.Escape
 }
 
 func (h *Handler) PromptSkipFloodWait(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
+	if policy, enforced := h.getEffectiveTierPolicy(ctx, userID); enforced && !policy.AllowSkipFloodWait {
+		h.denyTierFeature(ctx, b, chatID, policy.Tier, "Skip FloodWait", "Pro", assets.AturJedaMarkup)
+		return
+	}
 	h.setPanelState(chatID, "waiting_skip_floodwait")
 	cfg := h.db.GetUserConfig(ctx, userID)
 
