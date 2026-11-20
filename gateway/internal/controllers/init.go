@@ -37,6 +37,8 @@ type Handler struct {
 	accountNames     map[int64]string
 	topicMu          sync.RWMutex
 	topicSessions    map[int64]*topicSessionState
+	pluginMu         sync.RWMutex
+	pluginStates     map[string]bool
 }
 
 func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {

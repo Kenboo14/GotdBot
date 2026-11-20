@@ -1,11 +1,15 @@
 package userbot
 
 import (
+	"context"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+const redisKeyPluginState = "ubot:plugins:state"
 
 type PluginModule uint8
 
@@ -158,4 +162,24 @@ func (s *Service) SetPluginEnabled(mod PluginModule, enabled bool) {
 	}
 	s.pluginState.ensureInit()
 	s.pluginState.flags[mod].Store(enabled)
+}
+
+func (s *Service) SyncPluginsFromRedis(ctx context.Context) {
+	if s == nil || s.redis == nil || s.redis.Client == nil {
+		return
+	}
+	rCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	vals, err := s.redis.Client.HGetAll(rCtx, redisKeyPluginState).Result()
+	if err != nil || len(vals) == 0 {
+		return
+	}
+	s.pluginState.ensureInit()
+	for name, raw := range vals {
+		mod, ok := parsePluginModule(name)
+		if !ok || mod == PluginPMPermit {
+			continue
+		}
+		s.pluginState.flags[mod].Store(strings.TrimSpace(raw) != "0")
+	}
 }

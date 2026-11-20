@@ -22,4 +22,5 @@ func registerBotCommands(b *botgotd.Bot, h *Handler) {
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "assist_server:", botgotd.MatchTypePrefix, h.HelpCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "alive_ping:", botgotd.MatchTypePrefix, h.AlivePingCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "note:", botgotd.MatchTypePrefix, h.NoteCallback)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "ucard_alert:", botgotd.MatchTypePrefix, h.UCardAlertCallback)
 }

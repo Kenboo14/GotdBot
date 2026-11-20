@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"sync"
 	"time"
@@ -190,10 +191,18 @@ func (s *Service) strinfoCommand(ctx context.Context, client *gobot.Client, targ
 		return sendUserText(ctx, client, target, "Pesan yang dibalas bukan stiker atau dokumen.", threadID)
 	}
 	var sb strings.Builder
+	var htmlLines []string
 	fmt.Fprintf(&sb, "Sticker Info:\nDocument ID: %d\nMIME: %s\n", doc.ID, doc.MimeType)
+	htmlLines = append(htmlLines,
+		"<b>Sticker Info</b>",
+		fmt.Sprintf("<b>Document ID:</b> <i>%d</i>", doc.ID),
+		fmt.Sprintf("<b>MIME:</b> <i>%s</i>", html.EscapeString(doc.MimeType)),
+	)
+	var shortName string
 	if stAttr != nil {
 		if stAttr.Alt != "" {
 			fmt.Fprintf(&sb, "Emoji: %s\n", stAttr.Alt)
+			htmlLines = append(htmlLines, fmt.Sprintf("<b>Emoji:</b> <i>%s</i>", html.EscapeString(stAttr.Alt)))
 		}
 		if stAttr.Stickerset != nil {
 			res, sErr := client.API().MessagesGetStickerSet(ctx, &tg.MessagesGetStickerSetRequest{
@@ -201,13 +210,31 @@ func (s *Service) strinfoCommand(ctx context.Context, client *gobot.Client, targ
 			})
 			if sErr == nil {
 				if ms, ok := res.(*tg.MessagesStickerSet); ok {
+					shortName = ms.Set.ShortName
 					fmt.Fprintf(&sb, "Pack Title: %s\nShortName: %s\nTotal Stickers: %d\nLink: https://t.me/addstickers/%s\n",
 						ms.Set.Title, ms.Set.ShortName, ms.Set.Count, ms.Set.ShortName)
+					htmlLines = append(htmlLines,
+						fmt.Sprintf("<b>Pack Title:</b> <i>%s</i>", html.EscapeString(ms.Set.Title)),
+						fmt.Sprintf("<b>ShortName:</b> <i>%s</i>", html.EscapeString(ms.Set.ShortName)),
+						fmt.Sprintf("<b>Total Stickers:</b> <i>%d</i>", ms.Set.Count),
+					)
 				}
 			}
 		}
 	}
-	return sendUserText(ctx, client, target, strings.TrimSpace(sb.String()), threadID)
+	fallbackText := strings.TrimSpace(sb.String())
+	if shortName != "" {
+		packURL := "https://t.me/addstickers/" + shortName
+		card := ubotInlineCardPayload{
+			Title: "Sticker Info",
+			HTML:  strings.Join(htmlLines, "\n"),
+			Buttons: [][]ubotInlineCardButton{
+				{{Text: "Link!", URL: packURL}},
+			},
+		}
+		return s.sendInlineCardWithFallback(ctx, client, target, card, fallbackText, threadID)
+	}
+	return sendUserText(ctx, client, target, fallbackText, threadID)
 }
 
 func (s *Service) kangCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {

@@ -146,6 +146,13 @@ func startWorkerMockRedisLocked(t *testing.T) (*databases.Redis, *sync.Mutex, ma
 						} else {
 							writeNull(w)
 						}
+					case "HGETALL":
+						h := hashMap[args[1]]
+						_, _ = fmt.Fprintf(w, "*%d\r\n", len(h)*2)
+						for k, v := range h {
+							writeBulk(w, k)
+							writeBulk(w, v)
+						}
 					case "XADD":
 						for i := 2; i+1 < len(args); i++ {
 							if args[i] == "payload" {

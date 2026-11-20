@@ -302,3 +302,50 @@ func TestTelegraphContentNodesAndMediaDetection(t *testing.T) {
 		t.Fatalf("expected figure tag at index 2, got %v", nodes[2]["tag"])
 	}
 }
+
+func TestPeerChatIDFormatAndUserInfoHelpers(t *testing.T) {
+	if got := formatPeerChatID(&tg.InputPeerChannel{ChannelID: 1987654321, AccessHash: 1}, nil, 999); got != -1001987654321 {
+		t.Fatalf("expected -1001987654321, got %d", got)
+	}
+	if got := formatPeerChatID(&tg.InputPeerChat{ChatID: 54321}, nil, 999); got != -54321 {
+		t.Fatalf("expected -54321, got %d", got)
+	}
+	if got := formatPeerChatID(&tg.InputPeerUser{UserID: 318505206}, nil, 999); got != 318505206 {
+		t.Fatalf("expected 318505206, got %d", got)
+	}
+
+	u := &tg.User{
+		ID:        318505206,
+		FirstName: "zarven",
+		Premium:   true,
+		Photo:     &tg.UserProfilePhoto{PhotoID: 1, DCID: 5},
+		Status:    &tg.UserStatusRecently{},
+	}
+	if got := formatUserDCID(u); got != "5" {
+		t.Fatalf("expected DC ID 5, got %q", got)
+	}
+	if got := formatUserLastSeen(u); got != "Recently" {
+		t.Fatalf("expected Recently, got %q", got)
+	}
+
+	rClient, mu, strMap, _, _ := startWorkerMockRedisLocked(t)
+	defer rClient.Client.Close()
+	s := &Service{redis: rClient}
+	tok, err := s.saveInlineCardToRedis(context.Background(), ubotInlineCardPayload{
+		Title: "Info",
+		HTML:  "<b>DC ID:</b> <i>5</i>",
+		Buttons: [][]ubotInlineCardButton{
+			{{Text: "Bio", Alert: "Halo ini bio"}, {Text: "Direct link", URL: "tg://user?id=318505206"}},
+		},
+	})
+	if err != nil || tok == "" {
+		t.Fatalf("saveInlineCardToRedis failed: tok=%q err=%v", tok, err)
+	}
+	mu.Lock()
+	rawCard := strMap["inline:card:"+tok]
+	bioVal := strMap["inline:bio:"+tok]
+	mu.Unlock()
+	if !strings.Contains(rawCard, "Direct link") || bioVal != "Halo ini bio" {
+		t.Fatalf("unexpected Redis inline card data: card=%q bio=%q", rawCard, bioVal)
+	}
+}

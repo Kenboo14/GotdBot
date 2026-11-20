@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -275,6 +276,28 @@ func (s *Service) telegraphAuthorName(ctx context.Context, client *gobot.Client)
 	return "GotdBot UserBot"
 }
 
+func (s *Service) sendTelegraphSuccess(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, pageURL string, statusMsgID, threadID int) error {
+	escapedURL := html.EscapeString(pageURL)
+	card := ubotInlineCardPayload{
+		Title: "Telegra.ph Link",
+		HTML:  fmt.Sprintf("<b>Ini</b> <a href=\"%s\"><i>Telegra.ph Link</i></a> <b>Anda!</b>", escapedURL),
+		Buttons: [][]ubotInlineCardButton{
+			{{Text: "Link!", URL: pageURL}},
+		},
+	}
+	if err := s.trySendInlineCard(ctx, client, target, card, threadID); err == nil {
+		deleteUserStatusMessage(ctx, client, target, statusMsgID)
+		return nil
+	}
+	fallbackText := "Ini Telegra.ph Link Anda: " + pageURL
+	if statusMsgID > 0 {
+		if err := editUserText(ctx, client, target, statusMsgID, fallbackText); err == nil {
+			return nil
+		}
+	}
+	return sendUserText(ctx, client, target, fallbackText, threadID)
+}
+
 func (s *Service) telegraphCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	source := msg
 	if msg != nil && msg.ReplyTo != nil {
@@ -297,7 +320,7 @@ func (s *Service) telegraphCommand(ctx context.Context, client *gobot.Client, ta
 		if err != nil {
 			return sendUserText(ctx, client, target, "Telegraph gagal: "+err.Error(), threadID)
 		}
-		return sendUserText(ctx, client, target, "Halaman Telegraph dibuat: "+pageURL, threadID)
+		return s.sendTelegraphSuccess(ctx, client, target, pageURL, 0, threadID)
 	}
 
 	apiKey := strings.TrimSpace(os.Getenv("IMGBB_API_KEY"))
@@ -309,7 +332,7 @@ func (s *Service) telegraphCommand(ctx context.Context, client *gobot.Client, ta
 	}
 
 	statusMsgID, _ := sendUserStatusMessage(ctx, client, target, "Mengunggah foto dan membuat halaman Telegraph…", threadID)
-	finish := func(out string) error {
+	finishErr := func(out string) error {
 		if statusMsgID > 0 {
 			if err := editUserText(ctx, client, target, statusMsgID, out); err == nil {
 				return nil
@@ -322,15 +345,15 @@ func (s *Service) telegraphCommand(ctx context.Context, client *gobot.Client, ta
 	defer dlCancel()
 	writer := &limitedBufferWriter{max: telegraphMaxImageBytes}
 	if _, err := downloader.NewDownloader().Download(client.API(), loc).Stream(dlCtx, writer); err != nil {
-		return finish("Telegraph gagal mengunduh foto: " + truncateRunes(err.Error(), 160))
+		return finishErr("Telegraph gagal mengunduh foto: " + truncateRunes(err.Error(), 160))
 	}
 	if writer.buf.Len() == 0 {
-		return finish("Telegraph gagal: file foto kosong.")
+		return finishErr("Telegraph gagal: file foto kosong.")
 	}
 
 	imageURL, err := uploadImageToImgBB(ctx, apiKey, writer.buf.Bytes())
 	if err != nil {
-		return finish("Telegraph gagal: " + truncateRunes(err.Error(), 160))
+		return finishErr("Telegraph gagal: " + truncateRunes(err.Error(), 160))
 	}
 
 	caption := ""
@@ -349,7 +372,7 @@ func (s *Service) telegraphCommand(ctx context.Context, client *gobot.Client, ta
 	nodes := buildTelegraphContentNodes(caption, imageURL)
 	pageURL, err := createTelegraphPage(ctx, title, s.telegraphAuthorName(ctx, client), nodes)
 	if err != nil {
-		return finish("Telegraph gagal membuat halaman: " + truncateRunes(err.Error(), 160))
+		return finishErr("Telegraph gagal membuat halaman: " + truncateRunes(err.Error(), 160))
 	}
-	return finish("Halaman Telegraph dibuat: " + pageURL)
+	return s.sendTelegraphSuccess(ctx, client, target, pageURL, statusMsgID, threadID)
 }

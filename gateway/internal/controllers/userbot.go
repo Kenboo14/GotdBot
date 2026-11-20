@@ -939,6 +939,10 @@ func HandleInline(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 			}
 		}
 	}
+	if strings.HasPrefix(query, "ucard ") {
+		handleUCardInline(ctx, b, update, query)
+		return
+	}
 	if strings.HasPrefix(query, "note_show") {
 		parts := strings.Fields(query)
 		var ref string

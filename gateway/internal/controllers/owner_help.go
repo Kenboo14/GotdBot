@@ -4,6 +4,7 @@ import (
 	"assterisk/gateway/internal/botgotd"
 	"context"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 )
@@ -30,7 +31,7 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "🔍 /token info &lt;uid|token&gt;", Value: "Cek detail status lisensi, slot &amp; masa aktif"},
 			{Label: "🚫 /token revoke &lt;uid|token&gt;", Value: "Cabut lisensi / voucher dan putuskan sesi"},
 		},
-		Quote: "ℹ️ Format durasi: <b>h</b> (Hari), <b>j</b> (Jam), <b>m</b> (Menit). Contoh: <code>/token pro++ 30h</code> · Halaman 1/4.",
+		Quote: "ℹ️ Format durasi: <b>h</b> (Hari), <b>j</b> (Jam), <b>m</b> (Menit). Contoh: <code>/token pro++ 30h</code> · Halaman 1/5.",
 	},
 	{
 		TabLabel: "⚙️ Worker",
@@ -42,7 +43,7 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "🚧 /worker drain &lt;worker_id&gt;", Value: "Keluarkan worker dari rotasi &amp; migrasikan seluruh usernya"},
 			{Label: "✅ /worker undrain &lt;worker_id&gt;", Value: "Aktifkan kembali worker agar menerima user baru &amp; failover"},
 		},
-		Quote: "ℹ️ Auto-HELL memindah user berat (skor &gt;= 70 selama 3x cek) ke <code>ubot-hell</code> dan mengembalikan setelah &gt;= 6 jam jika skor &lt;= 25 · Halaman 2/4.",
+		Quote: "ℹ️ Auto-HELL memindah user berat (skor &gt;= 70 selama 3x cek) ke <code>ubot-hell</code> dan mengembalikan setelah &gt;= 6 jam jika skor &lt;= 25 · Halaman 2/5.",
 	},
 	{
 		TabLabel: "📊 Server",
@@ -56,7 +57,7 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "⚡ /ping", Value: "Uji konektivitas &amp; respons worker userbot aktif"},
 			{Label: "🧾 !code [bahasa]", Value: "Format ulang teks pesan yang di-reply ke blok kode"},
 		},
-		Quote: "ℹ️ Gunakan <code>/server</code> untuk memantau VPS live dan <code>/simulasi</code> untuk stress-test aman sebelum rilis · Halaman 3/4.",
+		Quote: "ℹ️ Gunakan <code>/server</code> untuk memantau VPS live dan <code>/simulasi</code> untuk stress-test aman sebelum rilis · Halaman 3/5.",
 	},
 	{
 		TabLabel: "🧭 Monitor",
@@ -71,7 +72,12 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "🎫 MONITOR_TOKEN_*", Value: "Log token dibuat, diklaim, brankas backup &amp; kedaluwarsa"},
 			{Label: "🐞 MONITOR_TRACEBACK", Value: "Peringatan error runtime, panic &amp; anomali handler"},
 		},
-		Quote: "ℹ️ Ketik <code>/help user</code> bila ingin membuka menu bantuan userbot reguler · Halaman 4/4.",
+		Quote: "ℹ️ Ketik <code>/help user</code> bila ingin membuka menu bantuan userbot reguler · Halaman 4/5.",
+	},
+	{
+		TabLabel: "🔌 Plugin",
+		Title:    "🔌 Owner Help · Kontrol Plugin Userbot",
+		Quote:    "ℹ️ Ketuk tombol inline di bawah untuk menghidupkan (🟢) atau mematikan (🔴) plugin secara real-time di seluruh worker · Halaman 5/5.",
 	},
 }
 
@@ -89,12 +95,18 @@ func resolveOwnerHelpPageArg(arg string) int {
 		return 3
 	case strings.Contains(a, "mon") || strings.Contains(a, "top") || strings.Contains(a, "panel"):
 		return 4
+	case strings.Contains(a, "plug") || strings.Contains(a, "fitur") || strings.Contains(a, "mod"):
+		return 5
 	default:
 		return 1
 	}
 }
 
 func renderOwnerHelpPage(page int) (string, *botgotd.InlineKeyboardMarkup) {
+	return (*Handler)(nil).renderOwnerHelp(context.Background(), page)
+}
+
+func (h *Handler) renderOwnerHelp(ctx context.Context, page int) (string, *botgotd.InlineKeyboardMarkup) {
 	total := len(ownerHelpPages)
 	if page < 1 {
 		page = 1
@@ -103,9 +115,46 @@ func renderOwnerHelpPage(page int) (string, *botgotd.InlineKeyboardMarkup) {
 		page = total
 	}
 	spec := ownerHelpPages[page-1]
-	text := renderMonitorRichCard(spec.Title, spec.Rows, spec.Quote, false)
+	rows := spec.Rows
+	keyboard := make([][]botgotd.InlineKeyboardButton, 0, 9)
 
-	tabRow := make([]botgotd.InlineKeyboardButton, 0, total)
+	if page == total {
+		states := h.getPluginStates(ctx)
+		rows = make([]monitorRichRow, 0, len(ownerPluginSpecs))
+		btnRow := make([]botgotd.InlineKeyboardButton, 0, 3)
+		for _, sp := range ownerPluginSpecs {
+			enabled := states[sp.Key]
+			icon := "🟢"
+			statusText := "🟢 ON"
+			if !enabled {
+				icon = "🔴"
+				statusText = "🔴 OFF"
+			}
+			rows = append(rows, monitorRichRow{
+				Label: statusText + " · " + sp.Title,
+				Value: "<code>" + html.EscapeString(sp.Commands) + "</code>",
+			})
+			btnRow = append(btnRow, botgotd.InlineKeyboardButton{
+				Text:         icon + " " + sp.Title,
+				CallbackData: "owner_help:plug:" + sp.Key,
+			})
+			if len(btnRow) == 3 {
+				keyboard = append(keyboard, btnRow)
+				btnRow = make([]botgotd.InlineKeyboardButton, 0, 3)
+			}
+		}
+		if len(btnRow) > 0 {
+			keyboard = append(keyboard, btnRow)
+		}
+		keyboard = append(keyboard, []botgotd.InlineKeyboardButton{
+			{Text: "✅ Aktifkan Semua", CallbackData: "owner_help:plug_all:1"},
+			{Text: "⛔ Matikan Semua", CallbackData: "owner_help:plug_all:0"},
+		})
+	}
+
+	text := renderMonitorRichCard(spec.Title, rows, spec.Quote, false)
+
+	tabRow := make([]botgotd.InlineKeyboardButton, 0, 3)
 	for i, item := range ownerHelpPages {
 		label := item.TabLabel
 		if i+1 == page {
@@ -115,6 +164,13 @@ func renderOwnerHelpPage(page int) (string, *botgotd.InlineKeyboardMarkup) {
 			Text:         label,
 			CallbackData: fmt.Sprintf("owner_help:page:%d", i+1),
 		})
+		if len(tabRow) == 3 {
+			keyboard = append(keyboard, tabRow)
+			tabRow = make([]botgotd.InlineKeyboardButton, 0, 3)
+		}
+	}
+	if len(tabRow) > 0 {
+		keyboard = append(keyboard, tabRow)
 	}
 
 	navRow := make([]botgotd.InlineKeyboardButton, 0, 3)
@@ -135,14 +191,10 @@ func renderOwnerHelpPage(page int) (string, *botgotd.InlineKeyboardMarkup) {
 		})
 	}
 
-	closeRow := []botgotd.InlineKeyboardButton{
+	keyboard = append(keyboard, navRow, []botgotd.InlineKeyboardButton{
 		{Text: "🗑️ Tutup", CallbackData: "owner_help:close"},
-	}
-
-	markup := &botgotd.InlineKeyboardMarkup{
-		InlineKeyboard: [][]botgotd.InlineKeyboardButton{tabRow, navRow, closeRow},
-	}
-	return text, markup
+	})
+	return text, &botgotd.InlineKeyboardMarkup{InlineKeyboard: keyboard}
 }
 
 func (h *Handler) SendOwnerHelp(ctx context.Context, b *botgotd.Bot, update *botgotd.Update, page int) {
@@ -150,7 +202,7 @@ func (h *Handler) SendOwnerHelp(ctx context.Context, b *botgotd.Bot, update *bot
 		return
 	}
 	globalDevMonitor.ObserveIncomingChat(update.Message.Chat)
-	text, markup := renderOwnerHelpPage(page)
+	text, markup := h.renderOwnerHelp(ctx, page)
 	_, _ = sendMonitorRichMessageWithMarkup(ctx, b, update.Message.Chat.ID, update.Message.MessageThreadID, text, markup)
 }
 
@@ -192,21 +244,43 @@ func (h *Handler) OwnerHelpCallback(ctx context.Context, b *botgotd.Bot, update 
 	}
 
 	page := 1
-	if strings.HasPrefix(data, "owner_help:page:") {
+	toast := ""
+	switch {
+	case strings.HasPrefix(data, "owner_help:page:"):
 		if parsed, err := strconv.Atoi(strings.TrimPrefix(data, "owner_help:page:")); err == nil {
 			page = parsed
+		}
+	case strings.HasPrefix(data, "owner_help:plug:"):
+		page = len(ownerHelpPages)
+		modKey := strings.TrimPrefix(data, "owner_help:plug:")
+		if sp, next, ok := h.togglePluginState(ctx, modKey); ok {
+			if next {
+				toast = fmt.Sprintf("🟢 Plugin %s diaktifkan", sp.Title)
+			} else {
+				toast = fmt.Sprintf("🔴 Plugin %s dinonaktifkan", sp.Title)
+			}
+		}
+	case strings.HasPrefix(data, "owner_help:plug_all:"):
+		page = len(ownerHelpPages)
+		enable := strings.TrimPrefix(data, "owner_help:plug_all:") != "0"
+		h.setAllPluginStates(ctx, enable)
+		if enable {
+			toast = "✅ Seluruh plugin userbot diaktifkan"
+		} else {
+			toast = "⛔ Seluruh plugin userbot dinonaktifkan"
 		}
 	}
 
 	_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 		CallbackQueryID: cb.ID,
+		Text:            toast,
 	})
 
 	if cb.Message == nil || cb.Message.Message == nil {
 		return
 	}
 	msg := cb.Message.Message
-	text, markup := renderOwnerHelpPage(page)
+	text, markup := h.renderOwnerHelp(ctx, page)
 	_, editErr := editMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.ID, text, markup)
 	if editErr != nil && !isMessageNotModifiedErr(editErr) {
 		if _, sendErr := sendMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.MessageThreadID, text, markup); sendErr == nil {

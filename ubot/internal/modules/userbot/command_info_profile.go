@@ -3,6 +3,7 @@ package userbot
 import (
 	"context"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 	"time"
@@ -12,48 +13,115 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-func (s *Service) idCommand(ctx context.Context, client *gobot.Client, chatID int64, target tg.InputPeerClass, msg *tg.Message, threadID int) error {
+func formatPeerChatID(target tg.InputPeerClass, msg *tg.Message, ownerID int64) int64 {
+	switch p := target.(type) {
+	case *tg.InputPeerChannel:
+		return -1000000000000 - p.ChannelID
+	case *tg.InputPeerChat:
+		return -p.ChatID
+	case *tg.InputPeerUser:
+		return p.UserID
+	case *tg.InputPeerSelf:
+		return ownerID
+	}
+	if msg != nil && msg.PeerID != nil {
+		switch p := msg.PeerID.(type) {
+		case *tg.PeerChannel:
+			return -1000000000000 - p.ChannelID
+		case *tg.PeerChat:
+			return -p.ChatID
+		case *tg.PeerUser:
+			return p.UserID
+		}
+	}
+	return ownerID
+}
+
+func formatUserDCID(u *tg.User) string {
+	if u == nil || u.Photo == nil {
+		return "-"
+	}
+	if photo, ok := u.Photo.(*tg.UserProfilePhoto); ok && photo.DCID > 0 {
+		return strconv.Itoa(photo.DCID)
+	}
+	return "-"
+}
+
+func formatUserLastSeen(u *tg.User) string {
+	if u == nil {
+		return "Hidden"
+	}
+	if u.Bot {
+		return "Bot"
+	}
+	switch st := u.Status.(type) {
+	case *tg.UserStatusOnline:
+		return "Online"
+	case *tg.UserStatusRecently:
+		return "Recently"
+	case *tg.UserStatusLastWeek:
+		return "Within a week"
+	case *tg.UserStatusLastMonth:
+		return "Within a month"
+	case *tg.UserStatusOffline:
+		if st.WasOnline > 0 {
+			return time.Unix(int64(st.WasOnline), 0).Local().Format("02 Jan 2006 15:04")
+		}
+		return "Offline"
+	default:
+		return "Hidden"
+	}
+}
+
+func (s *Service) idCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args string, threadID int) error {
 	ownerID, _ := s.userbotOwner(ctx, client)
+	yourID := ownerID
+	if senderID, ok := extractUserIDFromMessage(msg, ownerID); ok && senderID > 0 {
+		yourID = senderID
+	}
+	actualChatID := formatPeerChatID(target, msg, ownerID)
+
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Chat ID: %d\n", chatID)
-	if msg != nil && msg.ID > 0 {
-		fmt.Fprintf(&sb, "Message ID: %d\n", msg.ID)
-	}
-	if threadID > 0 {
-		fmt.Fprintf(&sb, "Topic ID: %d\n", threadID)
-	}
-	if ownerID > 0 {
-		fmt.Fprintf(&sb, "Your User ID: %d\n", ownerID)
-	}
-	if reply, err := s.replyMessage(ctx, client, msg, target); err == nil && reply != nil {
-		if reply.ID > 0 {
-			fmt.Fprintf(&sb, "Replied Message ID: %d\n", reply.ID)
-		}
-		if uid, ok := extractUserIDFromMessage(reply, ownerID); ok {
-			fmt.Fprintf(&sb, "Replied User ID: %d\n", uid)
-		}
-		switch m := reply.Media.(type) {
-		case *tg.MessageMediaDocument:
-			if doc, ok := m.Document.(*tg.Document); ok {
-				fmt.Fprintf(&sb, "Document ID: %d\n", doc.ID)
-			}
-		case *tg.MessageMediaPhoto:
-			if p, ok := m.Photo.(*tg.Photo); ok {
-				fmt.Fprintf(&sb, "Photo ID: %d\n", p.ID)
-			}
+	fmt.Fprintf(&sb, "Your ID: %d\nChat ID: %d\n", yourID, actualChatID)
+
+	if strings.TrimSpace(args) != "" || broadcastReplyMessageID(msg) > 0 {
+		if targetUID, _, err := s.resolveTargetUserID(ctx, client, target, msg, entities, args); err == nil && targetUID > 0 {
+			fmt.Fprintf(&sb, "User ID: %d\n", targetUID)
 		}
 	}
 	return sendUserText(ctx, client, target, strings.TrimSpace(sb.String()), threadID)
+}
+
+func (s *Service) fetchMissRoseUserInfo(ctx context.Context, client *gobot.Client, rawQuery string) (string, bool) {
+	q := strings.TrimSpace(rawQuery)
+	if q == "" {
+		return "", false
+	}
+	text, err := s.queryBotReplyText(ctx, client, "MissRose_bot", "/info "+q, 1500*time.Millisecond)
+	if err != nil || strings.TrimSpace(text) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(text), true
 }
 
 func (s *Service) infoCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args string, threadID int) error {
 	var uid int64
 	var name string
 	var inputUser tg.InputUserClass
-	if strings.TrimSpace(args) != "" || broadcastReplyMessageID(msg) > 0 {
+	rawArg := ""
+	if fields := strings.Fields(args); len(fields) > 0 {
+		rawArg = strings.TrimSpace(fields[0])
+	}
+
+	if rawArg != "" || broadcastReplyMessageID(msg) > 0 {
 		var err error
 		uid, name, inputUser, err = s.resolveTargetInputUser(ctx, client, target, msg, entities, args)
 		if err != nil {
+			if rawArg != "" {
+				if roseText, ok := s.fetchMissRoseUserInfo(ctx, client, rawArg); ok {
+					return sendUserText(ctx, client, target, roseText, threadID)
+				}
+			}
 			return sendUserText(ctx, client, target, err.Error(), threadID)
 		}
 	} else {
@@ -67,13 +135,30 @@ func (s *Service) infoCommand(ctx context.Context, client *gobot.Client, target 
 
 	full, err := client.API().UsersGetFullUser(ctx, inputUser)
 	if err != nil {
+		qTarget := rawArg
+		if qTarget == "" && uid > 0 {
+			qTarget = strconv.FormatInt(uid, 10)
+		}
+		if roseText, ok := s.fetchMissRoseUserInfo(ctx, client, qTarget); ok {
+			if uid > 0 {
+				card := ubotInlineCardPayload{
+					Title: fmt.Sprintf("Info User %d", uid),
+					HTML:  fmt.Sprintf("<b>Informasi Pengguna (@MissRose_bot)</b>\n<i>%s</i>", html.EscapeString(roseText)),
+					Buttons: [][]ubotInlineCardButton{
+						{{Text: "Direct link", URL: fmt.Sprintf("tg://user?id=%d", uid)}},
+					},
+				}
+				return s.sendInlineCardWithFallback(ctx, client, target, card, roseText, threadID)
+			}
+			return sendUserText(ctx, client, target, roseText, threadID)
+		}
 		if name == "" {
 			name = displayNameFromEntities(entities, uid)
 		}
 		if name == "" {
 			name = "-"
 		}
-		return sendUserText(ctx, client, target, fmt.Sprintf("Info Pengguna:\nUser ID: %d\nNama: %s", uid, name), threadID)
+		return sendUserText(ctx, client, target, fmt.Sprintf("User ID: %d\nFirst Name: %s", uid, name), threadID)
 	}
 
 	var uObj *tg.User
@@ -83,42 +168,64 @@ func (s *Service) infoCommand(ctx context.Context, client *gobot.Client, target 
 			break
 		}
 	}
-	fullName := name
+	firstName := name
 	username := "-"
-	userType := "User"
-	flags := make([]string, 0, 2)
+	premiumStr := "False"
 	if uObj != nil {
 		combined := strings.TrimSpace(uObj.FirstName + " " + uObj.LastName)
 		if combined != "" {
-			fullName = combined
+			firstName = combined
 		}
 		if uObj.Username != "" {
 			username = "@" + uObj.Username
 		}
-		if uObj.Bot {
-			userType = "Bot"
-		}
-		if uObj.Verified {
-			flags = append(flags, "Verified")
-		}
 		if uObj.Premium {
-			flags = append(flags, "Premium")
+			premiumStr = "True"
 		}
 	}
-	if fullName == "" {
-		fullName = "-"
+	if firstName == "" {
+		firstName = "-"
 	}
+	dcID := formatUserDCID(uObj)
+	lastSeen := formatUserLastSeen(uObj)
+	sameGroup := full.FullUser.CommonChatsCount
 	about := strings.TrimSpace(full.FullUser.About)
 	if about == "" {
-		about = "-"
+		about = "Tidak ada bio."
 	}
-	flagStr := "-"
-	if len(flags) > 0 {
-		flagStr = strings.Join(flags, ", ")
+
+	cardHTML := strings.Join([]string{
+		fmt.Sprintf("<b>DC ID:</b> <i>%s</i>", html.EscapeString(dcID)),
+		fmt.Sprintf("<b>User ID:</b> <i>%d</i>", uid),
+		fmt.Sprintf("<b>First Name:</b> <i>%s</i>", html.EscapeString(firstName)),
+		fmt.Sprintf("<b>Username:</b> <i>%s</i>", html.EscapeString(username)),
+		fmt.Sprintf("<b>Premium:</b> <i>%s</i>", premiumStr),
+		fmt.Sprintf("<b>Same Group:</b> <i>%d</i>", sameGroup),
+		fmt.Sprintf("<b>Terakhir terlihat:</b> <i>%s</i>", html.EscapeString(lastSeen)),
+	}, "\n")
+
+	fallbackText := strings.Join([]string{
+		fmt.Sprintf("DC ID: %s", dcID),
+		fmt.Sprintf("User ID: %d", uid),
+		fmt.Sprintf("First Name: %s", firstName),
+		fmt.Sprintf("Username: %s", username),
+		fmt.Sprintf("Premium: %s", premiumStr),
+		fmt.Sprintf("Same Group: %d", sameGroup),
+		fmt.Sprintf("Terakhir terlihat: %s", lastSeen),
+		fmt.Sprintf("Bio: %s", about),
+	}, "\n")
+
+	card := ubotInlineCardPayload{
+		Title: fmt.Sprintf("Info %s", firstName),
+		HTML:  cardHTML,
+		Buttons: [][]ubotInlineCardButton{
+			{
+				{Text: "Bio", Alert: about},
+				{Text: "Direct link", URL: fmt.Sprintf("tg://user?id=%d", uid)},
+			},
+		},
 	}
-	report := fmt.Sprintf("Info Pengguna:\nUser ID: %d\nNama: %s\nUsername: %s\nTipe: %s\nStatus: %s\nCommon Chats: %d\nBio: %s",
-		uid, fullName, username, userType, flagStr, full.FullUser.CommonChatsCount, about)
-	return sendUserText(ctx, client, target, report, threadID)
+	return s.sendInlineCardWithFallback(ctx, client, target, card, fallbackText, threadID)
 }
 
 func (s *Service) resolveBotPeerByUsername(ctx context.Context, client *gobot.Client, username string) (tg.InputPeerClass, error) {

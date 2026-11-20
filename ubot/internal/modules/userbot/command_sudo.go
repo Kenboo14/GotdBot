@@ -301,7 +301,7 @@ func (s *Service) dispatchExtendedCommand(ctx context.Context, client *gobot.Cli
 	case "memcast":
 		return true, s.memcastCommand(ctx, client, target, msg, args, threadID)
 	case "id":
-		return true, s.idCommand(ctx, client, chatID, target, msg, threadID)
+		return true, s.idCommand(ctx, client, target, msg, entities, args, threadID)
 	case "info":
 		return true, s.infoCommand(ctx, client, target, msg, entities, args, threadID)
 	case "limit":

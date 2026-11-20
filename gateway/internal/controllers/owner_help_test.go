@@ -12,8 +12,11 @@ import (
 
 func TestOwnerHelpPagesAndPagination(t *testing.T) {
 	total := len(ownerHelpPages)
-	if total != 4 {
-		t.Fatalf("expected 4 owner help pages, got %d", total)
+	if total != 5 {
+		t.Fatalf("expected 5 owner help pages, got %d", total)
+	}
+	if resolveOwnerHelpPageArg("plugin") != 5 {
+		t.Fatalf("expected resolveOwnerHelpPageArg(plugin) == 5, got %d", resolveOwnerHelpPageArg("plugin"))
 	}
 	for page := 1; page <= total; page++ {
 		text, markup := renderOwnerHelpPage(page)
@@ -217,4 +220,94 @@ func TestAllMonitorsUseStripedRichCard(t *testing.T) {
 		t.Fatalf("expected 1 simulasi message, got %d", len(msgs))
 	}
 	assertMonitorCardLayout(t, "simulasiHelp", msgs[0])
+}
+
+func TestOwnerHelpPluginToggleCallbacks(t *testing.T) {
+	t.Setenv("OWNER", "9001")
+	h := NewHandler(nil, nil)
+	server, b, rpcLog := setupMockTelegramServer(t, nil)
+	defer server.Close()
+
+	h.OwnerHelpCallback(context.Background(), b, &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
+			ID: "cb_plug_vctools_off", From: botgotd.User{ID: 9001}, Data: "owner_help:plug:vctools",
+			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
+		},
+	})
+	states := h.getPluginStates(context.Background())
+	if states["vctools"] {
+		t.Fatalf("expected vctools disabled after toggle")
+	}
+	if !states["admin"] {
+		t.Fatalf("expected admin to remain enabled")
+	}
+	reqs := rpcLog.getRequests()
+	lastEdit := reqs[len(reqs)-1]
+	txt, _ := lastEdit.Body["text"].(string)
+	if !strings.Contains(txt, "🔴 OFF · VCTools") {
+		t.Fatalf("expected Rich table row to show VCTools OFF, got %q", txt)
+	}
+	rm, _ := lastEdit.Body["reply_markup"].(map[string]any)
+	if rm == nil || rm["inline_keyboard"] == nil {
+		t.Fatalf("expected inline_keyboard on plugin help response")
+	}
+
+	h.OwnerHelpCallback(context.Background(), b, &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
+			ID: "cb_plug_all_off", From: botgotd.User{ID: 9001}, Data: "owner_help:plug_all:0",
+			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
+		},
+	})
+	for _, sp := range ownerPluginSpecs {
+		if h.getPluginStates(context.Background())[sp.Key] {
+			t.Fatalf("expected plugin %s disabled after plug_all:0", sp.Key)
+		}
+	}
+
+	h.OwnerHelpCallback(context.Background(), b, &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
+			ID: "cb_plug_all_on", From: botgotd.User{ID: 9001}, Data: "owner_help:plug_all:1",
+			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
+		},
+	})
+	for _, sp := range ownerPluginSpecs {
+		if !h.getPluginStates(context.Background())[sp.Key] {
+			t.Fatalf("expected plugin %s enabled after plug_all:1", sp.Key)
+		}
+	}
+}
+
+func TestUCardInlineAndAlertCallback(t *testing.T) {
+	markup := buildUCardMarkup([][]ubotInlineCardButton{
+		{{Text: "Bio", Alert: "tok123"}, {Text: "Direct link", URL: "tg://user?id=318505206"}},
+	})
+	if markup == nil || len(markup.InlineKeyboard) != 1 || len(markup.InlineKeyboard[0]) != 2 {
+		t.Fatalf("unexpected ucard markup: %#v", markup)
+	}
+	if markup.InlineKeyboard[0][0].CallbackData != "ucard_alert:tok123" || markup.InlineKeyboard[0][1].URL != "tg://user?id=318505206" {
+		t.Fatalf("unexpected ucard button properties: %+v", markup.InlineKeyboard[0])
+	}
+
+	server, b, rpcLog := setupMockTelegramServer(t, nil)
+	defer server.Close()
+
+	HandleInline(context.Background(), b, &botgotd.Update{
+		InlineQuery: &botgotd.InlineQuery{ID: "iq_missing", Query: "ucard missing"},
+	})
+	if rpcLog.countByMethod("answerInlineQuery") != 1 {
+		t.Fatalf("expected answerInlineQuery on missing card, got %d", rpcLog.countByMethod("answerInlineQuery"))
+	}
+
+	h := NewHandler(nil, nil)
+	h.UCardAlertCallback(context.Background(), b, &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{ID: "cb_bio", Data: "ucard_alert:missing"},
+	})
+	if rpcLog.countByMethod("answerCallbackQuery") != 1 {
+		t.Fatalf("expected 1 answerCallbackQuery, got %d", rpcLog.countByMethod("answerCallbackQuery"))
+	}
+	reqs := rpcLog.getRequests()
+	last := reqs[len(reqs)-1]
+	if showAlert, _ := last.Body["show_alert"].(bool); !showAlert {
+		t.Fatalf("expected show_alert=true for bio popup")
+	}
 }

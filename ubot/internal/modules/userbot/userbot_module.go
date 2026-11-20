@@ -29,6 +29,7 @@ func (m *Init) Register(ctx context.Context, sqlite *databases.SQLiteClient, db 
 	service := NewService(ctx, sqlite, db, redis, m.Config.Userbot.APIID, m.Config.Userbot.APIHash, key, m.Config.Telegram.BotToken, m.Config.Telegram.LogBotToken, m.Config.OwnerID)
 	service.ConfigureWorker(m.Config.Worker.ID, m.Config.Worker.Pool, m.Config.Worker.MaxSessions)
 	if redis != nil {
+		service.SyncPluginsFromRedis(ctx)
 		go service.startCacheInvalidationLoop(ctx)
 	}
 	go service.Restore(ctx)

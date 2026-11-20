@@ -1,6 +1,9 @@
 package userbot
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestPluginRegistry_SwitchAndCommandMapping(t *testing.T) {
 	s := &Service{}
@@ -54,5 +57,31 @@ func TestPluginRegistry_DisabledPluginsEnv(t *testing.T) {
 	}
 	if !s.IsPluginEnabled(PluginInfo) {
 		t.Fatalf("expected PluginInfo to remain enabled")
+	}
+}
+
+func TestPluginRegistry_SyncFromRedis(t *testing.T) {
+	rClient, mu, _, hashMap, _ := startWorkerMockRedisLocked(t)
+	defer rClient.Client.Close()
+
+	mu.Lock()
+	hashMap[redisKeyPluginState] = map[string]string{
+		"vctools":  "0",
+		"sticker":  "1",
+		"pmpermit": "1",
+	}
+	mu.Unlock()
+
+	s := &Service{redis: rClient}
+	s.SyncPluginsFromRedis(context.Background())
+
+	if s.IsPluginEnabled(PluginVCTools) {
+		t.Fatalf("expected PluginVCTools disabled from Redis hash")
+	}
+	if !s.IsPluginEnabled(PluginSticker) {
+		t.Fatalf("expected PluginSticker enabled from Redis hash")
+	}
+	if s.IsPluginEnabled(PluginPMPermit) {
+		t.Fatalf("expected PluginPMPermit to stay disabled regardless of Redis hash")
 	}
 }

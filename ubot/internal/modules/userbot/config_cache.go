@@ -177,8 +177,14 @@ func (s *Service) startCacheInvalidationLoop(ctx context.Context) {
 			if json.Unmarshal([]byte(msg.Payload), &evt) != nil {
 				continue
 			}
-			if msg.Channel == cacheInvChannel && evt.Kind == "lic" {
-				continue
+			if msg.Channel == cacheInvChannel {
+				if evt.Kind == "lic" {
+					continue
+				}
+				if evt.Kind == "plugin" {
+					s.SyncPluginsFromRedis(ctx)
+					continue
+				}
 			}
 			s.cfgCache.Delete(evt.OwnerID)
 		}
