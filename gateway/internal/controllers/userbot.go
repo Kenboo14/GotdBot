@@ -644,7 +644,7 @@ func (h *Handler) HelpCallback(ctx context.Context, b *botgotd.Bot, update *botg
 
 	// Step 2: Ambil template halaman bantuan dari in-memory cache
 	cacheStart := time.Now()
-	page, ok := cachedHelpPages[data]
+	page, ok := h.resolveHelpPage(ctx, update.CallbackQuery.From.ID, data)
 	cacheDur = time.Since(cacheStart)
 
 	text := page.text

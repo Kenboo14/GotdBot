@@ -348,4 +348,15 @@ func TestPeerChatIDFormatAndUserInfoHelpers(t *testing.T) {
 	if !strings.Contains(rawCard, "Direct link") || bioVal != "Halo ini bio" {
 		t.Fatalf("unexpected Redis inline card data: card=%q bio=%q", rawCard, bioVal)
 	}
+
+	roseSample := "User Info:\nID: 318505206\nFirst Name: Zarven\nBio: Developer Go"
+	if gotID := extractMissRoseField(roseSample, "id:"); gotID != "318505206" {
+		t.Fatalf("expected extracted ID 318505206, got %q", gotID)
+	}
+	if gotBio := extractMissRoseField(roseSample, "bio:"); gotBio != "Developer Go" {
+		t.Fatalf("expected extracted Bio Developer Go, got %q", gotBio)
+	}
+	if formatted := formatMissRoseInfoHTML(roseSample); !strings.Contains(formatted, "<b>ID:</b> <i>318505206</i>") {
+		t.Fatalf("unexpected MissRose HTML: %q", formatted)
+	}
 }

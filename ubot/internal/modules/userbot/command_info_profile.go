@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	gobot "github.com/Kenboo14/GoBot"
 	"github.com/gotd/td/tg"
@@ -75,21 +74,102 @@ func formatUserLastSeen(u *tg.User) string {
 
 func (s *Service) idCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args string, threadID int) error {
 	ownerID, _ := s.userbotOwner(ctx, client)
-	yourID := ownerID
-	if senderID, ok := extractUserIDFromMessage(msg, ownerID); ok && senderID > 0 {
-		yourID = senderID
-	}
-	actualChatID := formatPeerChatID(target, msg, ownerID)
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Your ID: %d\nChat ID: %d\n", yourID, actualChatID)
-
-	if strings.TrimSpace(args) != "" || broadcastReplyMessageID(msg) > 0 {
+	fields := strings.Fields(args)
+	if len(fields) > 0 {
+		rawTarget := strings.TrimSpace(fields[0])
 		if targetUID, _, err := s.resolveTargetUserID(ctx, client, target, msg, entities, args); err == nil && targetUID > 0 {
-			fmt.Fprintf(&sb, "User ID: %d\n", targetUID)
+			return sendUserCode(ctx, client, target, strconv.FormatInt(targetUID, 10), threadID)
+		}
+		if strings.HasPrefix(rawTarget, "@") && len(rawTarget) > 1 {
+			if resolved, rErr := client.API().ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: strings.TrimPrefix(rawTarget, "@")}); rErr == nil && resolved != nil {
+				switch p := resolved.Peer.(type) {
+				case *tg.PeerUser:
+					return sendUserCode(ctx, client, target, strconv.FormatInt(p.UserID, 10), threadID)
+				case *tg.PeerChannel:
+					return sendUserCode(ctx, client, target, strconv.FormatInt(-1000000000000-p.ChannelID, 10), threadID)
+				case *tg.PeerChat:
+					return sendUserCode(ctx, client, target, strconv.FormatInt(-p.ChatID, 10), threadID)
+				}
+			}
+		}
+		return sendUserText(ctx, client, target, "Target tidak ditemukan.", threadID)
+	}
+
+	if broadcastReplyMessageID(msg) > 0 {
+		if reply, err := s.replyMessage(ctx, client, msg, target); err == nil && reply != nil {
+			if uid, ok := extractUserIDFromMessage(reply, ownerID); ok && uid > 0 {
+				return sendUserCode(ctx, client, target, strconv.FormatInt(uid, 10), threadID)
+			}
+			if pc, ok := reply.FromID.(*tg.PeerChannel); ok && pc.ChannelID > 0 {
+				return sendUserCode(ctx, client, target, strconv.FormatInt(-1000000000000-pc.ChannelID, 10), threadID)
+			}
 		}
 	}
-	return sendUserText(ctx, client, target, strings.TrimSpace(sb.String()), threadID)
+
+	actualChatID := formatPeerChatID(target, msg, ownerID)
+	return sendUserCode(ctx, client, target, strconv.FormatInt(actualChatID, 10), threadID)
+}
+
+func extractMissRoseField(roseText string, prefixes ...string) string {
+	for _, rawLine := range strings.Split(strings.ReplaceAll(roseText, "\r\n", "\n"), "\n") {
+		line := strings.TrimSpace(rawLine)
+		low := strings.ToLower(line)
+		for _, p := range prefixes {
+			if strings.HasPrefix(low, p) {
+				return strings.TrimSpace(line[len(p):])
+			}
+		}
+	}
+	return ""
+}
+
+func formatMissRoseInfoHTML(roseText string) string {
+	lines := strings.Split(strings.ReplaceAll(roseText, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, rawLine := range lines {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" {
+			continue
+		}
+		if colon := strings.IndexByte(trimmed, ':'); colon > 0 && colon < len(trimmed)-1 && !strings.HasPrefix(trimmed[colon:], "://") {
+			lbl := trimmed[:colon+1]
+			val := strings.TrimSpace(trimmed[colon+1:])
+			out = append(out, fmt.Sprintf("<b>%s</b> <i>%s</i>", html.EscapeString(lbl), html.EscapeString(val)))
+		} else {
+			out = append(out, fmt.Sprintf("<b>%s</b>", html.EscapeString(trimmed)))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func (s *Service) sendMissRoseInfoCard(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, roseText string, uid int64, rawArg string, threadID int) error {
+	if uid == 0 {
+		if idStr := extractMissRoseField(roseText, "id:", "user id:"); idStr != "" {
+			if parsed, err := strconv.ParseInt(strings.Fields(idStr)[0], 10, 64); err == nil && parsed > 0 {
+				uid = parsed
+			}
+		}
+	}
+	about := extractMissRoseField(roseText, "bio:", "about:")
+	if about == "" {
+		about = "Bio tidak tercantum."
+	}
+	directURL := ""
+	if uid > 0 {
+		directURL = fmt.Sprintf("tg://user?id=%d", uid)
+	} else if uname := strings.TrimPrefix(strings.TrimSpace(rawArg), "@"); uname != "" {
+		directURL = "https://t.me/" + uname
+	}
+	buttons := []ubotInlineCardButton{{Text: "Bio", Alert: about}}
+	if directURL != "" {
+		buttons = append(buttons, ubotInlineCardButton{Text: "Direct link", URL: directURL})
+	}
+	card := ubotInlineCardPayload{
+		Title:   "Info Pengguna",
+		HTML:    formatMissRoseInfoHTML(roseText),
+		Buttons: [][]ubotInlineCardButton{buttons},
+	}
+	return s.sendInlineCardWithFallback(ctx, client, target, card, roseText, threadID)
 }
 
 func (s *Service) fetchMissRoseUserInfo(ctx context.Context, client *gobot.Client, rawQuery string) (string, bool) {
@@ -119,7 +199,7 @@ func (s *Service) infoCommand(ctx context.Context, client *gobot.Client, target 
 		if err != nil {
 			if rawArg != "" {
 				if roseText, ok := s.fetchMissRoseUserInfo(ctx, client, rawArg); ok {
-					return sendUserText(ctx, client, target, roseText, threadID)
+					return s.sendMissRoseInfoCard(ctx, client, target, roseText, 0, rawArg, threadID)
 				}
 			}
 			return sendUserText(ctx, client, target, err.Error(), threadID)
@@ -140,17 +220,7 @@ func (s *Service) infoCommand(ctx context.Context, client *gobot.Client, target 
 			qTarget = strconv.FormatInt(uid, 10)
 		}
 		if roseText, ok := s.fetchMissRoseUserInfo(ctx, client, qTarget); ok {
-			if uid > 0 {
-				card := ubotInlineCardPayload{
-					Title: fmt.Sprintf("Info User %d", uid),
-					HTML:  fmt.Sprintf("<b>Informasi Pengguna (@MissRose_bot)</b>\n<i>%s</i>", html.EscapeString(roseText)),
-					Buttons: [][]ubotInlineCardButton{
-						{{Text: "Direct link", URL: fmt.Sprintf("tg://user?id=%d", uid)}},
-					},
-				}
-				return s.sendInlineCardWithFallback(ctx, client, target, card, roseText, threadID)
-			}
-			return sendUserText(ctx, client, target, roseText, threadID)
+			return s.sendMissRoseInfoCard(ctx, client, target, roseText, uid, rawArg, threadID)
 		}
 		if name == "" {
 			name = displayNameFromEntities(entities, uid)
@@ -274,101 +344,4 @@ func (s *Service) queryBotReplyText(ctx context.Context, client *gobot.Client, b
 		}
 	}
 	return "", fmt.Errorf("belum ada balasan dari @%s", strings.TrimPrefix(botUsername, "@"))
-}
-
-func (s *Service) limitCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
-	text, err := s.queryBotReplyText(ctx, client, "SpamBot", "/start", 1200*time.Millisecond)
-	if err != nil {
-		return sendUserText(ctx, client, target, "Gagal memeriksa limit akun ke @SpamBot: "+err.Error(), threadID)
-	}
-	return sendUserText(ctx, client, target, "Status Limit (@SpamBot):\n"+text, threadID)
-}
-
-func (s *Service) sgCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, entities tg.Entities, args string, threadID int) error {
-	uid, label, inputUser, err := s.resolveTargetInputUser(ctx, client, target, msg, entities, args)
-	if err != nil {
-		return sendUserText(ctx, client, target, err.Error(), threadID)
-	}
-	if text, qErr := s.queryBotReplyText(ctx, client, "SangMata_beta_bot", strconv.FormatInt(uid, 10), 1400*time.Millisecond); qErr == nil && text != "" {
-		return sendUserText(ctx, client, target, text, threadID)
-	}
-	username := "-"
-	if full, fErr := client.API().UsersGetFullUser(ctx, inputUser); fErr == nil {
-		for _, rawU := range full.Users {
-			if u, ok := rawU.(*tg.User); ok && u.ID == uid {
-				combined := strings.TrimSpace(u.FirstName + " " + u.LastName)
-				if combined != "" {
-					label = combined
-				}
-				if u.Username != "" {
-					username = "@" + u.Username
-				}
-				break
-			}
-		}
-	}
-	fallback := fmt.Sprintf("Riwayat Identitas Saat Ini:\nUser ID: %d\nNama: %s\nUsername: %s\n(SangMata bot tidak merespons)", uid, label, username)
-	return sendUserText(ctx, client, target, fallback, threadID)
-}
-
-func (s *Service) setBioCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
-	if msg == nil || !msg.Out {
-		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat mengubah profil.", threadID)
-	}
-	bio := strings.TrimSpace(args)
-	if utf8.RuneCountInString(bio) > 70 {
-		return sendUserText(ctx, client, target, "Bio maksimal 70 karakter.", threadID)
-	}
-	req := &tg.AccountUpdateProfileRequest{}
-	req.SetAbout(bio)
-	if _, err := client.API().AccountUpdateProfile(ctx, req); err != nil {
-		return sendUserText(ctx, client, target, "Gagal mengubah bio: "+err.Error(), threadID)
-	}
-	if bio == "" {
-		return sendUserText(ctx, client, target, "Bio profil berhasil dikosongkan.", threadID)
-	}
-	return sendUserText(ctx, client, target, "Bio profil diperbarui: "+bio, threadID)
-}
-
-func (s *Service) setNameCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
-	if msg == nil || !msg.Out {
-		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat mengubah profil.", threadID)
-	}
-	trimmed := strings.TrimSpace(args)
-	if trimmed == "" {
-		return sendUserText(ctx, client, target, "Gunakan: !setname <nama lengkap>", threadID)
-	}
-	parts := strings.SplitN(trimmed, " ", 2)
-	req := &tg.AccountUpdateProfileRequest{}
-	req.SetFirstName(strings.TrimSpace(parts[0]))
-	if len(parts) > 1 {
-		req.SetLastName(strings.TrimSpace(parts[1]))
-	} else {
-		req.SetLastName("")
-	}
-	if _, err := client.API().AccountUpdateProfile(ctx, req); err != nil {
-		return sendUserText(ctx, client, target, "Gagal mengubah nama profil: "+err.Error(), threadID)
-	}
-	return sendUserText(ctx, client, target, "Nama profil diperbarui: "+trimmed, threadID)
-}
-
-func (s *Service) setUsernameCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
-	if msg == nil || !msg.Out {
-		return sendUserText(ctx, client, target, "Hanya pemilik userbot yang dapat mengubah username.", threadID)
-	}
-	raw := strings.TrimSpace(args)
-	if raw == "" {
-		return sendUserText(ctx, client, target, "Gunakan: !setusername <username|none>", threadID)
-	}
-	uname := strings.TrimPrefix(raw, "@")
-	if strings.EqualFold(uname, "none") || strings.EqualFold(uname, "off") {
-		uname = ""
-	}
-	if _, err := client.API().AccountUpdateUsername(ctx, uname); err != nil {
-		return sendUserText(ctx, client, target, "Gagal mengubah username: "+err.Error(), threadID)
-	}
-	if uname == "" {
-		return sendUserText(ctx, client, target, "Username publik berhasil dihapus.", threadID)
-	}
-	return sendUserText(ctx, client, target, "Username publik diperbarui ke @"+uname, threadID)
 }

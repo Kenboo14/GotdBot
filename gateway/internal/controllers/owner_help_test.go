@@ -228,51 +228,86 @@ func TestOwnerHelpPluginToggleCallbacks(t *testing.T) {
 	server, b, rpcLog := setupMockTelegramServer(t, nil)
 	defer server.Close()
 
-	h.OwnerHelpCallback(context.Background(), b, &botgotd.Update{
+	h.OwnerPluginCallback(context.Background(), b, &botgotd.Update{
 		CallbackQuery: &botgotd.CallbackQuery{
-			ID: "cb_plug_vctools_off", From: botgotd.User{ID: 9001}, Data: "owner_help:plug:vctools",
+			ID: "cb_open_admin", From: botgotd.User{ID: 9001}, Data: "owner_plug:open:0:admin",
 			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
 		},
 	})
-	states := h.getPluginStates(context.Background())
-	if states["vctools"] {
-		t.Fatalf("expected vctools disabled after toggle")
-	}
-	if !states["admin"] {
-		t.Fatalf("expected admin to remain enabled")
-	}
 	reqs := rpcLog.getRequests()
 	lastEdit := reqs[len(reqs)-1]
 	txt, _ := lastEdit.Body["text"].(string)
-	if !strings.Contains(txt, "🔴 OFF · VCTools") {
-		t.Fatalf("expected Rich table row to show VCTools OFF, got %q", txt)
-	}
-	rm, _ := lastEdit.Body["reply_markup"].(map[string]any)
-	if rm == nil || rm["inline_keyboard"] == nil {
-		t.Fatalf("expected inline_keyboard on plugin help response")
+	if !strings.Contains(txt, "Modul Utama · Admin") || !strings.Contains(txt, "!ban") {
+		t.Fatalf("expected level-2 admin sub-feature list, got %q", txt)
 	}
 
-	h.OwnerHelpCallback(context.Background(), b, &botgotd.Update{
+	h.OwnerPluginCallback(context.Background(), b, &botgotd.Update{
 		CallbackQuery: &botgotd.CallbackQuery{
-			ID: "cb_plug_all_off", From: botgotd.User{ID: 9001}, Data: "owner_help:plug_all:0",
+			ID: "cb_cmd_ban_off", From: botgotd.User{ID: 9001}, Data: "owner_plug:cmd:0:admin:ban",
+			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
+		},
+	})
+	if h.isEffectiveCommandEnabled(context.Background(), 5001, "admin", "ban") {
+		t.Fatalf("expected global sub-command ban disabled")
+	}
+	if !h.isEffectiveCommandEnabled(context.Background(), 5001, "admin", "kick") {
+		t.Fatalf("expected sub-command kick to remain enabled")
+	}
+
+	adminCatSnap, ok := h.resolveHelpPage(context.Background(), 5001, "assist_help:cat:admin")
+	if !ok || !strings.Contains(adminCatSnap.text, "Load Plugin : 13/14 On") {
+		t.Fatalf("expected dynamic !help admin category status 13/14 On, got %q", adminCatSnap.text)
+	}
+	banCmdSnap, ok := h.resolveHelpPage(context.Background(), 5001, "assist_help:cmd:admin:ban")
+	if !ok || !strings.Contains(banCmdSnap.text, "Load Plugin : Off") {
+		t.Fatalf("expected dynamic !help ban command status Off, got %q", banCmdSnap.text)
+	}
+
+	h.PluginCommand(context.Background(), b, &botgotd.Update{
+		Message: &botgotd.Message{
+			Chat: botgotd.Chat{ID: 9001, Type: "private"},
+			From: &botgotd.User{ID: 9001},
+			Text: "/plugin 7777",
+		},
+	})
+	h.OwnerPluginCallback(context.Background(), b, &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
+			ID: "cb_user_vc_off", From: botgotd.User{ID: 9001}, Data: "owner_plug:mod:7777:vctools",
+			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 22, Chat: botgotd.Chat{ID: 9001}}},
+		},
+	})
+	if h.isEffectiveCommandEnabled(context.Background(), 7777, "vctools", "joinvc") {
+		t.Fatalf("expected vctools disabled for user 7777")
+	}
+	if !h.isEffectiveCommandEnabled(context.Background(), 8888, "vctools", "joinvc") {
+		t.Fatalf("expected vctools enabled for other user 8888")
+	}
+	vcCatUser7777, _ := h.resolveHelpPage(context.Background(), 7777, "assist_help:cat:vctools")
+	if !strings.Contains(vcCatUser7777.text, "Load Plugin : Off") {
+		t.Fatalf("expected !help vctools Off for user 7777, got %q", vcCatUser7777.text)
+	}
+
+	h.OwnerPluginCallback(context.Background(), b, &botgotd.Update{
+		CallbackQuery: &botgotd.CallbackQuery{
+			ID: "cb_plug_all_off", From: botgotd.User{ID: 9001}, Data: "owner_plug:all:0:0",
 			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
 		},
 	})
 	for _, sp := range ownerPluginSpecs {
-		if h.getPluginStates(context.Background())[sp.Key] {
-			t.Fatalf("expected plugin %s disabled after plug_all:0", sp.Key)
+		if h.isEffectiveModuleEnabled(context.Background(), 0, sp.Key) {
+			t.Fatalf("expected plugin %s disabled after all:0", sp.Key)
 		}
 	}
 
-	h.OwnerHelpCallback(context.Background(), b, &botgotd.Update{
+	h.OwnerPluginCallback(context.Background(), b, &botgotd.Update{
 		CallbackQuery: &botgotd.CallbackQuery{
-			ID: "cb_plug_all_on", From: botgotd.User{ID: 9001}, Data: "owner_help:plug_all:1",
+			ID: "cb_plug_all_on", From: botgotd.User{ID: 9001}, Data: "owner_plug:all:0:1",
 			Message: &botgotd.MaybeInaccessibleMessage{Message: &botgotd.Message{ID: 21, Chat: botgotd.Chat{ID: -1005551234}}},
 		},
 	})
 	for _, sp := range ownerPluginSpecs {
-		if !h.getPluginStates(context.Background())[sp.Key] {
-			t.Fatalf("expected plugin %s enabled after plug_all:1", sp.Key)
+		if !h.isEffectiveModuleEnabled(context.Background(), 0, sp.Key) {
+			t.Fatalf("expected plugin %s enabled after all:1", sp.Key)
 		}
 	}
 }

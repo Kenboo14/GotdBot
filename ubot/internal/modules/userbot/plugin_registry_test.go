@@ -85,3 +85,40 @@ func TestPluginRegistry_SyncFromRedis(t *testing.T) {
 		t.Fatalf("expected PluginPMPermit to stay disabled regardless of Redis hash")
 	}
 }
+
+func TestPluginRegistry_SubCommandAndPerOwnerOverrides(t *testing.T) {
+	rClient, mu, _, hashMap, _ := startWorkerMockRedisLocked(t)
+	defer rClient.Client.Close()
+
+	mu.Lock()
+	hashMap[redisKeyPluginState] = map[string]string{
+		"admin":   "1",
+		"cmd:ban": "0",
+	}
+	hashMap[redisKeyUserPluginPrefix+"7001"] = map[string]string{
+		"vctools": "0",
+		"cmd:ban": "1",
+		"cmd:gcast": "0",
+	}
+	mu.Unlock()
+
+	s := &Service{redis: rClient}
+	s.SyncPluginsFromRedis(context.Background())
+	s.SyncUserPluginsFromRedis(context.Background(), 7001)
+
+	if s.IsCommandEnabledForOwner(8001, "ban") {
+		t.Fatalf("expected global cmd:ban disabled for user 8001")
+	}
+	if !s.IsCommandEnabledForOwner(8001, "kick") {
+		t.Fatalf("expected admin kick enabled for user 8001")
+	}
+	if !s.IsCommandEnabledForOwner(7001, "ban") {
+		t.Fatalf("expected per-user override cmd:ban=1 enabled for user 7001")
+	}
+	if s.IsCommandEnabledForOwner(7001, "joinvc") {
+		t.Fatalf("expected vctools joinvc disabled for user 7001")
+	}
+	if s.IsCommandEnabledForOwner(7001, "broadcast") {
+		t.Fatalf("expected alias broadcast mapped to cmd:gcast disabled for user 7001")
+	}
+}

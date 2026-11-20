@@ -111,6 +111,28 @@ func sendUserText(ctx context.Context, client *gobot.Client, target tg.InputPeer
 	return err
 }
 
+func sendUserCode(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, code string, threadID int) error {
+	if client == nil || target == nil {
+		return fmt.Errorf("parameter kirim pesan tidak valid")
+	}
+	replyToMsgID := commandReplyMsgID(ctx)
+	req := &tg.MessagesSendMessageRequest{
+		Peer:     target,
+		Message:  code,
+		Entities: []tg.MessageEntityClass{&tg.MessageEntityCode{Offset: 0, Length: utf16Len(code)}},
+		RandomID: randInt64(),
+	}
+	if replyTo := buildReplyTo(threadID, replyToMsgID); replyTo != nil {
+		req.ReplyTo = replyTo
+	}
+	_, err := client.API().MessagesSendMessage(ctx, req)
+	if err != nil && replyToMsgID > 0 && isReplyTargetInvalidError(err) {
+		req.ReplyTo = buildReplyTo(threadID, 0)
+		_, err = client.API().MessagesSendMessage(ctx, req)
+	}
+	return err
+}
+
 func sendUserStatusMessage(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, text string, threadID int) (int, error) {
 	if client == nil || target == nil {
 		return 0, fmt.Errorf("parameter kirim pesan tidak valid")

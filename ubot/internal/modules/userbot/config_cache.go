@@ -182,7 +182,11 @@ func (s *Service) startCacheInvalidationLoop(ctx context.Context) {
 					continue
 				}
 				if evt.Kind == "plugin" {
-					s.SyncPluginsFromRedis(ctx)
+					if evt.OwnerID > 0 {
+						s.SyncUserPluginsFromRedis(ctx, evt.OwnerID)
+					} else {
+						s.SyncPluginsFromRedis(ctx)
+					}
 					continue
 				}
 			}

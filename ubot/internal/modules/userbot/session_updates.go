@@ -267,7 +267,7 @@ func (s *Service) isRelevantMessage(chatID int64, msg *tg.Message) bool {
 	if prefix == "" || strings.HasPrefix(text, prefix) {
 		return true
 	}
-	if ownerID != 0 && len(msg.Entities) > 0 && s.IsPluginEnabled(PluginLogger) {
+	if ownerID != 0 && len(msg.Entities) > 0 && s.IsPluginEnabledForOwner(ownerID, PluginLogger) {
 		if val, ok := s.logStatusCache.Load(ownerID); ok {
 			if enabled, ok := val.(bool); ok && enabled {
 				for _, ent := range msg.Entities {
@@ -293,10 +293,11 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if p, ok := s.prefixes[chatID]; ok {
 		prefix = p
 	}
+	ownerID := s.owners[chatID]
 	s.mu.RUnlock()
 
 	if strings.HasPrefix(msg.Message, "#") && len(msg.Message) > 1 && !strings.ContainsAny(msg.Message, " \t\r\n") {
-		if !s.IsPluginEnabled(PluginNotes) {
+		if !s.IsCommandEnabledForOwner(ownerID, "get") {
 			return nil
 		}
 		hashName := strings.TrimPrefix(msg.Message, "#")
@@ -315,9 +316,6 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 		}
 	} else {
 		if !msg.Out {
-			s.mu.RLock()
-			ownerID := s.owners[chatID]
-			s.mu.RUnlock()
 			senderID := int64(0)
 			if sender, ok := msg.FromID.(*tg.PeerUser); ok {
 				senderID = sender.UserID
@@ -332,7 +330,7 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	if !ok {
 		return nil
 	}
-	if mod, mapped := pluginForCommand(name); mapped && !s.IsPluginEnabled(mod) {
+	if !s.IsCommandEnabledForOwner(ownerID, name) {
 		return nil
 	}
 	if !s.commandAllowed(ctx, client, msg) {
