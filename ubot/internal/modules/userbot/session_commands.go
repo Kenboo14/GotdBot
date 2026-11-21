@@ -280,7 +280,13 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 	if job.Type == "sync_panel_config" {
-		dispatch(func(c context.Context) { s.syncJasebConfigFromMongo(c, ownerID) })
+		dispatch(func(c context.Context) {
+			if notif := strings.TrimSpace(job.Text); notif != "" {
+				s.applyPanelNotifikasi(c, ownerID, notif)
+				return
+			}
+			s.syncJasebConfigFromMongo(c, ownerID)
+		})
 		return
 	}
 	if job.Type == "start_panel_broadcast" {

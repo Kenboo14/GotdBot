@@ -147,10 +147,17 @@ func truncateSnippetRunes(text string, limit int) string {
 	return strings.TrimSpace(string(runes[:limit])) + "..."
 }
 
+func isDelayAllGroupMode(cfg jasebConfigDoc) bool {
+	modeLower := strings.ToLower(strings.TrimSpace(cfg.DelayMode))
+	if modeLower == "aman" || modeLower == "otomatis" || cfg.Delay > 0 {
+		return false
+	}
+	return true
+}
+
 func (s *Service) resolvePanelPostMeta(ctx context.Context, client *gobot.Client, cachePeer tg.InputPeerClass, cfg jasebConfigDoc, msgID int) (string, string) {
 	delayLabel := "DELAY PERGRUP"
-	modeLower := strings.ToLower(strings.TrimSpace(cfg.DelayMode))
-	if modeLower != "aman" && modeLower != "otomatis" && cfg.Delay == 0 && cfg.DelayAllGroups > 0 {
+	if isDelayAllGroupMode(cfg) {
 		delayLabel = "DELAY ALLGROUP"
 	}
 
@@ -225,6 +232,46 @@ func formatPanelRoundLogHTML(snippet, headerTag string, putaran, sukses int, fai
 		}
 	}
 	return b.String()
+}
+
+func formatPanelPerGroupLogHTML(snippet, headerTag string, putaran int, groupTitle string, sentOk bool, failReason string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "<blockquote>%s</blockquote>\n\n", html.EscapeString(snippet))
+	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(headerTag))
+	fmt.Fprintf(&b, "<b>Putaran :</b> <i>%d</i>", putaran)
+	if sentOk {
+		fmt.Fprintf(&b, "\n<b>Sukses :</b> <i>%s</i>", html.EscapeString(groupTitle))
+		return b.String()
+	}
+	reason := strings.TrimSpace(failReason)
+	if reason == "" {
+		reason = "gagal mengirim pesan"
+	}
+	fmt.Fprintf(&b, "\n<b>Gagal :</b> <i>%s</i>", html.EscapeString(groupTitle))
+	fmt.Fprintf(&b, "\n<b>Alasan :</b> <i>%s</i>", html.EscapeString(reason))
+	return b.String()
+}
+
+func (s *Service) applyPanelNotifikasi(ctx context.Context, ownerID int64, notif string) {
+	if s == nil || ownerID == 0 {
+		return
+	}
+	cleanNotif := strings.TrimSpace(notif)
+	if cleanNotif == "" {
+		return
+	}
+	if s.sqlite != nil && s.sqlite.DB != nil {
+		res, err := s.sqlite.DB.ExecContext(ctx, `UPDATE jaseb_configurasi SET notifikasi = ?, updated_at = CURRENT_TIMESTAMP WHERE owner_id = ?`, cleanNotif, ownerID)
+		rows := int64(0)
+		if err == nil && res != nil {
+			rows, _ = res.RowsAffected()
+		}
+		if err != nil || rows == 0 {
+			s.syncJasebConfigFromMongo(ctx, ownerID)
+			_, _ = s.sqlite.DB.ExecContext(ctx, `INSERT INTO jaseb_configurasi (owner_id, notifikasi, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(owner_id) DO UPDATE SET notifikasi = excluded.notifikasi, updated_at = CURRENT_TIMESTAMP`, ownerID, cleanNotif)
+		}
+	}
+	s.cfgCache.Delete(ownerID)
 }
 
 func formatPanelFloodLogHTML(snippet, headerTag, groupTitle string, floodDur time.Duration, skipped, isPeerFlood bool) string {

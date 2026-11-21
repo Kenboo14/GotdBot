@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"assterisk/gateway/internal/botgotd"
 	"assterisk/gateway/internal/databases"
 	"assterisk/gateway/internal/models"
 	"context"
@@ -89,6 +90,17 @@ func TestNotifikasiModesAndBroadcastLogDelivery(t *testing.T) {
 		if _, stripped := buildStripedRichMessage(rendered); stripped {
 			t.Fatalf("expected buildStripedRichMessage to bypass <tg-button-row> for mode %q", mode)
 		}
+		if strings.Contains(rendered, " & Admin") {
+			t.Fatalf("expected &amp; escaping in RichHTML for mode %q", mode)
+		}
+		cleaned := botgotd.CleanHTML(rendered)
+		if strings.Count(cleaned, "<b>") != strings.Count(cleaned, "</b>") {
+			t.Fatalf("unbalanced <b> tags in CleanHTML for mode %q: %s", mode, cleaned)
+		}
+		wantRow := "<tr><td>📌 Status Aktif</td><td><code>" + strings.ReplaceAll(mode, "&", "&amp;") + "</code></td></tr>"
+		if !strings.Contains(rendered, wantRow) {
+			t.Fatalf("expected Status Aktif cell %q in rendered HTML for mode %q", wantRow, mode)
+		}
 		for _, btnData := range []string{"panel:notif:set:both", "panel:notif:set:self", "panel:notif:set:off"} {
 			if !strings.Contains(rendered, btnData) {
 				t.Fatalf("expected RichInline button %q in rendered HTML for mode %q", btnData, mode)
@@ -103,8 +115,9 @@ func TestNotifikasiModesAndBroadcastLogDelivery(t *testing.T) {
 	if got := dm.GetUserConfig(ctx, ownerID).Notifikasi; got != "Kirim ke saya & Admin" {
 		t.Fatalf("expected Kirim ke saya & Admin, got %q", got)
 	}
-	if len(getPayloads()) == 0 {
-		t.Fatalf("expected sync_panel_config payload to be sent")
+	payloads := getPayloads()
+	if len(payloads) == 0 || payloads[len(payloads)-1].Type != "sync_panel_config" || payloads[len(payloads)-1].Text != "Kirim ke saya & Admin" {
+		t.Fatalf("expected sync_panel_config payload with mode text, got %+v", payloads)
 	}
 	if rpcLog.countByMethod("sendMessage") != sendBeforeCB {
 		t.Fatalf("expected 0 new sendMessage calls when toggling RichInline notifikasi")
@@ -114,8 +127,8 @@ func TestNotifikasiModesAndBroadcastLogDelivery(t *testing.T) {
 	}
 	editedMsgs := extractRPCMessages(rpcLog)
 	lastEdited := editedMsgs[len(editedMsgs)-1]
-	if !strings.Contains(lastEdited, "Kirim ke saya &amp; Admin") {
-		t.Fatalf("expected updated mode label in edited message: %q", lastEdited)
+	if !strings.Contains(lastEdited, "📌 Status Aktif: <code>Kirim ke saya &amp; Admin</code>") {
+		t.Fatalf("expected updated Status Aktif cell in edited message: %q", lastEdited)
 	}
 
 	beforeCount := len(rpcLog.getRequests())
@@ -137,12 +150,21 @@ func TestNotifikasiModesAndBroadcastLogDelivery(t *testing.T) {
 	}
 
 	sendBeforeSelf := rpcLog.countByMethod("sendMessage")
+	editBeforeSelf := rpcLog.countByMethod("editMessageText")
 	h.PanelCallback(ctx, b, makeTestCBUpdate(ownerID, 20, "panel:notif:set:self"))
 	if got := dm.GetUserConfig(ctx, ownerID).Notifikasi; got != "Kirim ke Saya" {
 		t.Fatalf("expected Kirim ke Saya, got %q", got)
 	}
 	if rpcLog.countByMethod("sendMessage") != sendBeforeSelf {
 		t.Fatalf("expected 0 new sendMessage calls when selecting panel:notif:set:self")
+	}
+	if rpcLog.countByMethod("editMessageText") != editBeforeSelf+1 {
+		t.Fatalf("expected editMessageText after selecting panel:notif:set:self")
+	}
+	editedMsgs = extractRPCMessages(rpcLog)
+	lastEdited = editedMsgs[len(editedMsgs)-1]
+	if !strings.Contains(lastEdited, "📌 Status Aktif: <code>Kirim ke Saya</code>") {
+		t.Fatalf("expected updated Status Aktif for self: %q", lastEdited)
 	}
 	beforeSelf := len(rpcLog.getRequests())
 	h.handlePanelBroadcastLog(ctx, b, models.PFromService{
@@ -164,12 +186,30 @@ func TestNotifikasiModesAndBroadcastLogDelivery(t *testing.T) {
 	}
 
 	sendBeforeOff := rpcLog.countByMethod("sendMessage")
+	editBeforeOff := rpcLog.countByMethod("editMessageText")
 	h.PanelCallback(ctx, b, makeTestCBUpdate(ownerID, 21, "panel:notif:set:off"))
 	if got := dm.GetUserConfig(ctx, ownerID).Notifikasi; got != "Nonaktif" {
 		t.Fatalf("expected Nonaktif, got %q", got)
 	}
 	if rpcLog.countByMethod("sendMessage") != sendBeforeOff {
 		t.Fatalf("expected 0 new sendMessage calls when selecting panel:notif:set:off")
+	}
+	if rpcLog.countByMethod("editMessageText") != editBeforeOff+1 {
+		t.Fatalf("expected editMessageText after selecting panel:notif:set:off")
+	}
+	editedMsgs = extractRPCMessages(rpcLog)
+	lastEdited = editedMsgs[len(editedMsgs)-1]
+	if !strings.Contains(lastEdited, "📌 Status Aktif: <code>Nonaktif</code>") {
+		t.Fatalf("expected updated Status Aktif for off: %q", lastEdited)
+	}
+
+	editBeforeSame := rpcLog.countByMethod("editMessageText")
+	h.PanelCallback(ctx, b, makeTestCBUpdate(ownerID, 21, "panel:notif:set:off"))
+	if rpcLog.countByMethod("sendMessage") != sendBeforeOff {
+		t.Fatalf("expected 0 new sendMessage calls when re-selecting active mode")
+	}
+	if rpcLog.countByMethod("editMessageText") != editBeforeSame+1 {
+		t.Fatalf("expected editMessageText even when re-selecting active mode")
 	}
 	beforeOff := len(rpcLog.getRequests())
 	h.handlePanelBroadcastLog(ctx, b, models.PFromService{

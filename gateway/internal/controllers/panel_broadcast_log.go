@@ -57,10 +57,11 @@ func buildNotifikasiHTML(mode string) string {
 
 	return fmt.Sprintf(`<h1>🔔 Pengaturan Notifikasi Siaran</h1>
 <table border="1">
-  <tr><th>📌 Status Aktif</th><td><code>%s</code></td></tr>
-  <tr><th>🔔 Saya &amp; Admin</th><td>Log putaran &amp; flood ke Anda + semua Admin</td></tr>
-  <tr><th>🔔 Kirim ke Saya</th><td>Log putaran &amp; flood hanya ke private chat Anda</td></tr>
-  <tr><th>🔕 Nonaktif</th><td>Tidak mengirim log putaran / flood sama sekali</td></tr>
+  <tr><th>📌 Parameter</th><th>Nilai</th></tr>
+  <tr><td>📌 Status Aktif</td><td><code>%s</code></td></tr>
+  <tr><td>🔔 Saya &amp; Admin</td><td>Log pengiriman &amp; flood ke Anda + semua Admin</td></tr>
+  <tr><td>🔔 Kirim ke Saya</td><td>Log pengiriman &amp; flood hanya ke private chat Anda</td></tr>
+  <tr><td>🔕 Nonaktif</td><td>Tidak mengirim log pengiriman / flood sama sekali</td></tr>
 </table>
 <blockquote expandable>%s</blockquote>
 <tg-button-row>
@@ -74,18 +75,17 @@ func buildNotifikasiHTML(mode string) string {
 <p>Pilih salah satu mode notifikasi di atas:</p>`,
 		html.EscapeString(current),
 		notifikasiDescription(current),
-		styleBoth, labelBoth,
-		styleSelf, labelSelf,
-		styleOff, labelOff,
+		styleBoth, html.EscapeString(labelBoth),
+		styleSelf, html.EscapeString(labelSelf),
+		styleOff, html.EscapeString(labelOff),
 	)
 }
 
-func (h *Handler) renderNotifikasiView(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int) {
-	if h == nil || h.db == nil || b == nil {
+func (h *Handler) renderNotifikasiMode(ctx context.Context, b *botgotd.Bot, chatID int64, mode string, editMsgID int) {
+	if b == nil {
 		return
 	}
-	cfg := h.db.GetUserConfig(ctx, userID)
-	text := buildNotifikasiHTML(cfg.Notifikasi)
+	text := buildNotifikasiHTML(mode)
 
 	if editMsgID > 0 {
 		_, _ = editMonitorRichMessageWithMarkup(ctx, b, chatID, editMsgID, text, nil)
@@ -99,6 +99,14 @@ func (h *Handler) renderNotifikasiView(ctx context.Context, b *botgotd.Bot, chat
 	})
 }
 
+func (h *Handler) renderNotifikasiView(ctx context.Context, b *botgotd.Bot, chatID, userID int64, editMsgID int) {
+	if h == nil || h.db == nil || b == nil {
+		return
+	}
+	cfg := h.db.GetUserConfig(ctx, userID)
+	h.renderNotifikasiMode(ctx, b, chatID, cfg.Notifikasi, editMsgID)
+}
+
 func (h *Handler) handleNotifikasiCallback(ctx context.Context, b *botgotd.Bot, chatID int64, messageID int, cb *botgotd.CallbackQuery) {
 	effectiveID := h.GetEffectiveUserID(chatID, cb.From.ID)
 	mode := "Kirim ke Saya"
@@ -110,33 +118,33 @@ func (h *Handler) handleNotifikasiCallback(ctx context.Context, b *botgotd.Bot, 
 	}
 
 	cfg := h.db.GetUserConfig(ctx, effectiveID)
-	if normalizeNotifikasiMode(cfg.Notifikasi) == mode {
-		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
-			CallbackQueryID: cb.ID,
-			Text:            "ℹ️ Notifikasi sudah: " + mode,
-		})
-		return
+	alreadySame := normalizeNotifikasiMode(cfg.Notifikasi) == mode
+	if cfg.Notifikasi != mode {
+		cfg.Notifikasi = mode
+		_ = h.db.SaveUserConfig(ctx, cfg)
+		if h.broker != nil {
+			bCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			_ = h.broker.To(bCtx, "to:ubot:command", models.PToService{
+				ChatID:  chatID,
+				UserID:  effectiveID,
+				OwnerID: effectiveID,
+				Type:    "sync_panel_config",
+				Text:    mode,
+			})
+			cancel()
+		}
 	}
 
-	cfg.Notifikasi = mode
-	_ = h.db.SaveUserConfig(ctx, cfg)
-	if h.broker != nil {
-		bCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_ = h.broker.To(bCtx, "to:ubot:command", models.PToService{
-			ChatID:  chatID,
-			UserID:  effectiveID,
-			OwnerID: effectiveID,
-			Type:    "sync_panel_config",
-		})
-		cancel()
+	toast := "✅ Notifikasi: " + mode
+	if alreadySame {
+		toast = "ℹ️ Notifikasi sudah: " + mode
 	}
-
 	_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 		CallbackQueryID: cb.ID,
-		Text:            "✅ Notifikasi: " + mode,
+		Text:            toast,
 	})
 	if messageID > 0 {
-		h.renderNotifikasiView(ctx, b, chatID, effectiveID, messageID)
+		h.renderNotifikasiMode(ctx, b, chatID, mode, messageID)
 	}
 }
 

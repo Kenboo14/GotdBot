@@ -1370,22 +1370,50 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 
 	s.preWarmDialogAccessHashes(ctx, client, ownerID)
 	topicRotator := newTopicPlayTracker()
-	putaran := 0
+	putaran := 1
 	roundSuccess := 0
 	var roundFailures []panelRoundFailure
 
-	emitRoundIfComplete := func(currentCfg jasebConfigDoc, grpIdx, postMsgID int) {
-		if len(currentCfg.Groups) == 0 || grpIdx < len(currentCfg.Groups)-1 {
+	recordGroupOutcome := func(currentCfg jasebConfigDoc, grp jasebGroupDoc, grpIdx, postMsgID int, sentOk bool, failReason string) {
+		isAllGroup := isDelayAllGroupMode(currentCfg)
+		isLastGroup := len(currentCfg.Groups) > 0 && grpIdx >= len(currentCfg.Groups)-1
+
+		if !isAllGroup {
+			if !isPanelNotifikasiOff(currentCfg.Notifikasi) {
+				snippet, headerTag := s.resolvePanelPostMeta(ctx, client, cachePeer, currentCfg, postMsgID)
+				logHTML := formatPanelPerGroupLogHTML(snippet, headerTag, putaran, panelGroupLabel(grp), sentOk, failReason)
+				s.emitPanelBroadcastLog(ctx, currentCfg, logHTML)
+			}
+			if isLastGroup {
+				putaran++
+				roundSuccess = 0
+				roundFailures = nil
+			}
 			return
 		}
-		putaran++
-		if !isPanelNotifikasiOff(currentCfg.Notifikasi) {
-			snippet, headerTag := s.resolvePanelPostMeta(ctx, client, cachePeer, currentCfg, postMsgID)
-			logHTML := formatPanelRoundLogHTML(snippet, headerTag, putaran, roundSuccess, roundFailures)
-			s.emitPanelBroadcastLog(ctx, currentCfg, logHTML)
+
+		if sentOk {
+			roundSuccess++
+		} else {
+			reason := strings.TrimSpace(failReason)
+			if reason == "" {
+				reason = "gagal mengirim pesan"
+			}
+			roundFailures = append(roundFailures, panelRoundFailure{
+				Title:  panelGroupLabel(grp),
+				Reason: reason,
+			})
 		}
-		roundSuccess = 0
-		roundFailures = nil
+		if isLastGroup {
+			if !isPanelNotifikasiOff(currentCfg.Notifikasi) {
+				snippet, headerTag := s.resolvePanelPostMeta(ctx, client, cachePeer, currentCfg, postMsgID)
+				logHTML := formatPanelRoundLogHTML(snippet, headerTag, putaran, roundSuccess, roundFailures)
+				s.emitPanelBroadcastLog(ctx, currentCfg, logHTML)
+			}
+			putaran++
+			roundSuccess = 0
+			roundFailures = nil
+		}
 	}
 
 	for {
@@ -1454,11 +1482,7 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 
 		targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target, grp.AccessHash, grp.PeerType)
 		if err != nil {
-			roundFailures = append(roundFailures, panelRoundFailure{
-				Title:  panelGroupLabel(grp),
-				Reason: humanizePanelBroadcastError(err),
-			})
-			emitRoundIfComplete(cfg, groupIndex, msgID)
+			recordGroupOutcome(cfg, grp, groupIndex, msgID, false, humanizePanelBroadcastError(err))
 			nextAt := computeBroadcastNextAt(cfg, groupIndex)
 			s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
 			continue
@@ -1468,19 +1492,11 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 		if !keepRunning {
 			return
 		}
-		if sentOk {
-			roundSuccess++
-			if freeDailyLimitForTier(activeTier) > 0 && s.sqlite != nil {
-				_, _ = s.sqlite.IncrementDailySendCount(context.Background(), ownerID, todayWIBKey(time.Now()))
-			}
-		} else if failReason != "" {
-			roundFailures = append(roundFailures, panelRoundFailure{
-				Title:  panelGroupLabel(grp),
-				Reason: failReason,
-			})
+		if sentOk && freeDailyLimitForTier(activeTier) > 0 && s.sqlite != nil {
+			_, _ = s.sqlite.IncrementDailySendCount(context.Background(), ownerID, todayWIBKey(time.Now()))
 		}
 
-		emitRoundIfComplete(cfg, groupIndex, msgID)
+		recordGroupOutcome(cfg, grp, groupIndex, msgID, sentOk, failReason)
 		nextAt := computeBroadcastNextAt(cfg, groupIndex)
 		s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
 	}
