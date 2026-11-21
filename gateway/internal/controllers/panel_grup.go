@@ -84,10 +84,11 @@ func (h *Handler) CekGrup(ctx context.Context, b *botgotd.Bot, chatID, userID in
 			break
 		}
 		title := g.Title
+		dispTarget := g.DisplayTarget()
 		if title == "" {
-			title = g.Target
+			title = dispTarget
 		}
-		items = append(items, fmt.Sprintf("%d. %s — <code>%s</code>", i+1, html.EscapeString(title), html.EscapeString(g.Target)))
+		items = append(items, fmt.Sprintf("%d. %s — <code>%s</code>", i+1, html.EscapeString(title), html.EscapeString(dispTarget)))
 	}
 
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -131,7 +132,7 @@ func (h *Handler) DisplayGroup(ctx context.Context, b *botgotd.Bot, chatID, user
 		if title == "" {
 			title = group.Target
 		}
-		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s\n", i+1, html.EscapeString(group.Target), html.EscapeString(title))
+		fmt.Fprintf(&builder, "%d. <code>%s</code> | %s\n", i+1, html.EscapeString(group.DisplayTarget()), html.EscapeString(title))
 	}
 	builder.WriteString("</blockquote>\n<p>Pilih nomor di bawah untuk melihat detail atau menghapus grup.</p>")
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -170,7 +171,7 @@ func (h *Handler) showGroupDetail(ctx context.Context, b *botgotd.Bot, chatID, u
   <tg-button type="callback_data" data="panel:group:back">◀️ Kembali</tg-button>
 </tg-button-row>
 <hr/>
-<p>GotdBot • Group Target Manager</p>`, index+1, html.EscapeString(title), html.EscapeString(grp.Target), grp.ChatID, index)
+<p>GotdBot • Group Target Manager</p>`, index+1, html.EscapeString(title), html.EscapeString(grp.DisplayTarget()), grp.DisplayChatID(), index)
 
 	sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:    chatID,

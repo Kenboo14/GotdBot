@@ -71,10 +71,10 @@ func RichInstallSuccess(tier, expFormatted, sisaDur, tokenSHA string) string {
 			`<tr><td>🎖️ Tier Lisensi</td><td><code>%s</code></td></tr>`+
 			`<tr><td>📅 Aktif Hingga</td><td><code>%s</code></td></tr>`+
 			`<tr><td>⏳ Sisa Masa Aktif</td><td><code>%s</code></td></tr>`+
-			`<tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>`+
+			`<tr><td>🔑 Token Akses</td><td><code>%s</code></td></tr>`+
 			`</table>`+
 			`<hr/>`+
-			`<p>Simpan Token SHA di atas sebagai cadangan pemulihan akun Anda.</p>`,
+			`<p>Simpan Token Akses di atas untuk masuk kembali atau memindahkan sesi akun Anda.</p>`,
 		tier, expFormatted, sisaDur, tokenSHA,
 	)
 }

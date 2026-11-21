@@ -191,7 +191,7 @@ Pastikan memasukkan kode OTP terbaru yang dikirimkan oleh Telegram.</blockquote>
 <blockquote expandable>Akun Telegram Anda diproteksi dengan kata sandi Two-Step Verification (2FA).</blockquote>
 <table border="1">
   <tr><th>Tipe Autentikasi</th><th>Keamanan</th></tr>
-  <tr><td>Password Cloud 2FA</td><td>Terenkripsi End-to-End MTProto</td></tr>
+  <tr><td>Password Cloud 2FA</td><td>Terlindungi Keamanan Resmi Telegram</td></tr>
 </table>
 <hr/>
 <p>Silakan kirimkan password 2FA akun Anda, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
@@ -238,7 +238,7 @@ Perhatikan huruf besar/kecil pada password akun Anda.</blockquote>
 		if err := store.setPrefix(ctx, prefix, prefixSet); err != nil {
 			return err
 		}
-		s.replyWithOwner(ctx, chatID, 0, self.ID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d. Sesi disimpan terenkripsi.", self.ID), "installed")
+		s.replyWithOwner(ctx, chatID, 0, self.ID, fmt.Sprintf("Userbot berhasil dipasang untuk akun %d.", self.ID), "installed")
 		s.activate(chatID, self.ID)
 		return nil
 	})

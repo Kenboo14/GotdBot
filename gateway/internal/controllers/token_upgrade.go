@@ -4,21 +4,12 @@ import (
 	"assterisk/gateway/internal/databases"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"html"
 	"strings"
 	"time"
 )
 
 const backupChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-
-func ComputeRotatedTokenSHA(masterToken string, telegramUserID, nonce int64) string {
-	payload := fmt.Sprintf("%s:%d:%d", strings.TrimSpace(masterToken), telegramUserID, nonce)
-	hash := sha256.Sum256([]byte(payload))
-	return "GOTD_SHA:" + hex.EncodeToString(hash[:])
-}
 
 func GenerateBackupCode() string {
 	out := make([]byte, 24)
@@ -37,8 +28,8 @@ func GenerateBackupCode() string {
 
 func (h *Handler) applyVoucherUpgrade(ctx context.Context, userID int64, rawToken string) (*databases.UserLicense, string, string) {
 	token := strings.TrimSpace(rawToken)
-	if !reValidMasterToken.MatchString(token) {
-		return nil, "", "❌ Format token tidak valid. Gunakan format <code>GOTD:&lt;32_huruf&gt;</code>."
+	if !IsMasterTokenFormat(token) {
+		return nil, "", "❌ Format token tidak valid. Pastikan token voucher yang Anda masukkan benar."
 	}
 
 	tm, err := h.db.GetTokenMaster(ctx, token)
@@ -74,8 +65,11 @@ func (h *Handler) applyVoucherUpgrade(ctx context.Context, userID int64, rawToke
 		}
 	}
 
-	tokenSHA := ComputeTokenSHA(tm.Token, userID)
-	if prevLic, _ := h.db.GetUserLicenseBySHA(ctx, tokenSHA); prevLic != nil {
+	prevLic, _ := h.db.GetUserLicenseByOwnerAndMaster(ctx, userID, tm.Token)
+	if prevLic == nil {
+		prevLic, _ = h.db.GetUserLicenseBySHA(ctx, ComputeLegacyTokenSHA(tm.Token, userID))
+	}
+	if prevLic != nil {
 		if prevLic.Status == "active" && prevLic.ExpiresAt.After(now) {
 			if swErr := h.switchUserActiveToken(ctx, userID, prevLic); swErr != nil {
 				return nil, "", "❌ Gagal mengaktifkan slot token: " + html.EscapeString(swErr.Error())
@@ -84,6 +78,7 @@ func (h *Handler) applyVoucherUpgrade(ctx context.Context, userID int64, rawToke
 		}
 		return nil, "", "❌ Token ini sudah pernah digunakan pada akun Anda dan masa aktifnya telah berakhir."
 	}
+	tokenSHA := ComputeTokenSHA(tm.Token, userID)
 
 	resultLic := &databases.UserLicense{
 		TokenSHA:           tokenSHA,

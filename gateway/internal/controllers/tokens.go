@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,31 +16,6 @@ import (
 	"assterisk/gateway/internal/botgotd"
 	"assterisk/gateway/internal/databases"
 )
-
-const alphabetChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-
-// GenerateMasterToken creates a 32-letter alphabetical token prefixed with GOTD:
-func GenerateMasterToken() string {
-	bytes := make([]byte, 32)
-	max := len(alphabetChars)
-	lim := 256 - (256 % max)
-	for i := 0; i < 32; {
-		b := make([]byte, 1)
-		_, _ = rand.Read(b)
-		if int(b[0]) < lim {
-			bytes[i] = alphabetChars[int(b[0])%max]
-			i++
-		}
-	}
-	return "GOTD:" + string(bytes)
-}
-
-// ComputeTokenSHA creates the backup token: GOTD_SHA:<sha256(masterToken:userID)>
-func ComputeTokenSHA(masterToken string, telegramUserID int64) string {
-	payload := fmt.Sprintf("%s:%d", strings.TrimSpace(masterToken), telegramUserID)
-	hash := sha256.Sum256([]byte(payload))
-	return "GOTD_SHA:" + hex.EncodeToString(hash[:])
-}
 
 var reDurationPart = regexp.MustCompile(`(?i)(\d+)\s*([hjm])`)
 
@@ -205,6 +179,7 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 		}
 
 		durStr := FormatDurationID(time.Duration(tm.DurationSeconds) * time.Second)
+		h.rememberCallbackMasterToken(tm.Token)
 		resp := fmt.Sprintf(`<h1>🎫 Token Master Free GotdBot</h1>
 <blockquote expandable>Shared voucher massal aktif untuk seluruh pengguna umum.</blockquote>
 <table border="1">
@@ -342,7 +317,28 @@ func (h *Handler) TokenCommand(ctx context.Context, b *botgotd.Bot, update *botg
 }
 
 func tokenCallbackKey(token string) string {
-	return strings.TrimPrefix(strings.TrimSpace(token), "GOTD:")
+	trimmed := strings.TrimSpace(token)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, tokenPrefixMaster) || len(trimmed) > 40 {
+		sum := sha256.Sum256([]byte(trimmed))
+		return "h:" + hex.EncodeToString(sum[:8])
+	}
+	return strings.TrimPrefix(trimmed, "GOTD:")
+}
+
+func (h *Handler) rememberCallbackMasterToken(token string) {
+	if h == nil || strings.TrimSpace(token) == "" {
+		return
+	}
+	cbKey := tokenCallbackKey(token)
+	h.tokenCbMu.Lock()
+	if h.tokenCbKeys == nil {
+		h.tokenCbKeys = make(map[string]string)
+	}
+	h.tokenCbKeys[cbKey] = strings.TrimSpace(token)
+	h.tokenCbMu.Unlock()
 }
 
 func parseDurationCallbackValue(raw string) int64 {
@@ -362,7 +358,25 @@ func parseDurationCallbackValue(raw string) int64 {
 
 func (h *Handler) resolveCallbackMasterToken(ctx context.Context, rawToken string) string {
 	tok := strings.TrimSpace(rawToken)
-	if tok == "" || strings.HasPrefix(tok, "GOTD:") {
+	if tok == "" {
+		return tok
+	}
+	if strings.HasPrefix(tok, "h:") && h != nil {
+		h.tokenCbMu.RLock()
+		mapped := h.tokenCbKeys[tok]
+		h.tokenCbMu.RUnlock()
+		if mapped != "" {
+			return mapped
+		}
+		if h.db != nil {
+			if tm, _ := h.db.GetActiveSharedFreeToken(ctx); tm != nil && tokenCallbackKey(tm.Token) == tok {
+				h.rememberCallbackMasterToken(tm.Token)
+				return tm.Token
+			}
+		}
+		return tok
+	}
+	if IsMasterTokenPrefix(tok) {
 		return tok
 	}
 	if h != nil && h.db != nil {
@@ -502,6 +516,7 @@ func (h *Handler) TokenCallback(ctx context.Context, b *botgotd.Bot, update *bot
 			return
 		}
 		durStr := FormatDurationID(time.Duration(tm.DurationSeconds) * time.Second)
+		h.rememberCallbackMasterToken(tm.Token)
 		resp := fmt.Sprintf(`<h1>🎫 Token Master Free GotdBot</h1>
 <blockquote expandable>Shared voucher massal aktif untuk seluruh pengguna umum.</blockquote>
 <table border="1">

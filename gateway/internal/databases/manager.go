@@ -446,25 +446,39 @@ func (m *DataManager) AddGroup(ctx context.Context, ownerID int64, target, title
 
 	cleanTarget := strings.TrimSpace(target)
 	cleanChatID := chatID
-	peerType := "channel"
+	peerType := "chat"
 
 	if strings.HasPrefix(cleanTarget, "-100") {
 		peerType = "channel"
-		if id, err := strconv.ParseInt(strings.TrimPrefix(cleanTarget, "-100"), 10, 64); err == nil && id > 0 {
+		if id, err := strconv.ParseInt(cleanTarget, 10, 64); err == nil && id < 0 {
 			cleanChatID = id
 		}
 	} else if strings.HasPrefix(cleanTarget, "-") {
 		peerType = "chat"
-		if id, err := strconv.ParseInt(strings.TrimPrefix(cleanTarget, "-"), 10, 64); err == nil && id > 0 {
+		if id, err := strconv.ParseInt(cleanTarget, 10, 64); err == nil && id < 0 {
 			cleanChatID = id
 		}
-	} else if cleanChatID > 0 && cleanChatID < 1000000000 {
-		peerType = "chat"
+	} else if cleanChatID != 0 {
+		chatIDStr := strconv.FormatInt(cleanChatID, 10)
+		if strings.HasPrefix(chatIDStr, "-100") {
+			peerType = "channel"
+		} else if cleanChatID > 0 && cleanChatID >= 1000000000 && !strings.HasPrefix(cleanTarget, "@") {
+			peerType = "channel"
+			cleanChatID = ChannelBotID(cleanChatID)
+			cleanTarget = strconv.FormatInt(cleanChatID, 10)
+		}
 	}
 
-	for _, g := range cfg.Groups {
-		if g.Target == cleanTarget || (cleanChatID != 0 && g.ChatID == cleanChatID) {
-			return nil // sudah ada
+	for i, g := range cfg.Groups {
+		if g.Target == cleanTarget || SameGroupID(g.ChatID, cleanChatID) {
+			if title != "" && (g.Title == "" || g.Title == g.Target) {
+				cfg.Groups[i].Title = title
+				if g.PeerType == "" {
+					cfg.Groups[i].PeerType = peerType
+				}
+				return m.SaveUserConfig(ctx, cfg)
+			}
+			return nil
 		}
 	}
 	cfg.Groups = append(cfg.Groups, GroupEntry{
@@ -643,11 +657,28 @@ func (m *DataManager) GetUserLicenseBySHA(ctx context.Context, tokenSHA string) 
 			return ul, nil
 		}
 	}
-	// 2. Jika tidak ada di SQLite lokal (misal session baru / ganti node), tarik dari MongoDB
 	if mg := m.getMongo(); mg != nil {
 		ul, err := mg.GetUserLicenseBySHA(ctx, tokenSHA)
 		if err == nil && ul != nil {
-			// SQL hanya mengambil yang dibutuhkan user: cache lisensi ini ke SQLite lokal
+			if m.sqlite != nil {
+				_ = m.sqlite.SaveUserLicense(ctx, ul)
+			}
+			return ul, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *DataManager) GetUserLicenseByOwnerAndMaster(ctx context.Context, ownerChatID int64, masterToken string) (*UserLicense, error) {
+	if m.sqlite != nil {
+		ul, err := m.sqlite.GetUserLicenseByOwnerAndMaster(ctx, ownerChatID, masterToken)
+		if err == nil && ul != nil {
+			return ul, nil
+		}
+	}
+	if mg := m.getMongo(); mg != nil {
+		ul, err := mg.GetUserLicenseByOwnerAndMaster(ctx, ownerChatID, masterToken)
+		if err == nil && ul != nil {
 			if m.sqlite != nil {
 				_ = m.sqlite.SaveUserLicense(ctx, ul)
 			}

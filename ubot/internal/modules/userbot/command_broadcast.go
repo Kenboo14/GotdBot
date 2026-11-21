@@ -363,12 +363,19 @@ func textMessageFromResult(result tg.MessagesMessagesClass, expectedID, excluded
 
 func (s *Service) broadcastTargets(ctx context.Context, client *gobot.Client, types map[string]bool, excludeBlacklist bool, ownerID int64) ([]broadcastTarget, error) {
 	blacklisted := map[string]bool{}
+	addBLKey := func(kind string, id int64) {
+		blacklisted[fmt.Sprintf("%s:%d", kind, id)] = true
+		norm := normalizePeerChannelID(id)
+		if norm != 0 {
+			blacklisted[fmt.Sprintf("%s:%d", kind, norm)] = true
+		}
+	}
 	if excludeBlacklist {
 		if s.sqlite != nil {
 			bls, err := s.sqlite.ListBlacklist(ctx, ownerID)
 			if err == nil {
 				for _, b := range bls {
-					blacklisted[fmt.Sprintf("%s:%d", b.ChatType, b.ChatID)] = true
+					addBLKey(b.ChatType, b.ChatID)
 				}
 			}
 		} else if s.db != nil {
@@ -377,7 +384,7 @@ func (s *Service) broadcastTargets(ctx context.Context, client *gobot.Client, ty
 				var rows []blacklistRecord
 				if cur.All(ctx, &rows) == nil {
 					for _, row := range rows {
-						blacklisted[fmt.Sprintf("%s:%d", row.Type, row.ChatID)] = true
+						addBLKey(row.Type, row.ChatID)
 					}
 				}
 				cur.Close(ctx)

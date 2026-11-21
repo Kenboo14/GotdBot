@@ -243,6 +243,10 @@ func (s *Service) HandleCommand(ctx context.Context, msg redis.XMessage) {
 		dispatch(func(c context.Context) { s.fetchAccountGroups(c, client, job.ChatID, ownerID) })
 		return
 	}
+	if job.Type == "add_groups_manual" {
+		dispatch(func(c context.Context) { s.handleAddGroupsManual(c, client, job, ownerID) })
+		return
+	}
 	if job.Type == "cache_list" {
 		dispatch(func(c context.Context) {
 			s.handleCacheList(c, client, job.ChatID, ownerID, job.Text, job.Entities, job.MediaCacheIDs, job.MediaSourceCount)
@@ -372,10 +376,11 @@ func (s *Service) fetchAccountGroups(ctx context.Context, client *gobot.Client, 
 			s.peerCache().SaveChannel(id, accessHash)
 		}
 
+		canonID := canonicalGroupID(peerType, id)
 		allGroups = append(allGroups, jasebGroupDoc{
-			Target:     fmt.Sprintf("%d", id),
+			Target:     fmt.Sprintf("%d", canonID),
 			Title:      title,
-			ChatID:     id,
+			ChatID:     canonID,
 			AccessHash: accessHash,
 			PeerType:   peerType,
 			IsForum:    isForum,

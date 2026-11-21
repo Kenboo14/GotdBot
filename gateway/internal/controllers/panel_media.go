@@ -71,6 +71,10 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 	}
 	message := update.Message
 	state := h.getPanelState(message.Chat.ID)
+	if state == "waiting_restore_backup" && message.Document != nil {
+		h.handleRestoreBackupDocument(ctx, b, message.Chat.ID, h.GetEffectiveUserID(message.Chat.ID, message.From.ID), message)
+		return
+	}
 	isTopicListPost := strings.HasPrefix(state, "tlist_add_post:")
 	if state != "waiting_add_list" && state != "waiting_add_watermark" && state != "waiting_set_watermark" && !isTopicListPost && !strings.HasPrefix(state, "ctrl_add_list:") {
 		return

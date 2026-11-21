@@ -402,6 +402,34 @@ func (m *MongoClient) GetUserLicenseBySHA(ctx context.Context, tokenSHA string) 
 	return &ul, nil
 }
 
+func (m *MongoClient) GetUserLicenseByOwnerAndMaster(ctx context.Context, ownerChatID int64, masterToken string) (*UserLicense, error) {
+	if m == nil || m.Database == nil {
+		return nil, nil
+	}
+	col := m.Database.Collection("user_licenses")
+	filter := bson.M{
+		"$and": []bson.M{
+			{
+				"$or": []bson.M{
+					{"owner_chat_id": ownerChatID},
+					{"userbot_id": ownerChatID},
+				},
+			},
+			{"master_token": masterToken},
+		},
+	}
+	opts := options.FindOne().SetSort(bson.M{"created_at": -1})
+	var ul UserLicense
+	err := col.FindOne(ctx, filter, opts).Decode(&ul)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("mongo get user license by owner and master: %w", err)
+	}
+	return &ul, nil
+}
+
 func (m *MongoClient) GetActiveUserLicense(ctx context.Context, ownerChatID int64) (*UserLicense, error) {
 	if m == nil || m.Database == nil {
 		return nil, nil

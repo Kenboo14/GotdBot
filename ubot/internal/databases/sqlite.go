@@ -40,6 +40,9 @@ type BlacklistRecord struct {
 	OwnerID   int64
 	ChatType  string
 	ChatID    int64
+	PeerKind  string
+	Title     string
+	Username  string
 	CreatedAt time.Time
 }
 
@@ -349,6 +352,9 @@ func (s *SQLiteClient) initTables() error {
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN delay_all_groups INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN skip_floodwait_sec INTEGER DEFAULT 0;`)
 	_, _ = s.DB.Exec(`ALTER TABLE jaseb_configurasi ADD COLUMN active_token_sha TEXT DEFAULT '';`)
+	_, _ = s.DB.Exec(`ALTER TABLE broadcast_blacklist ADD COLUMN peer_kind TEXT DEFAULT '';`)
+	_, _ = s.DB.Exec(`ALTER TABLE broadcast_blacklist ADD COLUMN title TEXT DEFAULT '';`)
+	_, _ = s.DB.Exec(`ALTER TABLE broadcast_blacklist ADD COLUMN username TEXT DEFAULT '';`)
 	_, _ = s.DB.Exec(`INSERT OR IGNORE INTO userbot_settings (chat_id, owner_id, account_id, prefix, prefix_set, updated_at)
 		SELECT chat_id, owner_id, account_id, prefix, prefix_set, updated_at FROM sessions WHERE prefix_set = 1;`)
 
@@ -601,7 +607,7 @@ func (s *SQLiteClient) RelinkUserbotData(ctx context.Context, oldChatID, newChat
 		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO sudo_users (owner_id, user_id, created_at) SELECT ?, user_id, created_at FROM sudo_users WHERE owner_id = ?;`, toID, fromID)
 		_, _ = tx.ExecContext(ctx, `DELETE FROM sudo_users WHERE owner_id = ?;`, fromID)
 
-		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO broadcast_blacklist (owner_id, chat_type, chat_id, created_at) SELECT ?, chat_type, chat_id, created_at FROM broadcast_blacklist WHERE owner_id = ?;`, toID, fromID)
+		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO broadcast_blacklist (owner_id, chat_type, chat_id, peer_kind, title, username, created_at) SELECT ?, chat_type, chat_id, peer_kind, title, username, created_at FROM broadcast_blacklist WHERE owner_id = ?;`, toID, fromID)
 		_, _ = tx.ExecContext(ctx, `DELETE FROM broadcast_blacklist WHERE owner_id = ?;`, fromID)
 
 		_, _ = tx.ExecContext(ctx, `INSERT OR IGNORE INTO userbot_notes (owner_id, name, text, entities, buttons, mode, media_type, media_data, cache_message_id, cache_channel, updated_at)
@@ -715,52 +721,6 @@ func (s *SQLiteClient) RemoveSudo(ctx context.Context, ownerID, userID int64) er
 	return err
 }
 
-func (s *SQLiteClient) AddBlacklist(ctx context.Context, ownerID int64, chatType string, chatID int64) error {
-	query := `INSERT OR IGNORE INTO broadcast_blacklist (owner_id, chat_type, chat_id) VALUES (?, ?, ?);`
-	_, err := s.DB.ExecContext(ctx, query, ownerID, chatType, chatID)
-	return err
-}
-
-func (s *SQLiteClient) RemoveBlacklist(ctx context.Context, ownerID int64, chatType string, chatID int64) error {
-	query := `DELETE FROM broadcast_blacklist WHERE owner_id = ? AND chat_type = ? AND chat_id = ?;`
-	_, err := s.DB.ExecContext(ctx, query, ownerID, chatType, chatID)
-	return err
-}
-
-func (s *SQLiteClient) ClearBlacklist(ctx context.Context, ownerID int64) error {
-	query := `DELETE FROM broadcast_blacklist WHERE owner_id = ?;`
-	_, err := s.DB.ExecContext(ctx, query, ownerID)
-	return err
-}
-
-func (s *SQLiteClient) ListBlacklist(ctx context.Context, ownerID int64) ([]BlacklistRecord, error) {
-	query := `SELECT owner_id, chat_type, chat_id, created_at FROM broadcast_blacklist WHERE owner_id = ?;`
-	rows, err := s.DB.QueryContext(ctx, query, ownerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var records []BlacklistRecord
-	for rows.Next() {
-		var r BlacklistRecord
-		if err := rows.Scan(&r.OwnerID, &r.ChatType, &r.ChatID, &r.CreatedAt); err != nil {
-			return nil, err
-		}
-		records = append(records, r)
-	}
-	return records, rows.Err()
-}
-
-func (s *SQLiteClient) IsBlacklisted(ctx context.Context, ownerID int64, chatType string, chatID int64) (bool, error) {
-	var count int
-	query := `SELECT COUNT(1) FROM broadcast_blacklist WHERE owner_id = ? AND chat_type = ? AND chat_id = ?;`
-	err := s.DB.QueryRowContext(ctx, query, ownerID, chatType, chatID).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
 
 func (s *SQLiteClient) AddLogBlock(ctx context.Context, ownerID, userID int64, label string) error {
 	query := `INSERT INTO log_blocked_users (owner_id, user_id, label)

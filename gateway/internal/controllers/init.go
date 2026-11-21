@@ -40,6 +40,8 @@ type Handler struct {
 	pluginMu         sync.RWMutex
 	pluginStates     map[string]bool
 	userPluginStates map[int64]map[string]bool
+	tokenCbMu        sync.RWMutex
+	tokenCbKeys      map[string]string
 }
 
 func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
@@ -62,6 +64,7 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 		remoteTargets:    make(map[int64]int64),
 		accountNames:     make(map[int64]string),
 		topicSessions:    make(map[int64]*topicSessionState),
+		tokenCbKeys:      make(map[string]string),
 	}
 }
 

@@ -29,7 +29,7 @@ func (m *DataManager) SetGroupTopics(ctx context.Context, ownerID, chatID int64,
 	cfg := m.GetUserConfig(ctx, ownerID)
 	kept := make([]TopicEntry, 0, len(cfg.Topics)+len(selected))
 	for _, t := range cfg.Topics {
-		if t.ChatID != chatID {
+		if !SameGroupID(t.ChatID, chatID) {
 			kept = append(kept, t)
 		}
 	}
@@ -54,7 +54,7 @@ func (m *DataManager) DeleteGroupTopics(ctx context.Context, ownerID, chatID int
 	cfg := m.GetUserConfig(ctx, ownerID)
 	kept := make([]TopicEntry, 0, len(cfg.Topics))
 	for _, t := range cfg.Topics {
-		if t.ChatID != chatID {
+		if !SameGroupID(t.ChatID, chatID) {
 			kept = append(kept, t)
 		}
 	}
@@ -148,12 +148,12 @@ func (m *DataManager) LinkTopicsToList(ctx context.Context, ownerID int64, listN
 	cfg := m.GetUserConfig(ctx, ownerID)
 	targetKeys := make(map[string]bool, len(links))
 	for _, lk := range links {
-		targetKeys[fmt.Sprintf("%d:%d", lk.ChatID, lk.TopicID)] = true
+		targetKeys[fmt.Sprintf("%d:%d", NormalizePeerRawID(lk.ChatID), lk.TopicID)] = true
 	}
 	for i := range cfg.TopicLists {
 		kept := make([]TopicLink, 0, len(cfg.TopicLists[i].LinkedTopics))
 		for _, existing := range cfg.TopicLists[i].LinkedTopics {
-			key := fmt.Sprintf("%d:%d", existing.ChatID, existing.TopicID)
+			key := fmt.Sprintf("%d:%d", NormalizePeerRawID(existing.ChatID), existing.TopicID)
 			if !targetKeys[key] {
 				kept = append(kept, existing)
 			}

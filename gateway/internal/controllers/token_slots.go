@@ -6,6 +6,8 @@ import (
 	"assterisk/gateway/internal/databases"
 	"assterisk/gateway/internal/models"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"html"
 	"strings"
@@ -26,7 +28,12 @@ func tierBadge(tier string) string {
 }
 
 func shortTokenSwitchKey(tokenSHA string) string {
-	trimmed := strings.TrimPrefix(strings.TrimSpace(tokenSHA), "GOTD_SHA:")
+	trimmed := strings.TrimSpace(tokenSHA)
+	if strings.HasPrefix(trimmed, tokenPrefixSession) {
+		sum := sha256.Sum256([]byte(trimmed))
+		return hex.EncodeToString(sum[:8])
+	}
+	trimmed = strings.TrimPrefix(trimmed, "GOTD_SHA:")
 	if len(trimmed) > 16 {
 		trimmed = trimmed[:16]
 	}

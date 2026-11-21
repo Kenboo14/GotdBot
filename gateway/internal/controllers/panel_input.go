@@ -94,66 +94,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 			parentMsgID, _ = strconv.Atoi(parts[2])
 		}
 
-		if text == assets.BtnBatal || strings.EqualFold(text, "batal") || text == "/cancel" {
-			if parentMsgID > 0 {
-				h.RenderControlGrupList(ctx, b, chatID, parentMsgID, targetID)
-			}
-			if message != nil {
-				_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
-			}
-			return true
-		}
-
-		lines := strings.Split(text, "\n")
-		addedCount := 0
-		for _, l := range lines {
-			l = strings.TrimSpace(l)
-			if l == "" {
-				continue
-			}
-			fields := strings.Fields(l)
-			for _, p := range fields {
-				p = strings.TrimSpace(p)
-				if p == "" {
-					continue
-				}
-				var chatIDVal int64
-				if id, parseErr := strconv.ParseInt(p, 10, 64); parseErr == nil {
-					chatIDVal = id
-				}
-				if err := h.db.AddGroup(ctx, targetID, p, p, chatIDVal); err == nil {
-					addedCount++
-				}
-			}
-		}
-
-		brokerCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		_ = h.broker.To(brokerCtx, "to:ubot:command", models.PToService{
-			ChatID:  0,
-			UserID:  targetID,
-			OwnerID: targetID,
-			Type:    "sync_panel_config",
-		})
-
-		if message != nil {
-			_, _ = b.DeleteMessages(ctx, &botgotd.DeleteMessagesParams{ChatID: chatID, MessageIDs: []int{message.ID}})
-		}
-
-		targetName := h.GetAccountName(targetID)
-		if targetName == "" {
-			targetName = fmt.Sprintf("Akun [%d]", targetID)
-		}
-
-		if parentMsgID > 0 {
-			_, _ = b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
-				ChatID:      chatID,
-				MessageID:   parentMsgID,
-				Text:        assets.TxtControlGrupSentSuccess(targetName, targetID, addedCount),
-				ParseMode:   "HTML",
-				ReplyMarkup: assets.CtrlDoneIKB(targetID),
-			})
-		}
+		h.handleManualGroupPanelInput(ctx, b, chatID, targetID, text, message, true, parentMsgID)
 		return true
 	}
 
@@ -242,66 +183,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	case "waiting_add_group_manual":
 		h.clearPanelPrompt(ctx, b, chatID)
 		h.setPanelState(chatID, "")
-		policy, enforced := h.getEffectiveTierPolicy(ctx, userID)
-		currentCount := 0
-		if enforced && policy.MaxGroups > 0 {
-			currentCount, _ = h.db.CountGroupsAndLists(ctx, userID)
-		}
-		lines := strings.Split(text, "\n")
-		addedCount := 0
-		capReached := false
-		for _, l := range lines {
-			if capReached {
-				break
-			}
-			l = strings.TrimSpace(l)
-			if l == "" {
-				continue
-			}
-			parts := strings.Fields(l)
-			for _, p := range parts {
-				p = strings.TrimSpace(p)
-				if p == "" {
-					continue
-				}
-				if enforced && policy.MaxGroups > 0 && currentCount >= policy.MaxGroups {
-					capReached = true
-					break
-				}
-				var chatIDVal int64
-				if id, parseErr := strconv.ParseInt(p, 10, 64); parseErr == nil {
-					chatIDVal = id
-				}
-				err := h.db.AddGroup(ctx, userID, p, p, chatIDVal)
-				if err == nil {
-					addedCount++
-					currentCount++
-				}
-			}
-		}
-		if addedCount > 0 {
-			h.resetTopicForumScan(chatID)
-		}
-		_ = h.broker.To(ctx, "to:ubot:command", models.PToService{ChatID: chatID, UserID: userID, Type: "sync_panel_config"})
-
-		gCount, _ := h.db.CountGroupsAndLists(ctx, userID)
-		limitNote := ""
-		if capReached {
-			limitNote = fmt.Sprintf("<br/>⚠️ <i>Batas paket %s maksimal <b>%d grup</b> telah tercapai. Gunakan ⚙️ Settings → 🔑 Upgrade untuk menambah lebih banyak grup.</i>", html.EscapeString(policy.Tier), policy.MaxGroups)
-		}
-		b.SendMessage(ctx, &botgotd.SendMessageParams{
-			ChatID: chatID,
-			Text: fmt.Sprintf(`<h1>✅ Grup Berhasil Ditambahkan</h1>
-<blockquote expandable>Ditambahkan: <code>%d</code> grup baru.<br/>Total grup tersimpan: <code>%d</code> grup.%s</blockquote>
-<table border="1">
-  <tr><th>📌 Status</th><th>Total Grup</th></tr>
-  <tr><td>Aktif</td><td><code>%d grup</code></td></tr>
-</table>
-<hr/>
-<p>GotdBot • Group Target Manager</p>`, addedCount, gCount, limitNote, gCount),
-			ParseMode:   "HTML",
-			ReplyMarkup: grupListMenuMarkup,
-		})
+		h.handleManualGroupPanelInput(ctx, b, chatID, userID, text, message, false, 0)
 		return true
 
 	case "browse_list", "list_detail":

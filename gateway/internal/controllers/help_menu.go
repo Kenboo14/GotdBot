@@ -95,8 +95,8 @@ var helpCatalog = []helpCategorySpec{
 		Emoji:       "🚫",
 		Description: "Kelola daftar pengecualian target agar tidak ikut menerima siaran broadcast.",
 		Commands: []helpSubCommandSpec{
-			{Key: "addbl", Label: "Addbl", Usage: "!addbl [-pv|-gc|-ch]", Description: "Menambahkan chat saat ini ke blacklist broadcast (pakai -pv sambil reply di grup untuk target user).", PluginOn: true},
-			{Key: "rmbl", Label: "Rmbl", Usage: "!rmbl [-pv|-gc|-ch]", Description: "Menghapus chat/user dari daftar blacklist broadcast.", PluginOn: true},
+			{Key: "addbl", Label: "Addbl", Usage: "!addbl [-pv|-gc|-ch] [id|@user|link]", Description: "Menambahkan chat saat ini, balasan user (-pv), atau target remote ke blacklist broadcast.", PluginOn: true},
+			{Key: "rmbl", Label: "Rmbl", Usage: "!rmbl [-gc|-pv|-ch <no>|id|@user]", Description: "Menghapus chat saat ini atau berdasarkan nomor kategori di !lsbl dari daftar blacklist.", PluginOn: true},
 			{Key: "rmallbl", Label: "Rmallbl", Usage: "!rmallbl", Description: "Menghapus seluruh daftar blacklist broadcast akun.", PluginOn: true},
 			{Key: "lsbl", Label: "Lsbl", Usage: "!lsbl", Description: "Menampilkan seluruh target yang masuk daftar blacklist.", PluginOn: true},
 		},

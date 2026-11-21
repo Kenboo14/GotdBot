@@ -184,6 +184,11 @@ func (s *Service) deletePanelGroup(ctx context.Context, ownerID int64, groupKey 
 	removed := false
 	for _, group := range cfg.Groups {
 		matches := group.Target == groupKey || strconv.FormatInt(group.ChatID, 10) == groupKey
+		if !matches {
+			if keyID, err := strconv.ParseInt(groupKey, 10, 64); err == nil && sameGroupID(group.ChatID, keyID) {
+				matches = true
+			}
+		}
 		if !removed && matches {
 			removed = true
 			continue
@@ -1700,6 +1705,9 @@ func (s *Service) resolveTargetPeer(ctx context.Context, client *gobot.Client, c
 		}
 	}
 
+	if peerType == "chat" && cleanID != 0 {
+		return &tg.InputPeerChat{ChatID: cleanID}, nil
+	}
 	// 4. Jika peerType adalah channel/supergroup atau cleanID besar (supergroup ID biasanya > 1.000.000)
 	if peerType == "channel" || cleanID > 1000000 {
 		errPeerFound := errors.New("peer found")

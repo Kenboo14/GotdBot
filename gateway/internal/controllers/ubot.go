@@ -65,7 +65,14 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 		h.handleTopicServiceResponse(ctx, b, data)
 		return
 	}
-	if data.State == "panel_notice" {
+	if data.Type == "manual_groups_synced" {
+		targetOwner := data.OwnerID
+		if targetOwner == 0 {
+			targetOwner = data.ChatID
+		}
+		h.applySyncedManualGroups(ctx, targetOwner, data.TaskID)
+	}
+	if data.State == "panel_notice" || data.State == "remote_panel_notice" {
 		h.clearProgress(ctx, b, data.ChatID)
 	}
 	if data.ChatID == 0 {
@@ -280,6 +287,11 @@ func (h *Handler) SendMessage(ctx context.Context, b *botgotd.Bot, msg redis.XMe
 	case "panel_notice":
 		params.ParseMode = "HTML"
 		params.ReplyMarkup = assets.GrupListMenuMarkup
+	case "remote_panel_notice":
+		params.ParseMode = "HTML"
+		if data.OwnerID != 0 {
+			params.ReplyMarkup = assets.CtrlDoneIKB(data.OwnerID)
+		}
 	}
 	if data.Type == "list_detail" {
 		sentMsg, err := b.SendMessage(ctx, &botgotd.SendMessageParams{

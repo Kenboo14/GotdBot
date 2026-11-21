@@ -356,3 +356,22 @@ func (s *SQLiteClient) ListActiveUserLicenses(ctx context.Context, ownerChatID i
 	sortActiveLicenses(result)
 	return result, nil
 }
+
+func (s *SQLiteClient) GetUserLicenseByOwnerAndMaster(ctx context.Context, ownerChatID int64, masterToken string) (*UserLicense, error) {
+	query := `SELECT token_sha, master_token, owner_chat_id, userbot_id, tier, can_custom_watermark, expires_at, created_at, status
+		FROM user_licenses WHERE (owner_chat_id = ? OR userbot_id = ?) AND master_token = ?
+		ORDER BY created_at DESC LIMIT 1;`
+	var ul UserLicense
+	var canWM int
+	err := s.DB.QueryRowContext(ctx, query, ownerChatID, ownerChatID, masterToken).Scan(
+		&ul.TokenSHA, &ul.MasterToken, &ul.OwnerChatID, &ul.UserbotID, &ul.Tier, &canWM, &ul.ExpiresAt, &ul.CreatedAt, &ul.Status,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sqlite get user license by owner and master: %w", err)
+	}
+	ul.CanCustomWatermark = canWM == 1
+	return &ul, nil
+}

@@ -312,10 +312,11 @@ func (h *Handler) RenderControlCekGrup(ctx context.Context, b *botgotd.Bot, chat
 		for i := start; i < end; i++ {
 			g := groups[i]
 			title := g.Title
+			dispTarget := g.DisplayTarget()
 			if title == "" {
-				title = g.Target
+				title = dispTarget
 			}
-			items = append(items, fmt.Sprintf("%d. %s — <code>%s</code>", i+1, html.EscapeString(title), html.EscapeString(g.Target)))
+			items = append(items, fmt.Sprintf("%d. %s — <code>%s</code>", i+1, html.EscapeString(title), html.EscapeString(dispTarget)))
 		}
 	}
 

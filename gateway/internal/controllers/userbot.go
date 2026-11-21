@@ -15,7 +15,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,7 +29,6 @@ import (
 var gatewayStartedAt = time.Now()
 var inlineRedis *broker.Redis
 var inlineDB *databases.DataManager
-var reValidMasterToken = regexp.MustCompile(`^GOTD:[A-Za-z]{32}$`)
 
 func SetInlineRedis(redis *broker.Redis)    { inlineRedis = redis }
 func SetInlineDB(db *databases.DataManager) { inlineDB = db }
@@ -177,7 +175,18 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 	}
 
 	if session.State == "waiting_token" {
-		if strings.HasPrefix(text, "GOTD_SHA:") {
+		if IsSessionTokenPrefix(text) {
+			if strings.HasPrefix(text, tokenPrefixSession) {
+				if _, _, decErr := DecodeFernetSessionToken(text); decErr != nil {
+					b.SendMessage(ctx, &botgotd.SendMessageParams{
+						ChatID:      chatID,
+						Text:        assets.TxtTokenSHANotFound,
+						ParseMode:   "HTML",
+						ReplyMarkup: assets.CancelOnlyMarkup,
+					})
+					return
+				}
+			}
 			lic, err := h.db.GetUserLicenseBySHA(ctx, text)
 			if err != nil || lic == nil {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
@@ -194,10 +203,10 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				}
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID: chatID,
-					Text: fmt.Sprintf(`<h1>❌ Token SHA Kedaluwarsa</h1>
+					Text: fmt.Sprintf(`<h1>❌ Token Kedaluwarsa</h1>
 <blockquote expandable>Masa aktif token lisensi ini telah habis pada <b>%s</b> dan tidak dapat digunakan kembali.</blockquote>
 <hr/>
-<p>Gunakan token voucher baru untuk mengaktifkan akun, lalu gunakan <b>⚙️ Settings ⚙️ → ♻️ Restore Data ♻️</b> dengan kode backup <code>GOTD_BKP:</code> jika Anda ingin memulihkan data list &amp; grup.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
+<p>Gunakan token voucher baru untuk mengaktifkan akun, lalu gunakan <b>⚙️ Settings ⚙️ → ♻️ Restore Data ♻️</b> jika Anda ingin memulihkan data list &amp; grup.</p>`, lic.ExpiresAt.Local().Format("02-01-2006 15:04")),
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -206,7 +215,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			if !databases.GetTierPolicy(lic.Tier).AllowLicenseToken && lic.OwnerChatID != chatID {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        "<h1>🔒 Token Free Tidak Dapat Dipindahkan</h1><blockquote expandable>Token paket 🆓 Free terikat pada akun awal dan tidak bisa dipindahkan langsung. Silakan klaim paket Free di akun baru lalu gunakan <b>⚙️ Settings ⚙️ → ♻️ Restore Data ♻️</b> dengan kode backup <code>GOTD_BKP:</code>.</blockquote><hr/><p>GotdBot • License Protection</p>",
+					Text:        "<h1>🔒 Token Free Tidak Dapat Dipindahkan</h1><blockquote expandable>Token paket 🆓 Free terikat pada akun awal dan tidak bisa dipindahkan langsung. Silakan klaim paket Free di akun baru lalu gunakan <b>⚙️ Settings ⚙️ → ♻️ Restore Data ♻️</b> untuk memulihkan data.</blockquote><hr/><p>GotdBot • License Protection</p>",
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -236,11 +245,11 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 			return
 		}
 
-		if strings.HasPrefix(text, "GOTD:") {
-			if !reValidMasterToken.MatchString(text) {
+		if IsMasterTokenPrefix(text) {
+			if !IsMasterTokenFormat(text) {
 				b.SendMessage(ctx, &botgotd.SendMessageParams{
 					ChatID:      chatID,
-					Text:        `<h1>❌ Format Token Salah</h1><blockquote expandable>Token Master harus berupa format <code>GOTD:&lt;32_huruf_alfabet&gt;</code>.</blockquote><hr/><p>Periksa kembali karakter token voucher yang Anda terima dari Owner.</p>`,
+					Text:        `<h1>❌ Format Token Salah</h1><blockquote expandable>Token Master yang Anda masukkan tidak valid.</blockquote><hr/><p>Periksa kembali karakter token voucher yang Anda terima dari Owner.</p>`,
 					ParseMode:   "HTML",
 					ReplyMarkup: assets.CancelOnlyMarkup,
 				})
@@ -281,8 +290,11 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 				}
 			}
 
-			existingSHA := ComputeTokenSHA(tm.Token, chatID)
-			if prevLic, _ := h.db.GetUserLicenseBySHA(ctx, existingSHA); prevLic != nil {
+			prevLic, _ := h.db.GetUserLicenseByOwnerAndMaster(ctx, chatID, tm.Token)
+			if prevLic == nil {
+				prevLic, _ = h.db.GetUserLicenseBySHA(ctx, ComputeLegacyTokenSHA(tm.Token, chatID))
+			}
+			if prevLic != nil {
 				if prevLic.Status != "active" || !prevLic.ExpiresAt.After(time.Now()) {
 					if prevLic.Status == "active" {
 						h.expireSingleLicense(ctx, b, prevLic)
@@ -376,7 +388,7 @@ func (h *Handler) HandleMessage(ctx context.Context, b *botgotd.Bot, update *bot
 
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:      chatID,
-			Text:        `<h1>❌ Token Tidak Dikenali</h1><blockquote expandable>Format token harus diawali dengan <code>GOTD:</code> (Voucher Master) atau <code>GOTD_SHA:</code> (Token SHA Backup).</blockquote><hr/><p>Silakan masukkan token yang valid atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
+			Text:        `<h1>❌ Token Tidak Valid</h1><blockquote expandable>Masukkan kode voucher (<code>GOTD:M...</code>) atau token akses (<code>GOTD:S...</code>) yang valid.</blockquote><hr/><p>Silakan periksa kembali kode token Anda atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`,
 			ParseMode:   "HTML",
 			ReplyMarkup: assets.CancelOnlyMarkup,
 		})

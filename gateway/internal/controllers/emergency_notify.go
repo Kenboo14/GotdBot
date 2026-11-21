@@ -70,29 +70,28 @@ func (h *Handler) dispatchSessionRevokedBackup(b *botgotd.Bot, chatID int64, rea
 
 	var tokenLineHTML, tokenLinePlain string
 	if lic != nil && databases.GetTierPolicy(lic.Tier).AllowLicenseToken {
-		tokenLineHTML = fmt.Sprintf("• <b>Token Lisensi (GOTD_SHA):</b>\n<code>%s</code>\n<i>Tier: %s · Exp: %s WIB</i>\n",
+		tokenLineHTML = fmt.Sprintf("• <b>Token Akses:</b>\n<code>%s</code>\n<i>Tier: %s · Exp: %s WIB</i>\n",
 			html.EscapeString(lic.TokenSHA), html.EscapeString(lic.Tier), lic.ExpiresAt.Local().Format("02-01-2006 15:04"))
-		tokenLinePlain = fmt.Sprintf("Token Lisensi (GOTD_SHA): %s (Tier: %s, Exp: %s WIB)\n",
+		tokenLinePlain = fmt.Sprintf("Token Akses: %s (Tier: %s, Exp: %s WIB)\n",
 			lic.TokenSHA, lic.Tier, lic.ExpiresAt.Local().Format("02-01-2006 15:04"))
 	}
 
-	var backupLineHTML, backupLinePlain string
+	var backupLineHTML, backupLinePlain, largeBackupCode string
 	if len(cfg.Lists) > 0 || len(cfg.Groups) > 0 || len(cfg.Topics) > 0 || len(cfg.TopicLists) > 0 {
-		code := GenerateBackupCode()
-		backup := &databases.DataBackupCode{
-			Code:       code,
-			OwnerID:    chatID,
-			Lists:      append([]int(nil), cfg.Lists...),
-			Groups:     append([]databases.GroupEntry(nil), cfg.Groups...),
-			Topics:     append([]databases.TopicEntry(nil), cfg.Topics...),
-			TopicLists: append([]databases.TopicListEntry(nil), cfg.TopicLists...),
-			CreatedAt:  time.Now(),
-		}
-		if err := h.db.SaveDataBackup(ctx, backup); err == nil {
-			backupLineHTML = fmt.Sprintf("• <b>Kode Backup Data (List &amp; Grup):</b>\n<code>%s</code> (%d list · %d grup)\n",
-				html.EscapeString(code), len(backup.Lists), len(backup.Groups))
-			backupLinePlain = fmt.Sprintf("Kode Backup Data: %s (%d list, %d grup)\n",
-				code, len(backup.Lists), len(backup.Groups))
+		code, err := EncodePortableBackup(cfg, lic)
+		if err == nil && code != "" {
+			if len(code) <= maxInlineBackupCodeLen {
+				backupLineHTML = fmt.Sprintf("• <b>Kode Backup Data (List &amp; Grup):</b>\n<code>%s</code> (%d list · %d grup)\n",
+					html.EscapeString(code), len(cfg.Lists), len(cfg.Groups))
+				backupLinePlain = fmt.Sprintf("Kode Backup Data: %s (%d list, %d grup)\n",
+					code, len(cfg.Lists), len(cfg.Groups))
+			} else {
+				largeBackupCode = code
+				backupLineHTML = fmt.Sprintf("• <b>File Backup Data:</b> <code>gotdbot-backup-%d.txt</code> (%d list · %d grup)\n",
+					chatID, len(cfg.Lists), len(cfg.Groups))
+				backupLinePlain = fmt.Sprintf("Kode Backup Data: %s (%d list, %d grup)\n",
+					code, len(cfg.Lists), len(cfg.Groups))
+			}
 		}
 	}
 
@@ -114,15 +113,17 @@ func (h *Handler) dispatchSessionRevokedBackup(b *botgotd.Bot, chatID int64, rea
 			}
 			if lic != nil && databases.GetTierPolicy(lic.Tier).AllowLicenseToken {
 				rows = append(rows, monitorRichRow{
-					Label: "🔑 Token SHA",
+					Label: "🔑 Token Akses",
 					Value: fmt.Sprintf("<code>%s</code> (%s)", html.EscapeString(lic.TokenSHA), html.EscapeString(lic.Tier)),
 				})
 			}
 			var backupSummary string
-			if strings.Contains(backupLineHTML, "GOTD_BKP:") {
-				parts := strings.SplitN(backupLineHTML, "\n", 3)
+			if strings.Contains(backupLineHTML, tokenPrefixBackup) || strings.Contains(backupLineHTML, "GOTD_BKP:") || largeBackupCode != "" {
+				parts := strings.SplitN(strings.TrimSuffix(backupLineHTML, "\n"), "\n", 3)
 				if len(parts) >= 2 {
 					backupSummary = strings.TrimSpace(parts[1])
+				} else {
+					backupSummary = strings.TrimPrefix(strings.TrimSpace(backupLineHTML), "• ")
 				}
 			}
 			if backupSummary != "" {
@@ -131,8 +132,12 @@ func (h *Handler) dispatchSessionRevokedBackup(b *botgotd.Bot, chatID int64, rea
 			rows = append(rows, monitorRichRow{Label: "🕒 Waktu", Value: fmt.Sprintf("<code>%s WIB</code>", time.Now().Format("15:04:05"))})
 			quote := fmt.Sprintf("ℹ️ %s%s<i>Simpan kode di atas untuk memulihkan paket/data ke akun baru bila diperlukan · Emergency Session Monitor.</i>", tokenLineHTML, backupLineHTML)
 			alertHTML := renderMonitorRichCard("🚨 Alert Pemulihan Sesi Userbot", rows, quote, true)
+			filename := fmt.Sprintf("gotdbot-backup-%d.txt", chatID)
 			for _, adminID := range adminIDs {
 				_, _ = sendMonitorRichMessage(ctx, b, adminID, 0, alertHTML)
+				if largeBackupCode != "" {
+					_ = sendBackupDocument(ctx, b, adminID, filename, []byte(largeBackupCode), fmt.Sprintf("📎 File Backup Darurat Akun <code>%d</code>", chatID))
+				}
 			}
 		}
 	}

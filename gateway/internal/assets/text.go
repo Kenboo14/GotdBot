@@ -94,9 +94,10 @@ const TxtPromptTambahList = `<h1>📝 Tambah List Promosi</h1>` +
 // TxtPromptTambahGrupManual is the prompt shown when waiting for manual group input.
 const TxtPromptTambahGrupManual = `<h1>📝 Tambah Grup Manual</h1>` +
 	`<blockquote expandable>📌 <b>Format target yang didukung:</b>` +
-	`<br/>1. <b>Username grup:</b> (contoh: <code>@grupchat</code>)` +
-	`<br/>2. <b>Chat ID grup:</b> (contoh: <code>-1001234567890</code>)` +
-	`<br/>3. <b>Tautan grup:</b> (contoh: <code>t.me/namagrup</code>)` +
+	`<br/>1. <b>Supergroup / Channel ID:</b> <code>-1001234567890</code>` +
+	`<br/>2. <b>Group Biasa ID:</b> <code>-987654321</code>` +
+	`<br/>3. <b>Username / Link Publik:</b> <code>@grupchat</code> atau <code>t.me/namagrup</code>` +
+	`<br/>4. <b>Tautan Undangan Privat:</b> <code>t.me/+xxxxxxxx</code> (Auto-Join otomatis)` +
 	`<br/><br/><i>Jika lebih dari satu grup, pisahkan masing-masing target dengan baris baru.</i></blockquote>` +
 	`<hr/><p>Kirimkan target grup sekarang atau klik tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
@@ -183,9 +184,10 @@ func TxtControlTambahGrupManual(targetName string, targetID int64) string {
 		`<h1>📝 Tambah Grup Manual (Remote)</h1>`+
 			`<hr/><b>👑 Akun Target:</b> %s (<code>%d</code>)`+
 			`<blockquote expandable>📌 <b>Format target yang didukung:</b>`+
-			`<br/>1. Username grup: (contoh: <code>@grupchat</code>)`+
-			`<br/>2. Chat ID grup: (contoh: <code>-1001234567890</code>)`+
-			`<br/>3. Tautan grup: (contoh: <code>t.me/namagrup</code>)`+
+			`<br/>1. Supergroup / Channel ID: <code>-1001234567890</code>`+
+			`<br/>2. Group Biasa ID: <code>-987654321</code>`+
+			`<br/>3. Username / Link Publik: <code>@grupchat</code> atau <code>t.me/namagrup</code>`+
+			`<br/>4. Tautan Undangan Privat: <code>t.me/+xxxxxxxx</code> (Auto-Join otomatis)`+
 			`<br/><br/><i>Jika lebih dari satu grup, pisahkan tiap grup dengan baris baru.</i></blockquote>`+
 			`<p>Kirimkan target grup sekarang via pesan chat, atau tekan tombol batal di bawah:</p>`,
 		html.EscapeString(targetName), targetID,
@@ -349,8 +351,8 @@ const TxtInputToken = `<h1>🔑 Input Token Lisensi</h1>` +
 	`<br/>Token lisensi berfungsi sebagai voucher aktivasi awal atau kunci pemulihan (brankas) agar seluruh data (list promosi, target grup, notes, prefix) otomatis terhubung kembali.</blockquote>` +
 	`<table border="1">` +
 	`<tr><th>Jenis Token</th><th>Format</th></tr>` +
-	`<tr><td>Voucher Master</td><td><code>GOTD:&lt;32_huruf&gt;</code></td></tr>` +
-	`<tr><td>Token Backup</td><td><code>GOTD_SHA:&lt;sha256&gt;</code></td></tr>` +
+	`<tr><td>Token Voucher</td><td><code>GOTD:M...</code></td></tr>` +
+	`<tr><td>Token Akses</td><td><code>GOTD:S...</code></td></tr>` +
 	`</table>` +
 	`<hr/><p>Kirimkan token Anda sekarang, atau tekan tombol <b>⬅️ Batal ⬅️</b> di bawah.</p>`
 
@@ -361,7 +363,7 @@ const TxtAksesInstalDitolak = `<h1>⚠️ Akses Pemasangan Ditolak</h1>` +
 
 // TxtTokenSHANotFound is shown when a SHA token isn't in the database.
 const TxtTokenSHANotFound = `<h1>❌ Token Tidak Ditemukan</h1>` +
-	`<blockquote expandable>Token Backup yang Anda masukkan tidak terdaftar dalam database sistem.</blockquote>` +
+	`<blockquote expandable>Token yang Anda masukkan tidak valid atau tidak ditemukan.</blockquote>` +
 	`<hr/><p>Pastikan token yang Anda masukkan benar atau hubungi Owner untuk verifikasi.</p>`
 
 // TxtTokenDetected returns the "token recognized" message shown after a valid token is submitted.

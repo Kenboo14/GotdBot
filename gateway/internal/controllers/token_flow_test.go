@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,29 +14,51 @@ import (
 )
 
 func TestGenerateMasterToken(t *testing.T) {
-	re := regexp.MustCompile(`^GOTD:[A-Za-z]{32}$`)
-	for i := 0; i < 50; i++ {
+	t.Setenv("TOKEN_FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	for i := 0; i < 20; i++ {
 		tok := GenerateMasterToken()
-		if !re.MatchString(tok) {
-			t.Fatalf("Token generated does not match format: %s", tok)
+		if !strings.HasPrefix(tok, tokenPrefixMaster) {
+			t.Fatalf("Token generated missing GOTD:M prefix: %s", tok)
 		}
+		if _, err := DecodeFernetMasterToken(tok); err != nil {
+			t.Fatalf("DecodeFernetMasterToken failed: %v", err)
+		}
+		if !IsMasterTokenFormat(tok) {
+			t.Fatalf("IsMasterTokenFormat rejected valid GOTD:M token: %s", tok)
+		}
+	}
+	if !IsMasterTokenFormat("GOTD:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef") {
+		t.Fatalf("IsMasterTokenFormat rejected valid legacy 32-char master token")
 	}
 }
 
 func TestComputeTokenSHA(t *testing.T) {
-	master := "GOTD:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+	t.Setenv("TOKEN_FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	master := GenerateMasterToken()
 	userID := int64(123456789)
 
-	sha1 := ComputeTokenSHA(master, userID)
-	sha2 := ComputeTokenSHA(master, userID)
-
-	if sha1 != sha2 {
-		t.Fatalf("SHA computation must be deterministic: %s != %s", sha1, sha2)
+	s1 := ComputeTokenSHA(master, userID)
+	s2 := ComputeTokenSHA(master, userID)
+	if !strings.HasPrefix(s1, tokenPrefixSession) || !strings.HasPrefix(s2, tokenPrefixSession) {
+		t.Fatalf("Session token missing GOTD:S prefix: %q / %q", s1, s2)
+	}
+	if s1 == s2 {
+		t.Fatalf("expected randomized IV per session token issuance, got identical %q", s1)
+	}
+	uid1, _, err1 := DecodeFernetSessionToken(s1)
+	uid2, _, err2 := DecodeFernetSessionToken(s2)
+	if err1 != nil || err2 != nil || uid1 != userID || uid2 != userID {
+		t.Fatalf("DecodeFernetSessionToken failed: uid1=%d err1=%v uid2=%d err2=%v", uid1, err1, uid2, err2)
 	}
 
+	legacy1 := ComputeLegacyTokenSHA("GOTD:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", userID)
+	legacy2 := ComputeLegacyTokenSHA("GOTD:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", userID)
+	if legacy1 != legacy2 {
+		t.Fatalf("Legacy SHA must be deterministic: %s != %s", legacy1, legacy2)
+	}
 	re := regexp.MustCompile(`^GOTD_SHA:[a-f0-9]{64}$`)
-	if !re.MatchString(sha1) {
-		t.Fatalf("SHA token does not match expected format: %s", sha1)
+	if !re.MatchString(legacy1) {
+		t.Fatalf("Legacy SHA token does not match expected format: %s", legacy1)
 	}
 }
 

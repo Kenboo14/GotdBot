@@ -304,7 +304,13 @@ func TestOwnerTokenManageAndDataBackupRestoreAndTransfer(t *testing.T) {
 					txt, _ = rm["html"].(string)
 				}
 			}
-			if idx := strings.Index(txt, "GOTD_BKP:"); idx >= 0 {
+			if idx := strings.Index(txt, "GOTD:B"); idx >= 0 {
+				if end := strings.IndexAny(txt[idx:], "<\n "); end > 0 {
+					sentCode = txt[idx : idx+end]
+				} else {
+					sentCode = txt[idx:]
+				}
+			} else if idx := strings.Index(txt, "GOTD_BKP:"); idx >= 0 {
 				if end := strings.IndexAny(txt[idx:], "<\n "); end > 0 {
 					sentCode = txt[idx : idx+end]
 				} else {
@@ -314,7 +320,7 @@ func TestOwnerTokenManageAndDataBackupRestoreAndTransfer(t *testing.T) {
 		}
 	}
 	if !foundAdminAlert || sentCode == "" {
-		t.Fatalf("expected emergency backup alert to admin 4001 with GOTD_BKP:, found=%v code=%q", foundAdminAlert, sentCode)
+		t.Fatalf("expected emergency backup alert to admin 4001 with GOTD:B, found=%v code=%q", foundAdminAlert, sentCode)
 	}
 
 	_ = dm.SaveUserLicense(ctx, &databases.UserLicense{

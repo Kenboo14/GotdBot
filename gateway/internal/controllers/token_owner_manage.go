@@ -45,7 +45,7 @@ func parseManagedTier(raw string) (string, bool) {
 }
 
 func (h *Handler) lookupLicenseByQuery(ctx context.Context, query string) (*databases.UserLicense, int64) {
-	if strings.HasPrefix(query, "GOTD_SHA:") {
+	if IsSessionTokenPrefix(query) {
 		lic, _ := h.db.GetUserLicenseBySHA(ctx, query)
 		if lic != nil {
 			return lic, lic.OwnerChatID
@@ -144,7 +144,7 @@ func (h *Handler) execOwnerTokenUpgrade(ctx context.Context, b *botgotd.Bot, cha
   <tr><td>👤 User ID</td><td><code>%d</code></td></tr>
   <tr><td>🎖️ Tier Baru</td><td><code>%s</code></td></tr>
   <tr><td>⏰ Aktif Sampai</td><td><code>%s WIB</code></td></tr>
-  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+  <tr><td>🔑 Token Akses</td><td><code>%s</code></td></tr>
 </table>
 <hr/>
 <p>GotdBot • Owner License Manager</p>`, targetID, html.EscapeString(tier), expStr, html.EscapeString(tokenSHA)),
@@ -247,13 +247,13 @@ func (h *Handler) execOwnerTokenInfo(ctx context.Context, b *botgotd.Bot, chatID
 	if len(fields) < 3 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
-			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token info &lt;user_id|GOTD:...|GOTD_SHA:...&gt;</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
+			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token info &lt;user_id|GOTD:M...|GOTD:S...&gt;</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode: "HTML",
 		})
 		return
 	}
 	query := strings.TrimSpace(fields[2])
-	if strings.HasPrefix(query, "GOTD:") {
+	if IsMasterTokenPrefix(query) {
 		tm, err := h.db.GetTokenMaster(ctx, query)
 		if err != nil || tm == nil {
 			b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: `<h1>❌ Voucher Tidak Ditemukan</h1><blockquote expandable>Voucher master tersebut tidak terdaftar dalam database.</blockquote><hr/><p>GotdBot • Owner License Manager</p>`, ParseMode: "HTML"})
@@ -292,7 +292,7 @@ func (h *Handler) execOwnerTokenInfo(ctx context.Context, b *botgotd.Bot, chatID
   <tr><td>🎖️ Tier / Status</td><td><code>%s · %s</code></td></tr>
   <tr><td>⏰ Berakhir</td><td><code>%s WIB</code></td></tr>
   <tr><td>📦 Data Slot</td><td><code>%d grup · %d list</code></td></tr>
-  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+  <tr><td>🔑 Token Akses</td><td><code>%s</code></td></tr>
 </table>
 <hr/>
 <p>GotdBot • Owner License Manager</p>`,
@@ -306,13 +306,13 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 	if len(fields) < 3 {
 		b.SendMessage(ctx, &botgotd.SendMessageParams{
 			ChatID:    chatID,
-			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token revoke &lt;user_id|GOTD:...|GOTD_SHA:...&gt;</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
+			Text:      `<h1>⚠️ Format Perintah Salah</h1><blockquote expandable>Gunakan: <code>/token revoke &lt;user_id|GOTD:M...|GOTD:S...&gt;</code></blockquote><hr/><p>GotdBot • Owner License Manager</p>`,
 			ParseMode: "HTML",
 		})
 		return
 	}
 	query := strings.TrimSpace(fields[2])
-	if strings.HasPrefix(query, "GOTD:") {
+	if IsMasterTokenPrefix(query) {
 		_ = h.db.RevokeTokenMaster(ctx, query)
 		b.SendMessage(ctx, &botgotd.SendMessageParams{ChatID: chatID, Text: fmt.Sprintf(`<h1>🚫 Voucher Dicabut</h1><table border="1"><tr><th>🔑 Token</th><td><code>%s</code></td></tr></table><hr/><p>GotdBot • Owner License Manager</p>`, html.EscapeString(query)), ParseMode: "HTML"})
 		return
@@ -342,7 +342,7 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 <table border="1">
   <tr><th>📌 Properti</th><th>Nilai</th></tr>
   <tr><td>👤 Owner ID</td><td><code>%d</code></td></tr>
-  <tr><td>🔑 Token SHA</td><td><code>%s</code></td></tr>
+  <tr><td>🔑 Token Akses</td><td><code>%s</code></td></tr>
   <tr><td>🔄 Slot Fallback</td><td><code>%s</code></td></tr>
 </table>
 <hr/>
@@ -386,7 +386,7 @@ func (h *Handler) execOwnerTokenRevoke(ctx context.Context, b *botgotd.Bot, chat
 		Text: fmt.Sprintf(`<h1>🚫 Lisensi &amp; Sesi Dihentikan</h1>
 <table border="1">
   <tr><th>👤 Owner ID</th><td><code>%d</code></td></tr>
-  <tr><th>🔑 Token SHA</th><td><code>%s</code></td></tr>
+  <tr><th>🔑 Token Akses</th><td><code>%s</code></td></tr>
 </table>
 <hr/>
 <p>GotdBot • Owner License Manager</p>`, lic.OwnerChatID, html.EscapeString(lic.TokenSHA)),
