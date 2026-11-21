@@ -49,7 +49,7 @@ func (h *Handler) renderStatusDashboard(ctx context.Context, b *botgotd.Bot, cha
 		rows = append(rows, assets.StatusRow{Label: "📨 Kuota Harian", Value: fmt.Sprintf("Maks %d pesan/hari (reset 00:00 WIB)", policy.DailySendLimit)})
 	}
 	rows = append(rows,
-		assets.StatusRow{Label: "🔔 Notifikasi", Value: html.EscapeString(cfg.Notifikasi)},
+		assets.StatusRow{Label: "🔔 Notifikasi", Value: html.EscapeString(normalizeNotifikasiMode(cfg.Notifikasi))},
 		assets.StatusRow{Label: "✉️ Email", Value: html.EscapeString(cfg.Email)},
 		assets.StatusRow{Label: "👤 Admin", Value: html.EscapeString(cfg.Admin)},
 	)
@@ -79,7 +79,6 @@ func (h *Handler) ShowStatus(ctx context.Context, b *botgotd.Bot, chatID, userID
 	h.renderStatusDashboard(ctx, b, chatID, userID, 0)
 }
 
-// ToggleSafemode toggles safemode
 func (h *Handler) ToggleSafemode(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	cfg := h.db.GetUserConfig(ctx, userID)
 	cfg.Safemode = !cfg.Safemode
@@ -107,7 +106,6 @@ func (h *Handler) ToggleSafemode(ctx context.Context, b *botgotd.Bot, chatID, us
 	})
 }
 
-// PromptUbahMode displays mode options
 func (h *Handler) PromptUbahMode(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	h.setPanelState(chatID, "waiting_set_mode")
 	cfg := h.db.GetUserConfig(ctx, userID)
@@ -212,28 +210,8 @@ func (h *Handler) ToggleStatus(ctx context.Context, b *botgotd.Bot, chatID, user
 }
 
 func (h *Handler) ToggleNotifikasi(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
-	cfg := h.db.GetUserConfig(ctx, userID)
-	if strings.HasPrefix(cfg.Notifikasi, "Aktif") {
-		cfg.Notifikasi = "Nonaktif"
-	} else {
-		cfg.Notifikasi = "Aktif · Kirim ke Saya"
-	}
-	_ = h.db.SaveUserConfig(ctx, cfg)
-
-	text := fmt.Sprintf(`<h1>🔔 Status Notifikasi Diperbarui</h1>
-<table border="1">
-  <tr><th>🔔 Notifikasi</th><td><code>%s</code></td></tr>
-</table>
-<blockquote expandable>Pengaturan notifikasi laporan siaran telah disimpan ke database.</blockquote>
-<hr/>
-<p>GotdBot • Status Configuration</p>`, html.EscapeString(cfg.Notifikasi))
-
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ParseMode:   "HTML",
-		ReplyMarkup: assets.StatusMenuMarkup,
-	})
+	h.setPanelState(chatID, "")
+	h.renderNotifikasiView(ctx, b, chatID, userID, 0)
 }
 
 func (h *Handler) PromptWatermark(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
@@ -322,7 +300,6 @@ func (h *Handler) PromptEmail(ctx context.Context, b *botgotd.Bot, chatID, userI
 	})
 }
 
-// PromptAdmin prompts user for admin ID
 func (h *Handler) PromptAdmin(ctx context.Context, b *botgotd.Bot, chatID, userID int64) {
 	h.setPanelState(chatID, "waiting_set_admin")
 	cfg := h.db.GetUserConfig(ctx, userID)
@@ -351,7 +328,6 @@ func (h *Handler) PromptAdmin(ctx context.Context, b *botgotd.Bot, chatID, userI
 	})
 }
 
-// PromptReset prompts user for reset options
 func (h *Handler) PromptReset(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	h.setPanelState(chatID, "")
 

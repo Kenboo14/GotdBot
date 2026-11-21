@@ -828,20 +828,22 @@ func resolveGroupTopicDeliveries(cfg jasebConfigDoc, grp jasebGroupDoc) []groupT
 	return plan
 }
 
-func (s *Service) deliverGroupBroadcast(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, mainMsgID int, rotator *topicPlayTracker) bool {
+func (s *Service) deliverGroupBroadcast(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, mainMsgID int, rotator *topicPlayTracker) (bool, bool, string) {
 	deliveries := resolveGroupTopicDeliveries(cfg, grp)
 	if len(deliveries) == 0 {
-		ok, _ := s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, mainMsgID, 0)
-		return ok
+		keep, _, sentOk, reason := s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, mainMsgID, 0)
+		return keep, sentOk, reason
 	}
 
+	anySent := false
+	lastFail := ""
 	for i, d := range deliveries {
 		if i > 0 {
 			timer := time.NewTimer(1 * time.Second)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return false
+				return false, anySent, ""
 			case <-timer.C:
 			}
 		}
@@ -861,23 +863,31 @@ func (s *Service) deliverGroupBroadcast(ctx context.Context, client *gobot.Clien
 				select {
 				case <-ctx.Done():
 					timer.Stop()
-					return false
+					return false, anySent, ""
 				case <-timer.C:
 				}
 			}
-			ok, skipped := s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, pid, d.TopicID)
-			if !ok {
-				return false
+			keep, skipped, sentOk, reason := s.forwardSinglePanelPost(ctx, client, cachePeer, targetPeer, cfg, grp, pid, d.TopicID)
+			if !keep {
+				return false, anySent, reason
+			}
+			if sentOk {
+				anySent = true
+			} else if reason != "" {
+				lastFail = reason
 			}
 			if skipped {
-				return true
+				return true, anySent, lastFail
 			}
 		}
 	}
-	return true
+	if anySent {
+		return true, true, ""
+	}
+	return true, false, lastFail
 }
 
-func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, msgID, topicID int) (bool, bool) {
+func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Client, cachePeer, targetPeer tg.InputPeerClass, cfg jasebConfigDoc, grp jasebGroupDoc, msgID, topicID int) (bool, bool, bool, string) {
 	forwardIDs := s.cacheForwardIDs(ctx, client, cachePeer, msgID)
 	randomIDs := make([]int64, len(forwardIDs))
 	for i := range randomIDs {
@@ -900,26 +910,29 @@ func (s *Service) forwardSinglePanelPost(ctx context.Context, client *gobot.Clie
 
 	_, err := client.API().MessagesForwardMessages(ctx, req)
 	if err != nil {
-		log.Printf("[panelBroadcast] forward to %s (%d, topic=%d) error: %v", grp.Title, grp.ChatID, topicID, err)
 		if flood, ok := tgerr.AsFloodWait(err); ok {
-			if shouldSkipFloodWait(cfg, flood) {
-				log.Printf("[panelBroadcast] skip group %s (%d): FloodWait %v melebihi batas (%ds)", grp.Title, grp.ChatID, flood, cfg.SkipFloodWaitSec)
-				return true, true
+			shouldSkip := shouldSkipFloodWait(cfg, flood)
+			s.emitPanelFloodNotification(ctx, client, cachePeer, cfg, grp, msgID, flood, shouldSkip, false)
+			if shouldSkip {
+				s.recordHeavyBroadcastResult(cfg.OwnerID, false)
+				return true, true, false, humanizePanelBroadcastError(err)
 			}
 			sleepDur := flood + time.Second
 			timer := time.NewTimer(sleepDur)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
-				return false, false
+				return false, false, false, ""
 			case <-timer.C:
 			}
 			_, err = client.API().MessagesForwardMessages(ctx, req)
-			if err != nil {
-				log.Printf("[panelBroadcast] retry forward to %s (%d, topic=%d) error: %v", grp.Title, grp.ChatID, topicID, err)
-			}
+		} else if isPeerFloodError(err) {
+			s.emitPanelFloodNotification(ctx, client, cachePeer, cfg, grp, msgID, 0, false, true)
 		}
 	}
 	s.recordHeavyBroadcastResult(cfg.OwnerID, err == nil)
-	return true, false
+	if err != nil {
+		return true, false, false, humanizePanelBroadcastError(err)
+	}
+	return true, false, true, ""
 }

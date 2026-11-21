@@ -6,9 +6,6 @@ import (
 	"assterisk/gateway/internal/botgotd"
 )
 
-// ─── Reply Keyboard Button Label Constants ───────────────────────────────────
-
-// Main Menu
 const (
 	BtnStatus   = "💎 Status 💎"
 	BtnShop     = "🛒 Shop 🛒"
@@ -23,7 +20,6 @@ const (
 	BtnHome     = "🌐 Home 🌐"
 )
 
-// Status Menu
 const (
 	BtnCustomWatermark = "📌 Custom Watermark 📌"
 	BtnAturEmail       = "✉️ Atur Email ✉️"
@@ -35,7 +31,6 @@ const (
 	BtnNotifikasi      = "🔔 Notifikasi 🔔"
 )
 
-// Grup & List Menu
 const (
 	BtnCekTopic   = "🧑‍💻 Cek Topic 🧑‍💻"
 	BtnTopic      = "🧑‍💻 Topic 🧑‍💻"
@@ -91,6 +86,7 @@ const (
 	BtnUpgradeToken = "🔑 Tambah Token 🔑"
 	BtnGantiToken   = "🔄 Ganti Token 🔄"
 	BtnAmbilToken   = "🔒 Ambil Token 🔒"
+	BtnPindahAkses  = "🔀 Pindah Akses 🔀"
 	BtnBackupData   = "📎 Backup Data 📎"
 	BtnRestoreData  = "♻️ Restore Data ♻️"
 )
@@ -106,56 +102,27 @@ const (
 	BtnHapusWatermark = "🗑️ Hapus Watermark 🗑️"
 )
 
-// ─── Pre-built Reply Keyboard Markups ────────────────────────────────────────
-
 var (
-	MainMenuMarkup       *botgotd.ReplyKeyboardMarkup
-	StatusMenuMarkup     *botgotd.ReplyKeyboardMarkup
-	SettingsMenuMarkup   *botgotd.ReplyKeyboardMarkup
-
-	// GrupListMenuMarkup is the Grup & List sub-menu keyboard.
-	GrupListMenuMarkup *botgotd.ReplyKeyboardMarkup
-
-	// TambahGrupOptionsMarkup lets the user choose between auto-import and manual group add.
+	MainMenuMarkup          *botgotd.ReplyKeyboardMarkup
+	StatusMenuMarkup        *botgotd.ReplyKeyboardMarkup
+	SettingsMenuMarkup      *botgotd.ReplyKeyboardMarkup
+	GrupListMenuMarkup      *botgotd.ReplyKeyboardMarkup
 	TambahGrupOptionsMarkup *botgotd.ReplyKeyboardMarkup
-
-	// CancelOnlyMarkup shows a single Batal button.
-	CancelOnlyMarkup *botgotd.ReplyKeyboardMarkup
-
-	// AturJedaMarkup shows delay option buttons.
-	AturJedaMarkup        *botgotd.ReplyKeyboardMarkup
-	JedaPerGrupMarkup     *botgotd.ReplyKeyboardMarkup
+	CancelOnlyMarkup       *botgotd.ReplyKeyboardMarkup
+	AturJedaMarkup         *botgotd.ReplyKeyboardMarkup
+	JedaPerGrupMarkup      *botgotd.ReplyKeyboardMarkup
 	JedaPerSemuaGrupMarkup *botgotd.ReplyKeyboardMarkup
-	SkipFloodWaitMarkup   *botgotd.ReplyKeyboardMarkup
-
-	// UbahModeMarkup shows broadcasting mode options.
-	UbahModeMarkup *botgotd.ReplyKeyboardMarkup
-
-	// TimerMarkup shows timer schedule options.
-	TimerMarkup *botgotd.ReplyKeyboardMarkup
-
-	// ResetMarkup shows reset options.
-	ResetMarkup *botgotd.ReplyKeyboardMarkup
-
-	// HapusListMarkup shows the hapus-all-list confirm button.
-	HapusListMarkup *botgotd.ReplyKeyboardMarkup
-
-	// HapusGrupMarkup shows the hapus-all-grup confirm button.
-	HapusGrupMarkup *botgotd.ReplyKeyboardMarkup
-
-	// CancelMarkup is an alias for CancelOnlyMarkup (backward-compat).
-	CancelMarkup *botgotd.ReplyKeyboardMarkup
-
-	// CreateChoiceMarkup is the initial wizard keyboard (before userbot is linked).
-	CreateChoiceMarkup *botgotd.ReplyKeyboardMarkup
-
-	// InstallPhoneMarkup asks the user to share their contact.
-	InstallPhoneMarkup *botgotd.ReplyKeyboardMarkup
-
-	WatermarkPromptMarkup *botgotd.ReplyKeyboardMarkup
-
-	// RemoveKeyboard removes the reply keyboard.
-	RemoveKeyboard *botgotd.ReplyKeyboardRemove
+	SkipFloodWaitMarkup    *botgotd.ReplyKeyboardMarkup
+	UbahModeMarkup         *botgotd.ReplyKeyboardMarkup
+	TimerMarkup            *botgotd.ReplyKeyboardMarkup
+	ResetMarkup            *botgotd.ReplyKeyboardMarkup
+	HapusListMarkup        *botgotd.ReplyKeyboardMarkup
+	HapusGrupMarkup        *botgotd.ReplyKeyboardMarkup
+	CancelMarkup           *botgotd.ReplyKeyboardMarkup
+	CreateChoiceMarkup     *botgotd.ReplyKeyboardMarkup
+	InstallPhoneMarkup     *botgotd.ReplyKeyboardMarkup
+	WatermarkPromptMarkup  *botgotd.ReplyKeyboardMarkup
+	RemoveKeyboard         *botgotd.ReplyKeyboardRemove
 )
 
 func init() {
@@ -203,7 +170,7 @@ func init() {
 		Keyboard:       [][]botgotd.KeyboardButton{{{Text: BtnBatal}}},
 		ResizeKeyboard: true,
 	}
-	CancelMarkup = CancelOnlyMarkup // alias
+	CancelMarkup = CancelOnlyMarkup
 
 	AturJedaMarkup = &botgotd.ReplyKeyboardMarkup{
 		Keyboard: [][]botgotd.KeyboardButton{
@@ -255,7 +222,7 @@ func init() {
 		Keyboard: [][]botgotd.KeyboardButton{
 			{{Text: BtnUpgradeToken}, {Text: BtnGantiToken}},
 			{{Text: BtnBackupData}, {Text: BtnRestoreData}},
-			{{Text: BtnAmbilToken}},
+			{{Text: BtnAmbilToken}, {Text: BtnPindahAkses}},
 			{{Text: BtnStatus}, {Text: BtnHome}},
 		},
 		ResizeKeyboard: true,

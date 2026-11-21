@@ -157,6 +157,11 @@ func (h *Handler) transferTokenSlotBetweenAccounts(ctx context.Context, oldOwner
 			if oldCfg.ActiveTokenSHA == oldSHA || oldCfg.ActiveTokenSHA == "" {
 				_ = h.switchUserActiveToken(ctx, oldOwnerID, nextBest)
 			}
+			oldCfg = h.db.GetUserConfig(ctx, oldOwnerID)
+			oldCfg.Status = "Berhenti"
+			oldCfg.TindakanTerkini = "Token dipindahkan ke akun lain"
+			oldCfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
+			_ = h.db.SaveUserConfig(ctx, oldCfg)
 		} else {
 			oldCfg := h.db.GetUserConfig(ctx, oldOwnerID)
 			oldCfg.ActiveTokenSHA = ""
@@ -165,14 +170,23 @@ func (h *Handler) transferTokenSlotBetweenAccounts(ctx context.Context, oldOwner
 			oldCfg.TindakanTerkini = "Token dipindahkan ke akun lain"
 			oldCfg.TindakanTerakhir = time.Now().Format("02 Jan 2006 15:04")
 			_ = h.db.SaveUserConfig(ctx, oldCfg)
-			if h.broker != nil {
-				_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
-					ChatID:  oldOwnerID,
-					UserID:  lic.UserbotID,
-					OwnerID: oldOwnerID,
-					Type:    "revoke_transferred_session",
-				})
+		}
+
+		if sq := h.db.GetSQLiteDB(); sq != nil {
+			_, _ = sq.ExecContext(ctx, `DELETE FROM sessions WHERE chat_id = ? OR owner_id = ? OR account_id = ?`, oldOwnerID, oldOwnerID, oldOwnerID)
+			if lic.UserbotID != 0 && lic.UserbotID != oldOwnerID {
+				_, _ = sq.ExecContext(ctx, `DELETE FROM sessions WHERE chat_id = ? OR owner_id = ? OR account_id = ?`, lic.UserbotID, lic.UserbotID, lic.UserbotID)
 			}
+		}
+
+		if h.broker != nil {
+			_ = h.broker.To(ctx, "to:ubot:command", models.PToService{
+				ChatID:  oldOwnerID,
+				UserID:  lic.UserbotID,
+				OwnerID: oldOwnerID,
+				Text:    "Akses token dipindahkan ke akun Telegram lain",
+				Type:    "revoke_transferred_session",
+			})
 		}
 	}
 	return newLic, nil

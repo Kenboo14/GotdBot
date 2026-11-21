@@ -28,19 +28,8 @@ type broadcastTarget struct {
 
 func (s *Service) broadcastCommand(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, msg *tg.Message, args string, threadID int) error {
 	parts := strings.Fields(args)
-	if len(parts) > 0 && (strings.EqualFold(parts[0], "cancel") || strings.EqualFold(parts[0], "stop")) {
-		ownerID, err := s.userbotOwner(ctx, client)
-		if err != nil {
-			return err
-		}
-		s.mu.Lock()
-		job := s.broadcasts[ownerID]
-		s.mu.Unlock()
-		if job == nil {
-			return sendUserText(ctx, client, target, "Tidak ada broadcast yang berjalan.", threadID)
-		}
-		job.cancel()
-		return sendUserText(ctx, client, target, "Permintaan pembatalan broadcast diterima.", threadID)
+	if len(parts) > 0 && isCancelArg(parts[0]) {
+		return s.cancelBroadcastJob(ctx, client, target, threadID)
 	}
 	if len(parts) == 0 {
 		return sendUserText(ctx, client, target, "Gunakan: !gcast -gc|-pc|-ch [-bl] <pesan>", threadID)
@@ -61,6 +50,9 @@ func (s *Service) broadcastCommand(ctx context.Context, client *gobot.Client, ta
 		default:
 			textParts = append(textParts, part)
 		}
+	}
+	if len(textParts) == 1 && isCancelArg(textParts[0]) {
+		return s.cancelBroadcastJob(ctx, client, target, threadID)
 	}
 	if len(types) == 0 {
 		return sendUserText(ctx, client, target, "Flag target wajib diisi. Contoh: !gcast -gc -bl Halo grup.", threadID)
@@ -94,35 +86,16 @@ func (s *Service) broadcastCommand(ctx context.Context, client *gobot.Client, ta
 	if len(targets) == 0 {
 		return sendUserText(ctx, client, target, "Tidak ada target yang sesuai.", threadID)
 	}
-	taskID := fmt.Sprintf("%d-%d", ownerID, time.Now().UnixNano())
 	// The inline acknowledgement stays in the originating chat. Detailed
 	// progress and the final report are always delivered by BOT_TOKEN to the
 	// owner's private chat.
 	monitorChatID := ownerID
 
-	// Hierarki Context: jobCtx diturunkan dari accountCtx (bukan hanya s.root),
-	// sehingga jika lifecycle akun dihentikan, seluruh job akun ini otomatis dibatalkan.
-	s.mu.Lock()
-	var accountCtx context.Context
-	for cid, oid := range s.owners {
-		if oid == ownerID {
-			accountCtx = s.accountCtxs[cid]
-			break
-		}
-	}
-	if accountCtx == nil {
-		accountCtx = s.root
-	}
-	jobCtx, cancel := context.WithCancel(accountCtx)
-	job := &broadcastJob{id: taskID, cancel: cancel}
-
-	if s.broadcasts[ownerID] != nil {
-		s.mu.Unlock()
-		cancel()
+	jobCtx, job, ok := s.acquireBroadcastJob(ownerID)
+	if !ok {
 		return sendUserText(ctx, client, target, "Broadcast akun ini sedang berjalan. Gunakan !gcast cancel.", threadID)
 	}
-	s.broadcasts[ownerID] = job
-	s.mu.Unlock()
+	taskID := job.id
 	// Put an inline message into the originating chat so Telegram displays
 	// the `via @bot` attribution. The Bot API monitor below remains active as
 	// a second, editable status message.
@@ -136,11 +109,11 @@ func (s *Service) broadcastCommand(ctx context.Context, client *gobot.Client, ta
 	}
 	if monitorChatID != 0 {
 		if err = s.notifyBroadcast(ctx, monitorChatID, ownerID, taskID, "broadcast_start", len(targets), 0, 0, 0, nil); err != nil {
-			cancel()
+			s.releaseBroadcastJob(ownerID, job)
 			return err
 		}
 	} else if err = sendUserText(ctx, client, target, fmt.Sprintf("Broadcast dimulai ke %d target.", len(targets)), threadID); err != nil {
-		cancel()
+		s.releaseBroadcastJob(ownerID, job)
 		return err
 	}
 	go func() {
@@ -432,13 +405,25 @@ func dialogKind(peer tg.InputPeerClass, entities tg.Entities, ownerID int64) (st
 		user := entities.Users[value.UserID]
 		return "private", value.UserID, value.UserID == ownerID || user != nil && (user.Bot || user.Deleted)
 	case *tg.InputPeerChat:
+		if chat := entities.Chats[value.ChatID]; chat != nil && (chat.Left || chat.Deactivated) {
+			return "", 0, true
+		}
 		return "group", value.ChatID, false
 	case *tg.InputPeerChannel:
 		// Telegram represents supergroups as channels with Megagroup=true.
 		// They should be selected by -gc; only broadcast channels belong to
 		// the separate -ch category.
-		if channel := entities.Channels[value.ChannelID]; channel != nil && channel.Megagroup {
-			return "group", value.ChannelID, false
+		if channel := entities.Channels[value.ChannelID]; channel != nil {
+			if channel.Left {
+				return "", 0, true
+			}
+			if channel.Megagroup {
+				return "group", value.ChannelID, false
+			}
+			if !channel.Creator && !channel.AdminRights.PostMessages {
+				return "", 0, true
+			}
+			return "channel", value.ChannelID, false
 		}
 		return "channel", value.ChannelID, false
 	default:
@@ -471,6 +456,7 @@ func dialogName(peer tg.InputPeerClass, entities tg.Entities, id int64) string {
 }
 
 func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerID int64, job *broadcastJob, targets []broadcastTarget, text string, entities []tg.MessageEntityClass, replyMessageID int, target tg.InputPeerClass, monitorChatID int64, taskID string, threadID int) {
+	defer s.releaseBroadcastJob(ownerID, job)
 	success, failed := 0, 0
 	lastBucket := 0
 	lastProgress := 0
@@ -486,43 +472,29 @@ func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerI
 				failures = append(failures, fmt.Sprintf("%s: %s", item.Name, compactBroadcastError(randomErr)))
 			}
 		} else {
-			var sendErr error
-			if replyMessageID != 0 && len(entities) == 0 {
-				// If Telegram did not return entities, forward the original
-				// message as a lossless formatting fallback.
-				_, sendErr = client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
-					FromPeer: target, ID: []int{replyMessageID}, RandomID: []int64{randomID},
-					ToPeer: item.Peer, DropAuthor: true,
-				})
-			} else {
-				_, sendErr = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{Peer: item.Peer, Message: text, Entities: entities, RandomID: randomID})
-			}
-			if sendErr != nil {
-				if flood, ok := tgerr.AsFloodWait(sendErr); ok {
-					waitDur := flood + 500*time.Millisecond
-					log.Printf("[userbot %d] Broadcast FloodWait %v. Backing off...", ownerID, waitDur)
-					select {
-					case <-ctx.Done():
-						break
-					case <-time.After(waitDur):
-						if replyMessageID != 0 && len(entities) == 0 {
-							_, sendErr = client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
-								FromPeer: target, ID: []int{replyMessageID}, RandomID: []int64{randomID},
-								ToPeer: item.Peer, DropAuthor: true,
-							})
-						} else {
-							_, sendErr = client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{Peer: item.Peer, Message: text, Entities: entities, RandomID: randomID})
-						}
-					}
+			sendErr := sendWithFloodRetry(ctx, ownerID, "Broadcast", func() error {
+				if replyMessageID != 0 && len(entities) == 0 {
+					// If Telegram did not return entities, forward the original
+					// message as a lossless formatting fallback.
+					_, err := client.API().MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
+						FromPeer: target, ID: []int{replyMessageID}, RandomID: []int64{randomID},
+						ToPeer: item.Peer, DropAuthor: true,
+					})
+					return err
 				}
+				_, err := client.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{Peer: item.Peer, Message: text, Entities: entities, RandomID: randomID})
+				return err
+			})
+			if sendErr != nil && ctx.Err() != nil {
+				break
 			}
-			var peerFlooded bool
+			var fatalStop bool
 			if sendErr != nil {
 				failed++
-				if isPeerFloodError(sendErr) {
-					peerFlooded = true
+				if label, isFatal := classifyBroadcastFatalError(sendErr); isFatal {
+					fatalStop = true
 					if len(failures) < 100 {
-						failures = append(failures, fmt.Sprintf("%s: Dihentikan (PEER_FLOOD)", item.Name))
+						failures = append(failures, fmt.Sprintf("%s: %s", item.Name, label))
 					}
 				} else if len(failures) < 100 {
 					failures = append(failures, fmt.Sprintf("%s: %s", item.Name, compactBroadcastError(sendErr)))
@@ -530,8 +502,8 @@ func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerI
 			} else {
 				success++
 			}
-			if peerFlooded {
-				log.Printf("[userbot %d] Broadcast stopped early due to PEER_FLOOD", ownerID)
+			if fatalStop {
+				log.Printf("[userbot %d] Broadcast stopped early due to %v", ownerID, sendErr)
 				break
 			}
 		}
@@ -550,16 +522,13 @@ func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerI
 				_ = s.notifyBroadcast(context.Background(), monitorChatID, ownerID, taskID, "broadcast_progress", len(targets), lastProgress, success, failed, nil)
 			}
 		}
-		select {
-		case <-ctx.Done():
-		case <-time.After(broadcastStepDelay(item.Kind)):
+		if !waitContextDelay(ctx, broadcastStepDelay(item.Kind)) {
+			break
 		}
 	}
 	if monitorChatID != 0 {
 		progress := lastProgress
-		if ctx.Err() != nil {
-			progress = lastProgress
-		} else {
+		if ctx.Err() == nil {
 			progress = 100
 		}
 		_ = s.notifyBroadcast(context.Background(), monitorChatID, ownerID, taskID, "broadcast_done", len(targets), progress, success, failed, failures)
@@ -570,11 +539,6 @@ func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerI
 		}
 		_ = sendUserText(context.Background(), client, target, final, threadID)
 	}
-	s.mu.Lock()
-	if s.broadcasts[ownerID] == job {
-		delete(s.broadcasts, ownerID)
-	}
-	s.mu.Unlock()
 }
 
 func (s *Service) notifyBroadcast(ctx context.Context, chatID, ownerID int64, taskID, kind string, total, progress, success, failed int, failures []string) error {
@@ -582,6 +546,111 @@ func (s *Service) notifyBroadcast(ctx context.Context, chatID, ownerID int64, ta
 		ChatID: chatID, Type: kind, OwnerID: ownerID, TaskID: taskID,
 		Total: total, Progress: progress, Success: success, Failed: failed, Errors: failures,
 	})
+}
+
+// Hierarki Context: jobCtx diturunkan dari accountCtx (bukan hanya s.root),
+// sehingga jika lifecycle akun dihentikan, seluruh job akun ini otomatis dibatalkan.
+func (s *Service) acquireBroadcastJob(ownerID int64) (context.Context, *broadcastJob, bool) {
+	taskID := fmt.Sprintf("%d-%d", ownerID, time.Now().UnixNano())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.broadcasts == nil {
+		s.broadcasts = make(map[int64]*broadcastJob)
+	}
+	if s.broadcasts[ownerID] != nil {
+		return nil, nil, false
+	}
+	var accountCtx context.Context
+	for cid, oid := range s.owners {
+		if oid == ownerID {
+			accountCtx = s.accountCtxs[cid]
+			break
+		}
+	}
+	if accountCtx == nil {
+		accountCtx = s.root
+	}
+	if accountCtx == nil {
+		accountCtx = context.Background()
+	}
+	jobCtx, cancel := context.WithCancel(accountCtx)
+	job := &broadcastJob{id: taskID, cancel: cancel}
+	s.broadcasts[ownerID] = job
+	return jobCtx, job, true
+}
+
+func (s *Service) releaseBroadcastJob(ownerID int64, job *broadcastJob) {
+	if job == nil {
+		return
+	}
+	if job.cancel != nil {
+		job.cancel()
+	}
+	s.mu.Lock()
+	if s.broadcasts[ownerID] == job {
+		delete(s.broadcasts, ownerID)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Service) cancelBroadcastJob(ctx context.Context, client *gobot.Client, target tg.InputPeerClass, threadID int) error {
+	ownerID, err := s.userbotOwner(ctx, client)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	job := s.broadcasts[ownerID]
+	s.mu.Unlock()
+	if job == nil {
+		return sendUserText(ctx, client, target, "Tidak ada broadcast yang berjalan.", threadID)
+	}
+	job.cancel()
+	return sendUserText(ctx, client, target, "Permintaan pembatalan broadcast diterima.", threadID)
+}
+
+func isCancelArg(args string) bool {
+	trimmed := strings.TrimSpace(args)
+	return strings.EqualFold(trimmed, "cancel") || strings.EqualFold(trimmed, "stop")
+}
+
+func waitContextDelay(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func sendWithFloodRetry(ctx context.Context, ownerID int64, tag string, sendFn func() error) error {
+	err := sendFn()
+	if err == nil {
+		return nil
+	}
+	if flood, ok := tgerr.AsFloodWait(err); ok {
+		waitDur := flood + 500*time.Millisecond
+		log.Printf("[userbot %d] %s FloodWait %v. Backing off...", ownerID, tag, waitDur)
+		if !waitContextDelay(ctx, waitDur) {
+			return ctx.Err()
+		}
+		return sendFn()
+	}
+	return err
+}
+
+func classifyBroadcastFatalError(err error) (string, bool) {
+	if isSessionRevokedError(err) {
+		return "Dihentikan (sesi terputus)", true
+	}
+	if isPeerFloodError(err) {
+		return "Dihentikan (PEER_FLOOD)", true
+	}
+	return "", false
 }
 
 func broadcastStepDelay(kind string) time.Duration {

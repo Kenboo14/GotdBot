@@ -467,9 +467,16 @@ func (s *Service) revokeSessionWithReason(ctx context.Context, chatID, userbotID
 	}
 	s.mu.RUnlock()
 
-	if s.sqlite != nil && userbotID != 0 {
-		if row, err := s.sqlite.GetSessionByAccount(ctx, userbotID); err == nil && row != nil {
-			addTarget(row.ChatID)
+	if s.sqlite != nil {
+		if chatID != 0 {
+			if row, err := s.sqlite.GetSessionByChat(ctx, chatID); err == nil && row != nil {
+				addTarget(row.ChatID)
+			}
+		}
+		if userbotID != 0 {
+			if row, err := s.sqlite.GetSessionByAccount(ctx, userbotID); err == nil && row != nil {
+				addTarget(row.ChatID)
+			}
 		}
 	}
 
@@ -532,14 +539,40 @@ func (s *Service) revokeSessionWithReason(ctx context.Context, chatID, userbotID
 
 		if s.sqlite != nil {
 			_ = s.sqlite.DeleteSession(context.Background(), cid)
+			_, _ = s.sqlite.DB.ExecContext(context.Background(), `DELETE FROM sessions WHERE chat_id = ? OR owner_id = ? OR account_id = ?`, cid, cid, cid)
 		}
 		if s.db != nil {
-			_, _ = s.db.Collection("userbot_sessions").DeleteOne(context.Background(), bson.M{"_id": cid})
+			_, _ = s.db.Collection("userbot_sessions").DeleteMany(context.Background(), bson.M{
+				"$or": []bson.M{
+					{"_id": cid},
+					{"owner_id": cid},
+					{"account_id": cid},
+				},
+			})
 		}
 
 		s.mu.Lock()
 		s.accountStates[cid] = StateStopped
 		s.mu.Unlock()
+	}
+
+	if s.sqlite != nil {
+		for _, id := range []int64{chatID, userbotID} {
+			if id != 0 {
+				_, _ = s.sqlite.DB.ExecContext(context.Background(), `DELETE FROM sessions WHERE chat_id = ? OR owner_id = ? OR account_id = ?`, id, id, id)
+			}
+		}
+	}
+	if s.db != nil {
+		var filters []bson.M
+		for _, id := range []int64{chatID, userbotID} {
+			if id != 0 {
+				filters = append(filters, bson.M{"_id": id}, bson.M{"owner_id": id}, bson.M{"account_id": id})
+			}
+		}
+		if len(filters) > 0 {
+			_, _ = s.db.Collection("userbot_sessions").DeleteMany(context.Background(), bson.M{"$or": filters})
+		}
 	}
 }
 

@@ -2,12 +2,14 @@ package controllers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,7 +56,11 @@ type stackResourceStats struct {
 var (
 	dockerClientOnce sync.Once
 	dockerHTTPClient *http.Client
+	autoCleanMu      sync.Mutex
+	lastAutoCleanAt  time.Time
 )
+
+const autoCleanInterval = 5 * time.Minute
 
 func getDockerClient(socketPath string) *http.Client {
 	dockerClientOnce.Do(func() {
@@ -187,21 +193,74 @@ func readSingleContainerStats(ctx context.Context, client *http.Client, cid stri
 		cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
 	}
 
+	memMB := computeContainerWorkingSetMB(s)
+
+	return cpuPercent, memMB, nil
+}
+
+func computeContainerWorkingSetMB(s containerStatsPayload) float64 {
 	memUsage := s.MemoryStats.Usage
 	var cache uint64
-	if val, ok := s.MemoryStats.Stats["inactive_file"]; ok {
+	if val, ok := s.MemoryStats.Stats["file"]; ok && val > 0 {
 		cache = val
-	} else if val, ok := s.MemoryStats.Stats["total_inactive_file"]; ok {
-		cache = val
-	} else if val, ok := s.MemoryStats.Stats["cache"]; ok {
-		cache = val
+	} else {
+		var fileSum uint64
+		if val, ok := s.MemoryStats.Stats["active_file"]; ok {
+			fileSum += val
+		}
+		if val, ok := s.MemoryStats.Stats["inactive_file"]; ok {
+			fileSum += val
+		}
+		if fileSum > 0 {
+			cache = fileSum
+		} else if val, ok := s.MemoryStats.Stats["total_inactive_file"]; ok {
+			cache = val
+		} else if val, ok := s.MemoryStats.Stats["cache"]; ok {
+			cache = val
+		}
 	}
 	if memUsage > cache {
 		memUsage -= cache
 	}
-	memMB := float64(memUsage) / (1024 * 1024)
+	return float64(memUsage) / (1024 * 1024)
+}
 
-	return cpuPercent, memMB, nil
+func maybeAutoCleanStackMemory(ctx context.Context, rdb *redis.Client) {
+	now := time.Now()
+	autoCleanMu.Lock()
+	if !lastAutoCleanAt.IsZero() && now.Sub(lastAutoCleanAt) < autoCleanInterval {
+		autoCleanMu.Unlock()
+		return
+	}
+	lastAutoCleanAt = now
+	autoCleanMu.Unlock()
+
+	cleanCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	if rdb != nil {
+		_ = rdb.XTrimMaxLenApprox(cleanCtx, "session:events", 250, 0).Err()
+		_ = rdb.Do(cleanCtx, "MEMORY", "PURGE").Err()
+	}
+
+	var sq *sql.DB
+	if globalDevMonitor != nil {
+		globalDevMonitor.mu.Lock()
+		dm := globalDevMonitor.db
+		globalDevMonitor.mu.Unlock()
+		if dm != nil {
+			sq = dm.GetSQLiteDB()
+		}
+	}
+	if sq != nil {
+		_, _ = sq.ExecContext(cleanCtx, "PRAGMA shrink_memory;")
+	}
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if ms.HeapIdle > ms.HeapReleased && (ms.HeapIdle-ms.HeapReleased) > 20*1024*1024 {
+		debug.FreeOSMemory()
+	}
 }
 
 func parseRedisMemoryMB(ctx context.Context, rdb *redis.Client) float64 {
@@ -224,6 +283,11 @@ func parseRedisMemoryMB(ctx context.Context, rdb *redis.Client) float64 {
 }
 
 func (t *telemetryTracker) updateSystemResourceStats(ctx context.Context) {
+	t.mu.RLock()
+	rdb := t.rdb
+	t.mu.RUnlock()
+	maybeAutoCleanStackMemory(ctx, rdb)
+
 	stats, err := fetchDockerStackStats(ctx)
 	if err == nil && stats != nil && stats.TotalMemMB > 0 {
 		t.mu.Lock()
@@ -239,7 +303,6 @@ func (t *telemetryTracker) updateSystemResourceStats(ctx context.Context) {
 
 	t.mu.RLock()
 	ubotSysMB := float64(t.simulasiMetrics.RAMSysMB)
-	rdb := t.rdb
 	t.mu.RUnlock()
 
 	redisMB := parseRedisMemoryMB(ctx, rdb)

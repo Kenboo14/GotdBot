@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -147,6 +149,19 @@ func (s *Service) reapStaleResources() {
 
 	// 5. Pruning sync.Map untuk mencegah unbounded memory retention
 	pruneSyncMap(&s.albumCache, 2000, 400)
+	pruneSyncMap(&s.botUserCache, 2000, 400)
+	pruneSyncMap(&s.logStatusCache, 1000, 200)
+	pruneSyncMap(&s.logBlockCache, 2000, 400)
+
+	if s.sqlite != nil && s.sqlite.DB != nil {
+		_, _ = s.sqlite.DB.Exec("PRAGMA shrink_memory;")
+	}
+
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	if ms.HeapIdle > ms.HeapReleased && (ms.HeapIdle-ms.HeapReleased) > 24*1024*1024 {
+		debug.FreeOSMemory()
+	}
 }
 
 func (s *Service) recordIncomingUpdate(chatID int64) {

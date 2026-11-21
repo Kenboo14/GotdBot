@@ -73,9 +73,12 @@ func (h *Handler) renderSettingsView(ctx context.Context, b *botgotd.Bot, chatID
   <tr><td>✉️ Email Darurat</td><td>%s</td></tr>
   <tr><td>👤 Admin Darurat</td><td>%s</td></tr>
 </table>
-<blockquote expandable>🔄 Gunakan <b>🔑 Tambah Token 🔑</b> untuk menambah slot baru atau <b>🔄 Ganti Token 🔄</b> untuk berpindah slot. 🔒 <b>Ambil Token</b> melihat kode akses slot aktif, 📎 <b>Backup Data</b> menyalin List &amp; Grup antar-slot atau akun.</blockquote>
+<blockquote expandable>🔄 Gunakan <b>🔑 Tambah Token 🔑</b> untuk menambah slot baru atau <b>🔄 Ganti Token 🔄</b> untuk berpindah slot. 🔀 <b>Pindah Akses</b> memindahkan token &amp; data ke user lain (sesi lama otomatis dicopot saat user tujuan berhasil pasang).</blockquote>
 <tg-button-row>
   <tg-button type="callback_data" data="panel:token:menu" style="primary">🔄 Ganti Token</tg-button>
+  <tg-button type="callback_data" data="panel:settings:transfer">🔀 Pindah Akses</tg-button>
+</tg-button-row>
+<tg-button-row>
   <tg-button type="callback_data" data="panel:settings:backup">📎 Backup Data</tg-button>
 </tg-button-row>
 <hr/>
@@ -162,7 +165,7 @@ func (h *Handler) PromptUpgradeToken(ctx context.Context, b *botgotd.Bot, chatID
   <tr><td>🎖️ Slot Aktif Sekarang</td><td><code>%s</code> (<code>%d slot aktif</code>)</td></tr>
   <tr><td>⏳ Masa Aktif</td><td><code>%s</code></td></tr>
 </table>
-<blockquote expandable>Kirimkan voucher (<code>GOTD:M...</code>) dari Owner untuk membuka slot baru tersendiri, atau kirimkan token akses (<code>GOTD:S...</code>) milik slot Anda untuk langsung berpindah.</blockquote>
+<blockquote expandable>Kirimkan voucher (<code>GOTD:M...</code>) dari Owner untuk membuka slot baru tersendiri, atau kirimkan token akses (<code>GOTD:S...</code>) untuk berpindah slot atau menerima pindahan akses dari akun lain.</blockquote>
 <hr/>
 <p>GotdBot • Account &amp; Slot Security</p>`,
 			html.EscapeString(curTier), len(activeSlots), html.EscapeString(curExp),
@@ -194,6 +197,9 @@ func (h *Handler) PromptRestoreDataBackup(ctx context.Context, b *botgotd.Bot, c
 
 func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, chatID, userID int64, state, text string) bool {
 	switch state {
+	case "waiting_transfer_token_target":
+		return h.handleTransferTargetInput(ctx, b, chatID, userID, text)
+
 	case "waiting_upgrade_token":
 		if isKnownPanelButton(text) {
 			h.setPanelState(chatID, "")
@@ -233,13 +239,17 @@ func (h *Handler) handleSettingsPanelInput(ctx context.Context, b *botgotd.Bot, 
 				return true
 			}
 			if lic.OwnerChatID != effectiveID && lic.UserbotID != effectiveID {
-				b.SendMessage(ctx, &botgotd.SendMessageParams{
-					ChatID:      chatID,
-					Text:        `<h1>ℹ️ Token Milik Akun Lain</h1><blockquote expandable>Token tersebut terdaftar di akun Telegram lain. Gunakan menu <b>/start → 🔑 Input Token 🔑</b> untuk memindahkan slot tersebut ke akun ini.</blockquote><hr/><p>GotdBot • Account &amp; Slot Security</p>`,
-					ParseMode:   "HTML",
-					ReplyMarkup: assets.SettingsMenuMarkup,
-				})
-				h.setPanelState(chatID, "")
+				if !databases.GetTierPolicy(lic.Tier).AllowLicenseToken {
+					b.SendMessage(ctx, &botgotd.SendMessageParams{
+						ChatID:      chatID,
+						Text:        "<h1>🔒 Token Free Tidak Dapat Dipindahkan</h1><blockquote expandable>Token paket 🆓 Free terikat pada akun awal dan tidak bisa dipindahkan ke akun lain.</blockquote><hr/><p>GotdBot • License Protection</p>",
+						ParseMode:   "HTML",
+						ReplyMarkup: assets.SettingsMenuMarkup,
+					})
+					h.setPanelState(chatID, "")
+					return true
+				}
+				h.startForeignTokenInstall(ctx, b, chatID, lic)
 				return true
 			}
 			if err := h.switchUserActiveToken(ctx, effectiveID, lic); err != nil {

@@ -1370,6 +1370,23 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 
 	s.preWarmDialogAccessHashes(ctx, client, ownerID)
 	topicRotator := newTopicPlayTracker()
+	putaran := 0
+	roundSuccess := 0
+	var roundFailures []panelRoundFailure
+
+	emitRoundIfComplete := func(currentCfg jasebConfigDoc, grpIdx, postMsgID int) {
+		if len(currentCfg.Groups) == 0 || grpIdx < len(currentCfg.Groups)-1 {
+			return
+		}
+		putaran++
+		if !isPanelNotifikasiOff(currentCfg.Notifikasi) {
+			snippet, headerTag := s.resolvePanelPostMeta(ctx, client, cachePeer, currentCfg, postMsgID)
+			logHTML := formatPanelRoundLogHTML(snippet, headerTag, putaran, roundSuccess, roundFailures)
+			s.emitPanelBroadcastLog(ctx, currentCfg, logHTML)
+		}
+		roundSuccess = 0
+		roundFailures = nil
+	}
 
 	for {
 		cfg = s.getJasebConfig(ctx, ownerID)
@@ -1428,6 +1445,7 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 			}
 		}
 		grp := cfg.Groups[groupIndex]
+		msgID := cfg.Lists[listIndex]
 		select {
 		case <-ctx.Done():
 			return
@@ -1436,20 +1454,33 @@ func (s *Service) executePanelBroadcast(ctx context.Context, client *gobot.Clien
 
 		targetPeer, err := s.resolveTargetPeer(ctx, client, grp.ChatID, grp.Target, grp.AccessHash, grp.PeerType)
 		if err != nil {
-			log.Printf("[panelBroadcast] resolve target %s error: %v", grp.Target, err)
+			roundFailures = append(roundFailures, panelRoundFailure{
+				Title:  panelGroupLabel(grp),
+				Reason: humanizePanelBroadcastError(err),
+			})
+			emitRoundIfComplete(cfg, groupIndex, msgID)
 			nextAt := computeBroadcastNextAt(cfg, groupIndex)
 			s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
 			continue
 		}
 
-		msgID := cfg.Lists[listIndex]
-		if !s.deliverGroupBroadcast(ctx, client, cachePeer, targetPeer, cfg, grp, msgID, topicRotator) {
+		keepRunning, sentOk, failReason := s.deliverGroupBroadcast(ctx, client, cachePeer, targetPeer, cfg, grp, msgID, topicRotator)
+		if !keepRunning {
 			return
 		}
-		if freeDailyLimitForTier(activeTier) > 0 && s.sqlite != nil {
-			_, _ = s.sqlite.IncrementDailySendCount(context.Background(), ownerID, todayWIBKey(time.Now()))
+		if sentOk {
+			roundSuccess++
+			if freeDailyLimitForTier(activeTier) > 0 && s.sqlite != nil {
+				_, _ = s.sqlite.IncrementDailySendCount(context.Background(), ownerID, todayWIBKey(time.Now()))
+			}
+		} else if failReason != "" {
+			roundFailures = append(roundFailures, panelRoundFailure{
+				Title:  panelGroupLabel(grp),
+				Reason: failReason,
+			})
 		}
 
+		emitRoundIfComplete(cfg, groupIndex, msgID)
 		nextAt := computeBroadcastNextAt(cfg, groupIndex)
 		s.savePanelBroadcastCheckpoint(context.Background(), ownerID, (workIndex+1)%totalWork, nextAt)
 	}
