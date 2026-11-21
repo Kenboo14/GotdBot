@@ -15,9 +15,15 @@ import (
 
 type shopPackage struct {
 	ID           string `json:"id"`
+	BaseID       string `json:"base_id"`
 	Name         string `json:"name"`
 	Tier         string `json:"tier"`
+	Qty          int    `json:"qty"`
 	DurationDays int    `json:"duration_days"`
+	UnitPriceIDR int64  `json:"unit_price_idr"`
+	SubtotalIDR  int64  `json:"subtotal_idr"`
+	DiscountPct  int    `json:"discount_pct"`
+	DiscountIDR  int64  `json:"discount_idr"`
 	PriceIDR     int64  `json:"price_idr"`
 	Description  string `json:"description"`
 }
@@ -75,31 +81,140 @@ func (c pgClientConfig) isConfigured() bool {
 	return c.BaseURL != "" && c.APIKey != ""
 }
 
-func defaultShopPackages() []shopPackage {
+func baseShopCatalogDefs() []shopPackage {
 	return []shopPackage{
-		{ID: "pro_7d", Name: "💎 Pro 7 Hari", Tier: "Pro", DurationDays: 7, PriceIDR: 15000, Description: "Bebas atur jeda & limit grup penuh"},
-		{ID: "pro_30d", Name: "💎 Pro 30 Hari", Tier: "Pro", DurationDays: 30, PriceIDR: 45000, Description: "Bebas atur jeda, topik & ekspor penuh"},
-		{ID: "proplus_30d", Name: "👑 Pro++ 30 Hari", Tier: "Pro++", DurationDays: 30, PriceIDR: 65000, Description: "Semua fitur Pro + Custom Watermark & Forward"},
-		{ID: "vip_30d", Name: "🌟 VIP 30 Hari", Tier: "Vip", DurationDays: 30, PriceIDR: 100000, Description: "Prioritas maksimal & seluruh fitur tanpa batas"},
+		{
+			ID:           "pro:1",
+			BaseID:       "pro",
+			Name:         "💎 Pro",
+			Tier:         "Pro",
+			Qty:          1,
+			DurationDays: 30,
+			UnitPriceIDR: 45000,
+			PriceIDR:     45000,
+			Description:  "Bebas atur jeda, topik & ekspor penuh",
+		},
+		{
+			ID:           "proplus:1",
+			BaseID:       "proplus",
+			Name:         "👑 Pro++",
+			Tier:         "Pro++",
+			Qty:          1,
+			DurationDays: 30,
+			UnitPriceIDR: 65000,
+			PriceIDR:     65000,
+			Description:  "Semua fitur Pro + Custom Watermark & Forward",
+		},
 	}
 }
 
-func loadShopPackages() []shopPackage {
-	raw := strings.TrimSpace(os.Getenv("SHOP_PACKAGES_JSON"))
-	if raw != "" {
-		var pkgs []shopPackage
-		if json.Unmarshal([]byte(raw), &pkgs) == nil && len(pkgs) > 0 {
-			return pkgs
-		}
+func normalizeShopBaseID(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "pro", "pro_7d", "pro_30d":
+		return "pro", true
+	case "proplus", "pro++", "proplus_30d":
+		return "proplus", true
+	default:
+		return "", false
 	}
-	return defaultShopPackages()
 }
 
-func findShopPackage(id string) (shopPackage, bool) {
-	for _, p := range loadShopPackages() {
-		if p.ID == id {
-			return p, true
+func parseShopPackageSpec(spec string) (string, int, bool) {
+	raw := strings.TrimSpace(spec)
+	if raw == "" {
+		return "", 0, false
+	}
+	qty := 1
+	idPart := raw
+	if idx := strings.IndexByte(raw, ':'); idx >= 0 {
+		idPart = raw[:idx]
+		parsedQty, err := strconv.Atoi(strings.TrimSpace(raw[idx+1:]))
+		if err != nil {
+			return "", 0, false
 		}
+		qty = parsedQty
+	}
+	baseID, ok := normalizeShopBaseID(idPart)
+	if !ok {
+		return "", 0, false
+	}
+	return baseID, qty, true
+}
+
+func computeShopPackage(base shopPackage, pr shopItemPricing, qty int) shopPackage {
+	if qty < 1 {
+		qty = 1
+	}
+	if qty > shopMaxQty {
+		qty = shopMaxQty
+	}
+	unit := pr.PriceIDR
+	if unit < shopMinPriceIDR {
+		unit = base.UnitPriceIDR
+	}
+	discPct := pr.DiscountPct
+	if discPct < 0 {
+		discPct = 0
+	}
+	if discPct > 99 {
+		discPct = 99
+	}
+	subtotal := unit * int64(qty)
+	discIDR := (subtotal * int64(discPct)) / 100
+	finalPrice := subtotal - discIDR
+	if finalPrice < shopMinPriceIDR {
+		finalPrice = shopMinPriceIDR
+	}
+	return shopPackage{
+		ID:           fmt.Sprintf("%s:%d", base.BaseID, qty),
+		BaseID:       base.BaseID,
+		Name:         base.Name,
+		Tier:         base.Tier,
+		Qty:          qty,
+		DurationDays: 30 * qty,
+		UnitPriceIDR: unit,
+		SubtotalIDR:  subtotal,
+		DiscountPct:  discPct,
+		DiscountIDR:  discIDR,
+		PriceIDR:     finalPrice,
+		Description:  base.Description,
+	}
+}
+
+func (h *Handler) listShopPackages() []shopPackage {
+	defs := baseShopCatalogDefs()
+	out := make([]shopPackage, 0, len(defs))
+	for _, base := range defs {
+		var pr shopItemPricing
+		if h != nil && h.shop != nil {
+			pr = h.shop.getPricing(base.BaseID)
+		} else {
+			pr = shopItemPricing{PriceIDR: base.UnitPriceIDR, DiscountPct: 0}
+		}
+		out = append(out, computeShopPackage(base, pr, 1))
+	}
+	return out
+}
+
+func (h *Handler) resolveShopPackage(spec string, qtyOverride int) (shopPackage, bool) {
+	baseID, qty, ok := parseShopPackageSpec(spec)
+	if !ok {
+		return shopPackage{}, false
+	}
+	if qtyOverride > 0 {
+		qty = qtyOverride
+	}
+	for _, base := range baseShopCatalogDefs() {
+		if base.BaseID != baseID {
+			continue
+		}
+		var pr shopItemPricing
+		if h != nil && h.shop != nil {
+			pr = h.shop.getPricing(base.BaseID)
+		} else {
+			pr = shopItemPricing{PriceIDR: base.UnitPriceIDR, DiscountPct: 0}
+		}
+		return computeShopPackage(base, pr, qty), true
 	}
 	return shopPackage{}, false
 }

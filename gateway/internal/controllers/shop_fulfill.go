@@ -183,16 +183,19 @@ func (h *Handler) fulfillInvoiceByData(ctx context.Context, b *botgotd.Bot, inv 
 		return
 	}
 
-	pkg, ok := findShopPackage(inv.PackageID)
+	pkg, ok := h.resolveShopPackage(inv.PackageID, 0)
 	if !ok {
 		pkg = shopPackage{
 			ID:           inv.PackageID,
-			Name:         "Paket Premium GotdBot",
+			BaseID:       "pro",
+			Name:         "💎 Pro",
 			Tier:         "Pro",
+			Qty:          1,
 			DurationDays: 30,
 			PriceIDR:     inv.BaseAmount,
 		}
 	}
+	pkgLabel := fmt.Sprintf("%s (%dx • %d Hari)", pkg.Name, pkg.Qty, pkg.DurationDays)
 	dur := time.Duration(pkg.DurationDays) * 24 * time.Hour
 	if dur <= 0 {
 		dur = 30 * 24 * time.Hour
@@ -262,7 +265,7 @@ func (h *Handler) fulfillInvoiceByData(ctx context.Context, b *botgotd.Bot, inv 
 <blockquote expandable>Lisensi paket Anda telah aktif otomatis pada akun ini. Simpan kode voucher di atas sebagai arsip pribadi.</blockquote>
 <hr/>
 <p>GotdBot • Pembayaran Otomatis</p>`,
-			html.EscapeString(pkg.Name),
+			html.EscapeString(pkgLabel),
 			html.EscapeString(formatRupiah(inv.TotalAmount)),
 			html.EscapeString(activeLic.Tier),
 			expStr,
@@ -278,7 +281,7 @@ func (h *Handler) fulfillInvoiceByData(ctx context.Context, b *botgotd.Bot, inv 
 	globalDevMonitor.NotifyInvoice(fmt.Sprintf(
 		"Buyer <code>%d</code> • Paket <b>%s</b> • <code>%s</code> • Invoice <code>%s</code> • Source <code>%s</code>",
 		buyerID,
-		html.EscapeString(pkg.Name),
+		html.EscapeString(pkgLabel),
 		html.EscapeString(formatRupiah(inv.TotalAmount)),
 		html.EscapeString(inv.ID),
 		html.EscapeString(sourcePkg),

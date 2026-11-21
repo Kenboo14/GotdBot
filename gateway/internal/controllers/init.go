@@ -66,7 +66,7 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 		accountNames:     make(map[int64]string),
 		topicSessions:    make(map[int64]*topicSessionState),
 		tokenCbKeys:      make(map[string]string),
-		shop:             newShopManager(),
+		shop:             newShopManager(db),
 	}
 }
 

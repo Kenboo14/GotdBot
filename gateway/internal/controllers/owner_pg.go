@@ -4,6 +4,7 @@ import (
 	"assterisk/gateway/internal/botgotd"
 	"context"
 	"encoding/base64"
+	"fmt"
 	"html"
 	"strings"
 )
@@ -12,6 +13,17 @@ const (
 	ownerPGUploadState   = "waiting_owner_pg_qris"
 	maxOwnerPGImageBytes = 2 << 20
 )
+
+func formatOwnerPGPriceValue(p shopPackage) string {
+	if p.DiscountPct > 0 {
+		return fmt.Sprintf("<s>%s</s> → <b>%s</b> (Diskon <code>%d%%</code>)",
+			html.EscapeString(formatRupiah(p.UnitPriceIDR)),
+			html.EscapeString(formatRupiah(p.PriceIDR)),
+			p.DiscountPct,
+		)
+	}
+	return "<code>" + html.EscapeString(formatRupiah(p.UnitPriceIDR)) + "</code>"
+}
 
 func (h *Handler) appendOwnerPGHelp(ctx context.Context) ([]monitorRichRow, [][]ownerRichButton) {
 	cfg := loadPGConfig()
@@ -39,13 +51,33 @@ func (h *Handler) appendOwnerPGHelp(ctx context.Context) ([]monitorRichRow, [][]
 	rows := []monitorRichRow{
 		{Label: "🌐 Server PG", Value: serverStatus},
 		{Label: "🏪 QRIS Merchant", Value: qrisStatus},
-		{Label: "📤 Upload QRIS", Value: "Klik tombol di bawah lalu kirim foto QRIS atau teks <code>000201...</code>"},
-		{Label: "🧾 /shop status &lt;id&gt;", Value: "Cek detail &amp; status tagihan QRIS pembeli"},
-		{Label: "✅ /shop confirm &lt;id&gt;", Value: "Konfirmasi lunas manual &amp; kirim paket otomatis"},
 	}
+	for _, p := range h.listShopPackages() {
+		rows = append(rows, monitorRichRow{
+			Label: fmt.Sprintf("%s (30 Hari / Qty)", html.EscapeString(p.Name)),
+			Value: formatOwnerPGPriceValue(p),
+		})
+	}
+	rows = append(rows,
+		monitorRichRow{Label: "📤 Upload QRIS", Value: "Klik tombol di bawah lalu kirim foto QRIS atau teks <code>000201...</code>"},
+		monitorRichRow{Label: "🧾 /shop status &lt;id&gt;", Value: "Cek detail &amp; status tagihan QRIS pembeli"},
+		monitorRichRow{Label: "✅ /shop confirm &lt;id&gt;", Value: "Konfirmasi lunas manual &amp; kirim paket otomatis"},
+	)
 
 	btnRows := [][]ownerRichButton{
 		{{Text: "📤 Upload / Ganti QRIS Statis", Data: "owner_pg:upload", Style: "primary"}},
+		{
+			{Text: "💎 Atur Harga Pro", Data: "owner_pg:price:pro"},
+			{Text: "👑 Atur Harga Pro++", Data: "owner_pg:price:proplus"},
+		},
+		{
+			{Text: "🏷️ Diskon Pro (%)", Data: "owner_pg:disc:pro"},
+			{Text: "🏷️ Diskon Pro++ (%)", Data: "owner_pg:disc:proplus"},
+		},
+		{
+			{Text: "🔥 Diskon Semua (%)", Data: "owner_pg:disc:all"},
+			{Text: "🧹 Reset Diskon 0%", Data: "owner_pg:disc:clear", Style: "danger"},
+		},
 		{{Text: "🔄 Refresh Status PG", Data: "owner_pg:refresh"}},
 	}
 	return rows, btnRows
@@ -76,8 +108,9 @@ func (h *Handler) OwnerPGCallback(ctx context.Context, b *botgotd.Bot, update *b
 		chatID = cb.From.ID
 	}
 
-	switch strings.TrimSpace(cb.Data) {
-	case "owner_pg:upload":
+	data := strings.TrimSpace(cb.Data)
+	switch {
+	case data == "owner_pg:upload":
 		h.setPanelState(chatID, ownerPGUploadState)
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
@@ -93,7 +126,7 @@ func (h *Handler) OwnerPGCallback(ctx context.Context, b *botgotd.Bot, update *b
 			},
 		}
 		_, _ = sendMonitorRichMessageWithMarkup(ctx, b, chatID, threadID, promptCard, markup)
-	case "owner_pg:cancel":
+	case data == "owner_pg:cancel":
 		h.setPanelState(chatID, "")
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
@@ -103,7 +136,16 @@ func (h *Handler) OwnerPGCallback(ctx context.Context, b *botgotd.Bot, update *b
 			text, markup := h.renderOwnerHelp(ctx, 6)
 			_, _ = editMonitorRichMessageWithMarkup(ctx, b, chatID, msgID, text, markup)
 		}
-	case "owner_pg:refresh":
+	case data == "owner_pg:cancel_prompt":
+		h.setPanelState(chatID, "")
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "↩️ Pengaturan dibatalkan.",
+		})
+		if msgID > 0 {
+			h.deleteBotMessages(ctx, b, chatID, []int{msgID})
+		}
+	case data == "owner_pg:refresh":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cb.ID,
 			Text:            "✅ Status PG diperbarui.",
@@ -112,6 +154,33 @@ func (h *Handler) OwnerPGCallback(ctx context.Context, b *botgotd.Bot, update *b
 			text, markup := h.renderOwnerHelp(ctx, 6)
 			_, _ = editMonitorRichMessageWithMarkup(ctx, b, chatID, msgID, text, markup)
 		}
+	case data == "owner_pg:price:pro" || data == "owner_pg:price:proplus":
+		target := strings.TrimPrefix(data, "owner_pg:price:")
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "✏️ Ketik harga baru di chat.",
+		})
+		h.sendOwnerPGPricePrompt(ctx, b, chatID, threadID, target)
+	case data == "owner_pg:disc:clear":
+		_ = h.shop.setDiscount("all", 0)
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "🧹 Semua diskon direset ke 0%.",
+		})
+		if msgID > 0 {
+			text, markup := h.renderOwnerHelp(ctx, 6)
+			_, _ = editMonitorRichMessageWithMarkup(ctx, b, chatID, msgID, text, markup)
+		}
+	case data == "owner_pg:disc:pro" || data == "owner_pg:disc:proplus" || data == "owner_pg:disc:all":
+		target := strings.TrimPrefix(data, "owner_pg:disc:")
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cb.ID,
+			Text:            "🏷️ Pilih atau ketik persentase diskon (%).",
+		})
+		h.sendOwnerPGDiscountPrompt(ctx, b, chatID, threadID, target)
+	case strings.HasPrefix(data, "owner_pg:setdisc:"):
+		payload := strings.TrimPrefix(data, "owner_pg:setdisc:")
+		h.handleOwnerPGQuickSetDiscount(ctx, b, chatID, msgID, cb.ID, payload)
 	default:
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 	}

@@ -19,12 +19,7 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	if state == "" {
 		return false
 	}
-	if state == ownerPGUploadState {
-		senderID := userID
-		if message != nil && message.From != nil && message.From.ID != 0 {
-			senderID = message.From.ID
-		}
-		h.handleOwnerPGQRISUpload(ctx, b, chatID, senderID, text, message)
+	if h.handleOwnerPGPanelInput(ctx, b, chatID, userID, state, text, message) {
 		return true
 	}
 

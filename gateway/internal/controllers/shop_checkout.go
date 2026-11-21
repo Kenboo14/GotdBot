@@ -2,92 +2,14 @@ package controllers
 
 import (
 	"assterisk/gateway/internal/botgotd"
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"html"
-	"io"
-	"mime/multipart"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/Kenboo14/GoBot/keyboard"
-	"github.com/gotd/td/telegram/uploader"
-	"github.com/gotd/td/tg"
 )
-
-func (h *Handler) ShowShop(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	h.renderShopCatalog(ctx, b, chatID, chatID, 0)
-}
-
-func (h *Handler) renderShopCatalog(ctx context.Context, b *botgotd.Bot, chatID, buyerID int64, editMsgID int) {
-	pkgs := loadShopPackages()
-	cfg := loadPGConfig()
-
-	var sb strings.Builder
-	sb.WriteString("<h1>🛒 Toko Paket Lisensi GotdBot</h1>\n")
-	sb.WriteString("<table border=\"1\">\n")
-	sb.WriteString("  <tr><th>Paket</th><th>Harga</th><th>Manfaat</th></tr>\n")
-
-	var rows [][]botgotd.InlineKeyboardButton
-	for _, p := range pkgs {
-		sb.WriteString(fmt.Sprintf("  <tr><td><b>%s</b></td><td><code>%s</code></td><td>%s</td></tr>\n",
-			html.EscapeString(p.Name),
-			html.EscapeString(formatRupiah(p.PriceIDR)),
-			html.EscapeString(p.Description),
-		))
-		if cfg.isConfigured() {
-			rows = append(rows, []botgotd.InlineKeyboardButton{
-				{Text: fmt.Sprintf("QRIS • %s (%s)", p.Name, formatRupiah(p.PriceIDR)), CallbackData: "shop:buy:" + p.ID},
-			})
-		}
-	}
-	sb.WriteString("</table>\n")
-	sb.WriteString("<hr/>\n")
-
-	if cfg.isConfigured() {
-		sb.WriteString("<p>Pembayaran QRIS otomatis berlaku untuk semua Dompet Digital &amp; Mobile Banking Indonesia. Paket aktif seketika setelah pembayaran masuk.</p>")
-	} else {
-		sb.WriteString("<p>Untuk pemesanan paket atau upgrade lisensi, silakan hubungi admin GotdBot.</p>")
-	}
-
-	if activeOrd := h.shop.getActiveForBuyer(buyerID, time.Now()); activeOrd != nil && cfg.isConfigured() {
-		rows = append(rows, []botgotd.InlineKeyboardButton{
-			{Text: fmt.Sprintf("📄 Lihat Tagihan Aktif (%s)", formatRupiah(activeOrd.TotalAmount)), CallbackData: "shop:check:" + activeOrd.InvoiceID},
-		})
-	}
-
-	var markup *botgotd.InlineKeyboardMarkup
-	if len(rows) > 0 {
-		markup = &botgotd.InlineKeyboardMarkup{InlineKeyboard: rows}
-	}
-
-	if editMsgID > 0 {
-		if _, err := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
-			ChatID:      chatID,
-			MessageID:   editMsgID,
-			Text:        sb.String(),
-			ParseMode:   "HTML",
-			ReplyMarkup: markup,
-		}); err == nil {
-			return
-		}
-	}
-
-	params := &botgotd.SendMessageParams{
-		ChatID:    chatID,
-		Text:      sb.String(),
-		ParseMode: "HTML",
-	}
-	if markup != nil {
-		params.ReplyMarkup = markup
-	}
-	_, _ = b.SendMessage(ctx, params)
-}
 
 func (h *Handler) ShopCallback(ctx context.Context, b *botgotd.Bot, update *botgotd.Update) {
 	if update == nil || update.CallbackQuery == nil {
@@ -109,9 +31,14 @@ func (h *Handler) ShopCallback(ctx context.Context, b *botgotd.Bot, update *botg
 	case cb.Data == "shop:menu":
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
 		h.renderShopCatalog(ctx, b, chatID, buyerID, messageID)
+	case cb.Data == "shop:noop":
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cb.ID})
+	case strings.HasPrefix(cb.Data, "shop:pkg:"):
+		rest := strings.TrimPrefix(cb.Data, "shop:pkg:")
+		h.handleShopSelectQty(ctx, b, chatID, messageID, cb.ID, rest)
 	case strings.HasPrefix(cb.Data, "shop:buy:"):
-		pkgID := strings.TrimPrefix(cb.Data, "shop:buy:")
-		h.handleShopBuy(ctx, b, chatID, buyerID, cb.ID, pkgID)
+		pkgSpec := strings.TrimPrefix(cb.Data, "shop:buy:")
+		h.handleShopBuy(ctx, b, chatID, buyerID, cb.ID, pkgSpec)
 	case strings.HasPrefix(cb.Data, "shop:check:"):
 		invID := strings.TrimPrefix(cb.Data, "shop:check:")
 		h.handleShopCheckStatus(ctx, b, chatID, buyerID, cb.ID, invID)
@@ -123,8 +50,41 @@ func (h *Handler) ShopCallback(ctx context.Context, b *botgotd.Bot, update *botg
 	}
 }
 
-func (h *Handler) handleShopBuy(ctx context.Context, b *botgotd.Bot, chatID, buyerID int64, cbID, pkgID string) {
-	pkg, ok := findShopPackage(pkgID)
+func (h *Handler) handleShopSelectQty(ctx context.Context, b *botgotd.Bot, chatID int64, msgID int, cbID, rest string) {
+	baseID, qty, ok := parseShopPackageSpec(rest)
+	if !ok {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cbID,
+			Text:            "Tipe paket tidak ditemukan.",
+			ShowAlert:       true,
+		})
+		return
+	}
+	if qty < 1 {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cbID,
+			Text:            "Minimal pembelian Qty adalah 1.",
+		})
+		return
+	}
+	if qty > shopMaxQty {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cbID,
+			Text:            fmt.Sprintf("Maksimal pembelian Qty adalah %d.", shopMaxQty),
+		})
+		return
+	}
+	pkg, ok := h.resolveShopPackage(baseID, qty)
+	if !ok {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID, Text: "Paket tidak valid."})
+		return
+	}
+	_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID})
+	h.renderShopPackageQty(ctx, b, chatID, msgID, pkg)
+}
+
+func (h *Handler) handleShopBuy(ctx context.Context, b *botgotd.Bot, chatID, buyerID int64, cbID, pkgSpec string) {
+	pkg, ok := h.resolveShopPackage(pkgSpec, 0)
 	if !ok {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 			CallbackQueryID: cbID,
@@ -152,6 +112,14 @@ func (h *Handler) handleShopBuy(ctx context.Context, b *botgotd.Bot, chatID, buy
 		})
 		return
 	}
+	if allowed, retrySec := h.shop.checkOrderRateLimit(buyerID, now); !allowed {
+		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
+			CallbackQueryID: cbID,
+			Text:            fmt.Sprintf("⏳ Batas pembuatan tagihan tercapai (maks %dx / 5 menit). Tunggu %s lagi.", shopRateLimitMax, formatShopRateWaitText(retrySec)),
+			ShowAlert:       true,
+		})
+		return
+	}
 
 	_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{
 		CallbackQueryID: cbID,
@@ -168,6 +136,7 @@ func (h *Handler) handleShopBuy(ctx context.Context, b *botgotd.Bot, chatID, buy
 		})
 		return
 	}
+	h.shop.recordOrderCreation(buyerID, now)
 
 	ord := &shopPendingOrder{
 		InvoiceID:   res.Invoice.ID,
@@ -175,15 +144,21 @@ func (h *Handler) handleShopBuy(ctx context.Context, b *botgotd.Bot, chatID, buy
 		ChatID:      chatID,
 		UserID:      buyerID,
 		PackageID:   pkg.ID,
+		Qty:         pkg.Qty,
 		TotalAmount: res.Invoice.TotalAmount,
 		ExpiresAt:   res.Invoice.ExpiresAt,
 	}
 
 	expStr := time.Unix(res.Invoice.ExpiresAt, 0).Local().Format("15:04:05 WIB")
+	discRow := ""
+	if pkg.DiscountPct > 0 {
+		discRow = fmt.Sprintf("  <tr><th>🏷️ Diskon</th><td>%d%% (-%s)</td></tr>\n", pkg.DiscountPct, html.EscapeString(formatRupiah(pkg.DiscountIDR)))
+	}
 	caption := fmt.Sprintf(`<h1>🧾 Tagihan Pembayaran QRIS</h1>
 <table border="1">
   <tr><th>📦 Paket</th><td><b>%s</b></td></tr>
-  <tr><th>💰 Total Bayar</th><td><b><code>%s</code></b></td></tr>
+  <tr><th>🔢 Jumlah</th><td><b>%dx</b> (%d Hari)</td></tr>
+%s  <tr><th>💰 Total Bayar</th><td><b><code>%s</code></b></td></tr>
   <tr><th>⏳ Batas Waktu</th><td><code>%s</code></td></tr>
   <tr><th>🔖 Kode Tagihan</th><td><code>%s</code></td></tr>
 </table>
@@ -191,6 +166,9 @@ func (h *Handler) handleShopBuy(ctx context.Context, b *botgotd.Bot, chatID, buy
 <hr/>
 <p>GotdBot • Pembayaran Otomatis</p>`,
 		html.EscapeString(pkg.Name),
+		pkg.Qty,
+		pkg.DurationDays,
+		discRow,
 		html.EscapeString(formatRupiah(res.Invoice.TotalAmount)),
 		expStr,
 		html.EscapeString(res.Invoice.ID),
@@ -261,7 +239,8 @@ func (h *Handler) handleShopCancel(ctx context.Context, b *botgotd.Bot, chatID, 
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID})
 		return
 	}
-	if ord := h.shop.getPending(invID); ord != nil && ord.UserID != buyerID && !isOwner(buyerID) {
+	ord := h.shop.getPending(invID)
+	if ord != nil && ord.UserID != buyerID && !isOwner(buyerID) {
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID, Text: "Tagihan bukan milik Anda.", ShowAlert: true})
 		return
 	}
@@ -270,107 +249,17 @@ func (h *Handler) handleShopCancel(ctx context.Context, b *botgotd.Bot, chatID, 
 		_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID, Text: "Tidak dapat dibatalkan: " + err.Error(), ShowAlert: true})
 		return
 	}
-	h.shop.removePending(inv.ID)
+	removed := h.shop.removePending(inv.ID)
 	_, _ = b.AnswerCallbackQuery(ctx, &botgotd.AnswerCallbackQueryParams{CallbackQueryID: cbID, Text: "✅ Tagihan dibatalkan"})
+
+	var delIDs []int
 	if msgID > 0 {
-		_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+		delIDs = append(delIDs, msgID)
 	}
-	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:    chatID,
-		Text:      fmt.Sprintf(`<h1>🚫 Tagihan Dibatalkan</h1><p>Tagihan <code>%s</code> sebesar <code>%s</code> telah dibatalkan.</p>`, html.EscapeString(inv.ID), html.EscapeString(formatRupiah(inv.TotalAmount))),
-		ParseMode: "HTML",
-	})
-}
-
-func sendShopQRPhoto(ctx context.Context, b *botgotd.Bot, chatID int64, filename string, pngBytes []byte, captionHTML string, markup *botgotd.InlineKeyboardMarkup) (int, error) {
-	if b == nil || len(pngBytes) == 0 {
-		return 0, fmt.Errorf("qr png kosong")
+	if removed != nil && removed.QRMsgID > 0 && removed.QRMsgID != msgID {
+		delIDs = append(delIDs, removed.QRMsgID)
 	}
-	if b.API != nil && b.Peers != nil {
-		if peer := b.Peers.GetInputPeer(chatID); peer != nil {
-			if inputFile, err := uploader.NewUploader(b.API).FromBytes(ctx, filename, pngBytes); err == nil {
-				plain, entities := botgotd.ParseHTML(captionHTML)
-				req := &tg.MessagesSendMediaRequest{
-					Peer:        peer,
-					Media:       &tg.InputMediaUploadedPhoto{File: inputFile},
-					Message:     plain,
-					Entities:    entities,
-					RandomID:    time.Now().UnixNano(),
-					ReplyMarkup: keyboard.ConvertReplyMarkup(markup),
-				}
-				if upd, sendErr := b.API.MessagesSendMedia(ctx, req); sendErr == nil {
-					return extractSentMessageID(upd), nil
-				}
-			}
-		}
+	if len(delIDs) > 0 {
+		h.deleteBotMessages(ctx, b, chatID, delIDs)
 	}
-	if b.ServerURL == "" && b.Token == "" {
-		return 0, fmt.Errorf("no transport for photo")
-	}
-
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	_ = writer.WriteField("chat_id", strconv.FormatInt(chatID, 10))
-	_ = writer.WriteField("caption", captionHTML)
-	_ = writer.WriteField("parse_mode", "HTML")
-	if markup != nil {
-		if mRaw, err := json.Marshal(markup); err == nil {
-			_ = writer.WriteField("reply_markup", string(mRaw))
-		}
-	}
-	part, err := writer.CreateFormFile("photo", filename)
-	if err != nil {
-		return 0, fmt.Errorf("create photo field: %w", err)
-	}
-	if _, err := part.Write(pngBytes); err != nil {
-		return 0, fmt.Errorf("write photo bytes: %w", err)
-	}
-	if err := writer.Close(); err != nil {
-		return 0, fmt.Errorf("close photo writer: %w", err)
-	}
-
-	endpoint := fmt.Sprintf("%s/bot%s/sendPhoto", botAPIBaseURL(b), b.Token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
-	if err != nil {
-		return 0, fmt.Errorf("build sendPhoto request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("post sendPhoto: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var apiResp struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			MessageID int `json:"message_id"`
-		} `json:"result"`
-	}
-	respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 16384))
-	_ = json.Unmarshal(respBytes, &apiResp)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !apiResp.OK {
-		return 0, fmt.Errorf("sendPhoto failed status %d", resp.StatusCode)
-	}
-	return apiResp.Result.MessageID, nil
-}
-
-func extractSentMessageID(upd tg.UpdatesClass) int {
-	switch u := upd.(type) {
-	case *tg.UpdateShortSentMessage:
-		return u.ID
-	case *tg.Updates:
-		for _, item := range u.Updates {
-			switch m := item.(type) {
-			case *tg.UpdateMessageID:
-				return m.ID
-			case *tg.UpdateNewMessage:
-				if msg, ok := m.Message.(*tg.Message); ok {
-					return msg.ID
-				}
-			}
-		}
-	}
-	return 0
 }

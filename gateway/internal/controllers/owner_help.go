@@ -81,8 +81,8 @@ var ownerHelpPages = []ownerHelpPageSpec{
 	},
 	{
 		TabLabel: "💳 PG",
-		Title:    "💳 Owner Help · Payment Gateway QRIS",
-		Quote:    "ℹ️ Klik tombol Upload QRIS Statis di bawah lalu kirim gambar/foto QRIS merchant Anda langsung ke chat ini tanpa perlu mengatur .env · Halaman 6/6.",
+		Title:    "💳 Owner Help · PG QRIS &amp; Harga Shop",
+		Quote:    "ℹ️ Atur harga paket Shop (Pro &amp; Pro++), diskon %, serta upload QRIS Statis langsung dari menu ini · Halaman 6/6.",
 	},
 }
 
