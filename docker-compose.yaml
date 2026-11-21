@@ -94,7 +94,7 @@ services:
       GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-85MiB}
       GOGC: ${GOGC:-30}
     ports:
-      - "127.0.0.1:${PG_CALLBACK_PORT:-8085}:8085"
+      - "${PG_CALLBACK_BIND:-0.0.0.0}:${PG_CALLBACK_PORT:-8085}:8085"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
