@@ -8,12 +8,15 @@ import (
 	"strings"
 )
 
-func (h *Handler) formatHelpHomeDisabledSummary(ctx context.Context, userID int64) string {
+func (h *Handler) formatHelpHomeDisabledSummary(states map[string]bool) string {
 	var disabled []string
 	for _, cat := range helpCatalog {
 		var catOff []string
 		for _, cmd := range cat.Commands {
-			if !(cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key)) {
+			if cat.Key == "extra" && cmd.Key == "logger" {
+				continue
+			}
+			if !(cmd.PluginOn && h.isCommandEnabledWithStates(states, cat.Key, cmd.Key)) {
 				catOff = append(catOff, "!"+cmd.Key)
 			}
 		}
@@ -23,18 +26,41 @@ func (h *Handler) formatHelpHomeDisabledSummary(ctx context.Context, userID int6
 			disabled = append(disabled, catOff...)
 		}
 	}
+	var loggerOff []string
+	for _, sub := range loggerPluginSubSpecs {
+		if !h.isCommandEnabledWithStates(states, "logger", sub.Key) {
+			loggerOff = append(loggerOff, "!"+sub.Key)
+		}
+	}
+	if len(loggerOff) == len(loggerPluginSubSpecs) && len(loggerOff) > 0 {
+		disabled = append(disabled, "Logger")
+	} else if len(loggerOff) > 0 {
+		disabled = append(disabled, loggerOff...)
+	}
 	if len(disabled) == 0 {
 		return "Tidak ada"
 	}
 	return strings.Join(disabled, ", ")
 }
 
-func (h *Handler) formatHelpCategoryDisabledSummary(ctx context.Context, userID int64, cat helpCategorySpec) (int, string) {
+func (h *Handler) formatHelpCategoryDisabledSummary(states map[string]bool, cat helpCategorySpec) (int, string) {
 	activeCount := 0
 	var disabled []string
 	for _, cmd := range cat.Commands {
-		if cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key) {
+		if cmd.PluginOn && h.isCommandEnabledWithStates(states, cat.Key, cmd.Key) {
 			activeCount++
+		} else if cat.Key == "extra" && cmd.Key == "logger" {
+			var loggerOff []string
+			for _, sub := range loggerPluginSubSpecs {
+				if !h.isCommandEnabledWithStates(states, "logger", sub.Key) {
+					loggerOff = append(loggerOff, "!"+sub.Key)
+				}
+			}
+			if len(loggerOff) == len(loggerPluginSubSpecs) || len(loggerOff) == 0 {
+				disabled = append(disabled, "!logger")
+			} else {
+				disabled = append(disabled, loggerOff...)
+			}
 		} else {
 			disabled = append(disabled, "!"+cmd.Key)
 		}
@@ -89,12 +115,13 @@ func buildLiveHelpCommandPage(cat helpCategorySpec, cmd helpSubCommandSpec) help
 }
 
 func (h *Handler) buildLiveHelpHomePage(ctx context.Context, userID int64) helpPageSnapshot {
+	states := h.getEffectivePluginStates(ctx, userID)
 	buttons := make([]botgotd.InlineKeyboardButton, 0, len(helpCatalog))
 	activeCats := 0
 	for _, cat := range helpCatalog {
 		active := 0
 		for _, cmd := range cat.Commands {
-			if cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key) {
+			if cmd.PluginOn && h.isCommandEnabledWithStates(states, cat.Key, cmd.Key) {
 				active++
 			}
 		}
@@ -106,7 +133,7 @@ func (h *Handler) buildLiveHelpHomePage(ctx context.Context, userID int64) helpP
 			CallbackData: "assist_help:cat:" + cat.Key,
 		})
 	}
-	disabledSummary := h.formatHelpHomeDisabledSummary(ctx, userID)
+	disabledSummary := h.formatHelpHomeDisabledSummary(states)
 	text := fmt.Sprintf(
 		`<h1>🤖 Asisten GO UserBot</h1>
 <blockquote expandable>Pilih kategori utama di bawah untuk melihat seluruh sub perintah beserta status modul <b>GO UserBot</b>.</blockquote>
@@ -128,6 +155,7 @@ func (h *Handler) buildLiveHelpHomePage(ctx context.Context, userID int64) helpP
 }
 
 func (h *Handler) buildLiveHelpCategoryPage(ctx context.Context, userID int64, cat helpCategorySpec) helpPageSnapshot {
+	states := h.getEffectivePluginStates(ctx, userID)
 	subButtons := make([]botgotd.InlineKeyboardButton, 0, len(cat.Commands))
 	for _, cmd := range cat.Commands {
 		subButtons = append(subButtons, botgotd.InlineKeyboardButton{
@@ -135,7 +163,7 @@ func (h *Handler) buildLiveHelpCategoryPage(ctx context.Context, userID int64, c
 			CallbackData: fmt.Sprintf("assist_help:cmd:%s:%s", cat.Key, cmd.Key),
 		})
 	}
-	activeCount, disabledSummary := h.formatHelpCategoryDisabledSummary(ctx, userID, cat)
+	activeCount, disabledSummary := h.formatHelpCategoryDisabledSummary(states, cat)
 
 	pluginSummary := "Load Plugin : Off"
 	if activeCount == len(cat.Commands) && activeCount > 0 {
@@ -202,13 +230,14 @@ func (h *Handler) resolveHelpPage(ctx context.Context, userID int64, data string
 		parts := strings.SplitN(rest, ":", 2)
 		if len(parts) == 2 {
 			catKey, cmdKey := parts[0], parts[1]
+			states := h.getEffectivePluginStates(ctx, userID)
 			for _, cat := range helpCatalog {
 				if cat.Key != catKey {
 					continue
 				}
 				for _, cmd := range cat.Commands {
 					if cmd.Key == cmdKey {
-						cmd.PluginOn = cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key)
+						cmd.PluginOn = cmd.PluginOn && h.isCommandEnabledWithStates(states, cat.Key, cmd.Key)
 						return buildLiveHelpCommandPage(cat, cmd), true
 					}
 				}

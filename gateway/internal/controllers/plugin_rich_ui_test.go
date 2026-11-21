@@ -150,3 +150,51 @@ func TestRefreshCallbacksEditInPlaceOnlyNeverSendNewMessage(t *testing.T) {
 		t.Fatalf("expected 0 sendRichMessage calls on refresh/callback, got %d", got)
 	}
 }
+
+func TestGlobalOffOverridesPerUserAndSubSync(t *testing.T) {
+	ctx := context.Background()
+	h := NewHandler(nil, nil)
+
+	h.setAllPluginStatesForTarget(ctx, 7001, true)
+	h.togglePluginModule(ctx, 0, "vctools")
+	if h.isEffectiveModuleEnabled(ctx, 7001, "vctools") {
+		t.Fatalf("expected global vctools OFF to override user 7001 ON")
+	}
+	if h.isEffectiveCommandEnabled(ctx, 7001, "vctools", "joinvc") {
+		t.Fatalf("expected global vctools OFF to disable joinvc for user 7001")
+	}
+
+	h.togglePluginModule(ctx, 0, "logger")
+	home := h.buildLiveHelpHomePage(ctx, 7001)
+	if !strings.Contains(home.text, "Logger") {
+		t.Fatalf("expected disabled Logger in !help home summary, got %q", home.text)
+	}
+	extraPage := h.buildLiveHelpCategoryPage(ctx, 7001, helpCatalog[4])
+	if !strings.Contains(extraPage.text, "!logger") {
+		t.Fatalf("expected !logger in !help extra disabled table row, got %q", extraPage.text)
+	}
+
+	h.togglePluginModule(ctx, 0, "logger")
+	h.togglePluginSubCommand(ctx, 0, "logger", "log")
+	homeSub := h.buildLiveHelpHomePage(ctx, 7001)
+	if !strings.Contains(homeSub.text, "!log") {
+		t.Fatalf("expected !log in !help home disabled summary, got %q", homeSub.text)
+	}
+
+	for _, sub := range pluginSubCommandsForModule("sticker") {
+		h.togglePluginSubCommand(ctx, 0, "sticker", sub.Key)
+	}
+	if h.isEffectiveModuleEnabled(ctx, 0, "sticker") {
+		t.Fatalf("expected sticker module OFF when all sub-commands are turned off")
+	}
+	h.togglePluginModule(ctx, 0, "sticker")
+	if !h.isEffectiveCommandEnabled(ctx, 0, "sticker", "kang") {
+		t.Fatalf("expected sticker sub-commands re-enabled when module toggled back ON")
+	}
+	h.togglePluginModule(ctx, 0, "sticker")
+	h.togglePluginSubCommand(ctx, 0, "sticker", "kang")
+	if !h.isEffectiveCommandEnabled(ctx, 0, "sticker", "kang") || h.isEffectiveCommandEnabled(ctx, 0, "sticker", "strinfo") {
+		t.Fatalf("expected only kang ON and strinfo OFF when enabling single sub on OFF module")
+	}
+}
+

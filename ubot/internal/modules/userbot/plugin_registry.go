@@ -117,11 +117,10 @@ type userPluginOverride struct {
 	cmds map[string]bool
 }
 
-// pluginRegistry menyimpan status aktif tiap plugin menggunakan atomic.Bool agar
-// pengecekan di hot-path pesan bersifat lock-free dan tidak membebani CPU/RAM saat plugin Off.
 type pluginRegistry struct {
 	initOnce      sync.Once
 	flags         [pluginModuleCount]atomic.Bool
+	lastSyncNano  atomic.Int64
 	mu            sync.RWMutex
 	globalCmdOff  map[string]bool
 	userOverrides map[int64]*userPluginOverride
@@ -172,6 +171,18 @@ func pluginForCommand(name string) (PluginModule, bool) {
 	return mod, ok
 }
 
+func (s *Service) ensureFreshPluginSync() {
+	if s == nil || s.redis == nil || s.redis.Client == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := s.pluginState.lastSyncNano.Load()
+	if last > 0 && now-last <= int64(2*time.Second) {
+		return
+	}
+	s.SyncPluginsFromRedis(context.Background())
+}
+
 func (s *Service) IsPluginEnabled(mod PluginModule) bool {
 	if mod >= pluginModuleCount {
 		return false
@@ -180,6 +191,7 @@ func (s *Service) IsPluginEnabled(mod PluginModule) bool {
 		return defaultPluginEnabled[mod]
 	}
 	s.pluginState.ensureInit()
+	s.ensureFreshPluginSync()
 	return s.pluginState.flags[mod].Load()
 }
 
@@ -199,6 +211,10 @@ func (s *Service) IsPluginEnabledForOwner(ownerID int64, mod PluginModule) bool 
 		return defaultPluginEnabled[mod]
 	}
 	s.pluginState.ensureInit()
+	s.ensureFreshPluginSync()
+	if !s.pluginState.flags[mod].Load() {
+		return false
+	}
 	if ownerID > 0 {
 		s.pluginState.mu.RLock()
 		ov := s.pluginState.userOverrides[ownerID]
@@ -207,11 +223,11 @@ func (s *Service) IsPluginEnabledForOwner(ownerID int64, mod PluginModule) bool 
 			val, found = ov.mods[mod]
 		}
 		s.pluginState.mu.RUnlock()
-		if found {
-			return val
+		if found && !val {
+			return false
 		}
 	}
-	return s.pluginState.flags[mod].Load()
+	return true
 }
 
 func (s *Service) IsCommandEnabledForOwner(ownerID int64, cmdName string) bool {
@@ -225,17 +241,18 @@ func (s *Service) IsCommandEnabledForOwner(ownerID int64, cmdName string) bool {
 		return true
 	}
 	s.pluginState.ensureInit()
+	s.ensureFreshPluginSync()
 	s.pluginState.mu.RLock()
 	defer s.pluginState.mu.RUnlock()
-	if ownerID > 0 {
-		if ov := s.pluginState.userOverrides[ownerID]; ov != nil && ov.cmds != nil {
-			if val, ok := ov.cmds[norm]; ok {
-				return val
-			}
-		}
-	}
 	if s.pluginState.globalCmdOff != nil && s.pluginState.globalCmdOff[norm] {
 		return false
+	}
+	if ownerID > 0 {
+		if ov := s.pluginState.userOverrides[ownerID]; ov != nil && ov.cmds != nil {
+			if val, ok := ov.cmds[norm]; ok && !val {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -264,22 +281,55 @@ func (s *Service) SyncPluginsFromRedis(ctx context.Context) {
 	if s == nil || s.redis == nil || s.redis.Client == nil {
 		return
 	}
+	s.pluginState.lastSyncNano.Store(time.Now().UnixNano())
 	rCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	vals, err := s.redis.Client.HGetAll(rCtx, redisKeyPluginState).Result()
-	if err == nil && len(vals) > 0 {
+	if err == nil {
 		s.pluginState.ensureInit()
+		for i := PluginModule(0); i < pluginModuleCount; i++ {
+			s.pluginState.flags[i].Store(defaultPluginEnabled[i])
+		}
+		if disabledRaw := strings.TrimSpace(os.Getenv("DISABLED_PLUGINS")); disabledRaw != "" {
+			for _, token := range strings.Split(disabledRaw, ",") {
+				if mod, ok := parsePluginModule(token); ok {
+					s.pluginState.flags[mod].Store(false)
+				}
+			}
+		}
 		mods, cmds := applyPluginHashToMaps(vals)
 		for mod, enabled := range mods {
 			s.pluginState.flags[mod].Store(enabled)
 		}
+		modTotal := make(map[PluginModule]map[string]struct{})
+		for rawCmd, mod := range commandPluginMap {
+			if modTotal[mod] == nil {
+				modTotal[mod] = make(map[string]struct{})
+			}
+			modTotal[mod][canonPluginCmdKey(rawCmd)] = struct{}{}
+		}
+		for mod, cmdSet := range modTotal {
+			if len(cmdSet) == 0 {
+				continue
+			}
+			allOff := true
+			for ck := range cmdSet {
+				v, exists := cmds[ck]
+				if !exists || v {
+					allOff = false
+					break
+				}
+			}
+			if allOff {
+				s.pluginState.flags[mod].Store(false)
+			}
+		}
 		s.pluginState.mu.Lock()
-		if s.pluginState.globalCmdOff == nil {
-			s.pluginState.globalCmdOff = make(map[string]bool)
-		}
+		freshOff := make(map[string]bool, len(cmds))
 		for cmdKey, enabled := range cmds {
-			s.pluginState.globalCmdOff[cmdKey] = !enabled
+			freshOff[cmdKey] = !enabled
 		}
+		s.pluginState.globalCmdOff = freshOff
 		s.pluginState.mu.Unlock()
 	}
 	var cursor uint64

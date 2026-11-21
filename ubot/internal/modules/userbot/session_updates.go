@@ -263,6 +263,9 @@ func (s *Service) isRelevantMessage(chatID int64, msg *tg.Message) bool {
 	}
 	ownerID := s.owners[chatID]
 	s.mu.RUnlock()
+	if ownerID == 0 && chatID > 0 {
+		ownerID = chatID
+	}
 
 	if prefix == "" || strings.HasPrefix(text, prefix) {
 		return true
@@ -295,6 +298,14 @@ func (s *Service) handleUserbotMessage(ctx context.Context, chatID int64, client
 	}
 	ownerID := s.owners[chatID]
 	s.mu.RUnlock()
+	if ownerID == 0 && client != nil {
+		s.mu.RLock()
+		ownerID = s.clientOwners[client]
+		s.mu.RUnlock()
+	}
+	if ownerID == 0 && chatID > 0 {
+		ownerID = chatID
+	}
 
 	if strings.HasPrefix(msg.Message, "#") && len(msg.Message) > 1 && !strings.ContainsAny(msg.Message, " \t\r\n") {
 		if !s.IsCommandEnabledForOwner(ownerID, "get") {

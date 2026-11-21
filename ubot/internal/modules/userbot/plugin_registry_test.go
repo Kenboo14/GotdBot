@@ -112,13 +112,23 @@ func TestPluginRegistry_SubCommandAndPerOwnerOverrides(t *testing.T) {
 	if !s.IsCommandEnabledForOwner(8001, "kick") {
 		t.Fatalf("expected admin kick enabled for user 8001")
 	}
-	if !s.IsCommandEnabledForOwner(7001, "ban") {
-		t.Fatalf("expected per-user override cmd:ban=1 enabled for user 7001")
+	if s.IsCommandEnabledForOwner(7001, "ban") {
+		t.Fatalf("expected global cmd:ban=0 to override per-user cmd:ban=1 for user 7001")
 	}
 	if s.IsCommandEnabledForOwner(7001, "joinvc") {
 		t.Fatalf("expected vctools joinvc disabled for user 7001")
 	}
 	if s.IsCommandEnabledForOwner(7001, "broadcast") {
 		t.Fatalf("expected alias broadcast mapped to cmd:gcast disabled for user 7001")
+	}
+
+	mu.Lock()
+	hashMap[redisKeyPluginState]["admin"] = "0"
+	hashMap[redisKeyUserPluginPrefix+"7001"]["admin"] = "1"
+	mu.Unlock()
+	s.SyncPluginsFromRedis(context.Background())
+	s.SyncUserPluginsFromRedis(context.Background(), 7001)
+	if s.IsPluginEnabledForOwner(7001, PluginAdmin) || s.IsCommandEnabledForOwner(7001, "kick") {
+		t.Fatalf("expected global module OFF to override per-user module ON for user 7001")
 	}
 }
