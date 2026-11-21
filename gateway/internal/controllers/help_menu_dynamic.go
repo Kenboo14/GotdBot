@@ -8,8 +8,87 @@ import (
 	"strings"
 )
 
+func (h *Handler) formatHelpHomeDisabledSummary(ctx context.Context, userID int64) string {
+	var disabled []string
+	for _, cat := range helpCatalog {
+		var catOff []string
+		for _, cmd := range cat.Commands {
+			if !(cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key)) {
+				catOff = append(catOff, "!"+cmd.Key)
+			}
+		}
+		if len(catOff) == len(cat.Commands) && len(catOff) > 0 {
+			disabled = append(disabled, cat.Title)
+		} else if len(catOff) > 0 {
+			disabled = append(disabled, catOff...)
+		}
+	}
+	if len(disabled) == 0 {
+		return "Tidak ada"
+	}
+	return strings.Join(disabled, ", ")
+}
+
+func (h *Handler) formatHelpCategoryDisabledSummary(ctx context.Context, userID int64, cat helpCategorySpec) (int, string) {
+	activeCount := 0
+	var disabled []string
+	for _, cmd := range cat.Commands {
+		if cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key) {
+			activeCount++
+		} else {
+			disabled = append(disabled, "!"+cmd.Key)
+		}
+	}
+	if len(disabled) == 0 {
+		return activeCount, "Tidak ada"
+	}
+	if len(disabled) == len(cat.Commands) {
+		return activeCount, "Semua (" + strings.Join(disabled, ", ") + ")"
+	}
+	return activeCount, strings.Join(disabled, ", ")
+}
+
+func buildLiveHelpCommandPage(cat helpCategorySpec, cmd helpSubCommandSpec) helpPageSnapshot {
+	pluginStatus := "Load Plugin : Off"
+	disabledLabel := "!" + cmd.Key
+	if cmd.PluginOn {
+		pluginStatus = "Load Plugin : On"
+		disabledLabel = "Tidak ada"
+	}
+	text := fmt.Sprintf(
+		`<h1>%s %s • %s</h1>
+<blockquote expandable>%s</blockquote>
+<table border="1">
+  <tr><th>Properti</th><th>Keterangan</th></tr>
+  <tr><td>📂 Kategori</td><td><code>%s</code></td></tr>
+  <tr><td>⌨️ Penggunaan</td><td><code>%s</code></td></tr>
+  <tr><td>🔌 Status</td><td><code>%s</code></td></tr>
+  <tr><td>🚫 Dimatikan</td><td><code>%s</code></td></tr>
+</table>
+<hr/>
+<p>Tekan <b>Back</b> untuk kembali ke sub menu <b>%s</b>.</p>`,
+		cat.Emoji,
+		html.EscapeString(cat.Title),
+		html.EscapeString(cmd.Label),
+		html.EscapeString(cmd.Description),
+		html.EscapeString(cat.Title),
+		html.EscapeString(cmd.Usage),
+		html.EscapeString(pluginStatus),
+		html.EscapeString(disabledLabel),
+		html.EscapeString(cat.Title),
+	)
+
+	return helpPageSnapshot{
+		text: text,
+		markup: &botgotd.InlineKeyboardMarkup{
+			InlineKeyboard: [][]botgotd.InlineKeyboardButton{
+				{{Text: "Back", CallbackData: "assist_help:cat:" + cat.Key}},
+			},
+		},
+	}
+}
+
 func (h *Handler) buildLiveHelpHomePage(ctx context.Context, userID int64) helpPageSnapshot {
-	states := h.getEffectivePluginStates(ctx, userID)
 	buttons := make([]botgotd.InlineKeyboardButton, 0, len(helpCatalog))
 	activeCats := 0
 	for _, cat := range helpCatalog {
@@ -19,32 +98,28 @@ func (h *Handler) buildLiveHelpHomePage(ctx context.Context, userID int64) helpP
 				active++
 			}
 		}
-		icon := "🟢"
-		if active == 0 {
-			icon = "🔴"
-		} else {
+		if active > 0 {
 			activeCats++
-			if active < len(cat.Commands) {
-				icon = "🟡"
-			}
 		}
-		_ = states
 		buttons = append(buttons, botgotd.InlineKeyboardButton{
-			Text:         icon + " " + cat.Title,
+			Text:         cat.Title,
 			CallbackData: "assist_help:cat:" + cat.Key,
 		})
 	}
+	disabledSummary := h.formatHelpHomeDisabledSummary(ctx, userID)
 	text := fmt.Sprintf(
 		`<h1>🤖 Asisten GO UserBot</h1>
 <blockquote expandable>Pilih kategori utama di bawah untuk melihat seluruh sub perintah beserta status modul <b>GO UserBot</b>.</blockquote>
 <table border="1">
   <tr><th>Informasi</th><th>Status</th></tr>
   <tr><td>🔌 Modul Aktif</td><td><code>%d / %d Kategori</code></td></tr>
+  <tr><td>🚫 Dimatikan</td><td><code>%s</code></td></tr>
 </table>
 <hr/>
 <p>Tekan tombol kategori di bawah untuk detail perintah:</p>`,
 		activeCats,
 		len(helpCatalog),
+		html.EscapeString(disabledSummary),
 	)
 	return helpPageSnapshot{
 		text:   text,
@@ -54,19 +129,13 @@ func (h *Handler) buildLiveHelpHomePage(ctx context.Context, userID int64) helpP
 
 func (h *Handler) buildLiveHelpCategoryPage(ctx context.Context, userID int64, cat helpCategorySpec) helpPageSnapshot {
 	subButtons := make([]botgotd.InlineKeyboardButton, 0, len(cat.Commands))
-	activeCount := 0
 	for _, cmd := range cat.Commands {
-		enabled := cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key)
-		icon := "🔴"
-		if enabled {
-			activeCount++
-			icon = "🟢"
-		}
 		subButtons = append(subButtons, botgotd.InlineKeyboardButton{
-			Text:         icon + " " + cmd.Label,
+			Text:         cmd.Label,
 			CallbackData: fmt.Sprintf("assist_help:cmd:%s:%s", cat.Key, cmd.Key),
 		})
 	}
+	activeCount, disabledSummary := h.formatHelpCategoryDisabledSummary(ctx, userID, cat)
 
 	pluginSummary := "Load Plugin : Off"
 	if activeCount == len(cat.Commands) && activeCount > 0 {
@@ -83,6 +152,7 @@ func (h *Handler) buildLiveHelpCategoryPage(ctx context.Context, userID int64, c
   <tr><td>📦 Modul</td><td><code>%s</code></td></tr>
   <tr><td>🔌 Status</td><td><code>%s</code></td></tr>
   <tr><td>📑 Sub Command</td><td><code>%d perintah</code></td></tr>
+  <tr><td>🚫 Dimatikan</td><td><code>%s</code></td></tr>
 </table>
 <hr/>
 <p>Pilih salah satu tombol di bawah untuk melihat detail perintah:</p>`,
@@ -92,6 +162,7 @@ func (h *Handler) buildLiveHelpCategoryPage(ctx context.Context, userID int64, c
 		html.EscapeString(cat.Title),
 		html.EscapeString(pluginSummary),
 		len(cat.Commands),
+		html.EscapeString(disabledSummary),
 	)
 
 	return helpPageSnapshot{
@@ -138,7 +209,7 @@ func (h *Handler) resolveHelpPage(ctx context.Context, userID int64, data string
 				for _, cmd := range cat.Commands {
 					if cmd.Key == cmdKey {
 						cmd.PluginOn = cmd.PluginOn && h.isEffectiveCommandEnabled(ctx, userID, cat.Key, cmd.Key)
-						return buildHelpCommandDetailPage(cat, cmd), true
+						return buildLiveHelpCommandPage(cat, cmd), true
 					}
 				}
 			}

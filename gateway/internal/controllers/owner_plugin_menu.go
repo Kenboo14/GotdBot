@@ -11,16 +11,45 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-func (h *Handler) appendOwnerPluginGrid(ctx context.Context, ownerID int64, rows []monitorRichRow, keyboard [][]botgotd.InlineKeyboardButton) ([]monitorRichRow, [][]botgotd.InlineKeyboardButton) {
+type ownerRichButton struct {
+	Text  string
+	Data  string
+	Style string
+}
+
+func renderOwnerRichButtonRows(rows [][]ownerRichButton) string {
+	var sb strings.Builder
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		sb.WriteString("<tg-button-row>\n")
+		for _, btn := range row {
+			styleAttr := ""
+			if btn.Style != "" {
+				styleAttr = ` style="` + html.EscapeString(btn.Style) + `"`
+			}
+			fmt.Fprintf(&sb, `  <tg-button type="callback_data" data="%s"%s>%s</tg-button>`+"\n",
+				html.EscapeString(btn.Data), styleAttr, html.EscapeString(btn.Text))
+		}
+		sb.WriteString("</tg-button-row>\n")
+	}
+	return strings.TrimSuffix(sb.String(), "\n")
+}
+
+func (h *Handler) appendOwnerPluginGrid(ctx context.Context, ownerID int64, rows []monitorRichRow) ([]monitorRichRow, [][]ownerRichButton) {
 	states := h.getEffectivePluginStates(ctx, ownerID)
-	btnRow := make([]botgotd.InlineKeyboardButton, 0, 3)
+	btnRows := make([][]ownerRichButton, 0, 8)
+	curRow := make([]ownerRichButton, 0, 3)
 	for _, sp := range ownerPluginSpecs {
 		enabled := states[sp.Key]
 		activeSub, totalSub := h.moduleSubActiveCount(states, sp.Key)
 		icon := "🟢"
+		style := "primary"
 		statusText := fmt.Sprintf("🟢 ON (%d/%d)", activeSub, totalSub)
 		if !enabled || activeSub == 0 {
 			icon = "🔴"
+			style = "danger"
 			statusText = "🔴 OFF"
 		} else if activeSub < totalSub {
 			icon = "🟡"
@@ -30,28 +59,30 @@ func (h *Handler) appendOwnerPluginGrid(ctx context.Context, ownerID int64, rows
 			Label: statusText + " · " + sp.Title,
 			Value: "<code>" + html.EscapeString(sp.Commands) + "</code>",
 		})
-		btnRow = append(btnRow, botgotd.InlineKeyboardButton{
-			Text:         icon + " " + sp.Title,
-			CallbackData: fmt.Sprintf("owner_plug:open:%d:%s", ownerID, sp.Key),
+		curRow = append(curRow, ownerRichButton{
+			Text:  icon + " " + sp.Title,
+			Data:  fmt.Sprintf("owner_plug:open:%d:%s", ownerID, sp.Key),
+			Style: style,
 		})
-		if len(btnRow) == 3 {
-			keyboard = append(keyboard, btnRow)
-			btnRow = make([]botgotd.InlineKeyboardButton, 0, 3)
+		if len(curRow) == 3 {
+			btnRows = append(btnRows, curRow)
+			curRow = make([]ownerRichButton, 0, 3)
 		}
 	}
-	if len(btnRow) > 0 {
-		keyboard = append(keyboard, btnRow)
+	if len(curRow) > 0 {
+		btnRows = append(btnRows, curRow)
 	}
-	keyboard = append(keyboard, []botgotd.InlineKeyboardButton{
-		{Text: "✅ Aktifkan Semua", CallbackData: fmt.Sprintf("owner_plug:all:%d:1", ownerID)},
-		{Text: "⛔ Matikan Semua", CallbackData: fmt.Sprintf("owner_plug:all:%d:0", ownerID)},
+	btnRows = append(btnRows, []ownerRichButton{
+		{Text: "✅ Aktifkan Semua", Data: fmt.Sprintf("owner_plug:all:%d:1", ownerID), Style: "primary"},
+		{Text: "⛔ Matikan Semua", Data: fmt.Sprintf("owner_plug:all:%d:0", ownerID), Style: "danger"},
 	})
 	if ownerID > 0 {
-		keyboard = append(keyboard, []botgotd.InlineKeyboardButton{
-			{Text: "🔄 Reset ke Default Global", CallbackData: fmt.Sprintf("owner_plug:reset:%d", ownerID)},
-		})
+		btnRows = append(btnRows,
+			[]ownerRichButton{{Text: "🔄 Reset ke Default Global", Data: fmt.Sprintf("owner_plug:reset:%d", ownerID)}},
+			[]ownerRichButton{{Text: "🗑️ Tutup", Data: "owner_help:close", Style: "danger"}},
+		)
 	}
-	return rows, keyboard
+	return rows, btnRows
 }
 
 func (h *Handler) renderOwnerPluginListView(ctx context.Context, ownerID int64, targetLabel string) (string, *botgotd.InlineKeyboardMarkup) {
@@ -61,11 +92,9 @@ func (h *Handler) renderOwnerPluginListView(ctx context.Context, ownerID int64, 
 		title = fmt.Sprintf("🔌 Kontrol Plugin · User %s", html.EscapeString(targetLabel))
 		quote = fmt.Sprintf("ℹ️ Mode khusus UserID <code>%d</code>: matikan modul/sub-fitur yang tidak dipakai agar eksekusi lebih ringan dan cepat.", ownerID)
 	}
-	rows, keyboard := h.appendOwnerPluginGrid(ctx, ownerID, make([]monitorRichRow, 0, len(ownerPluginSpecs)), make([][]botgotd.InlineKeyboardButton, 0, 8))
-	keyboard = append(keyboard, []botgotd.InlineKeyboardButton{
-		{Text: "🗑️ Tutup", CallbackData: "owner_help:close"},
-	})
-	return renderMonitorRichCard(title, rows, quote, false), &botgotd.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	rows, btnRows := h.appendOwnerPluginGrid(ctx, ownerID, make([]monitorRichRow, 0, len(ownerPluginSpecs)))
+	text := renderMonitorRichCard(title, rows, quote, false) + "\n" + renderOwnerRichButtonRows(btnRows)
+	return text, nil
 }
 
 func (h *Handler) renderOwnerPluginDetail(ctx context.Context, ownerID int64, modKey string) (string, *botgotd.InlineKeyboardMarkup) {
@@ -79,9 +108,11 @@ func (h *Handler) renderOwnerPluginDetail(ctx context.Context, ownerID int64, mo
 	activeSub, totalSub := h.moduleSubActiveCount(states, sp.Key)
 
 	modBadge := "🟢 ON"
+	modStyle := "primary"
 	modBtnText := fmt.Sprintf("🟢 Modul %s: ON", sp.Title)
 	if !modEnabled {
 		modBadge = "🔴 OFF"
+		modStyle = "danger"
 		modBtnText = fmt.Sprintf("🔴 Modul %s: OFF", sp.Title)
 	}
 
@@ -91,18 +122,16 @@ func (h *Handler) renderOwnerPluginDetail(ctx context.Context, ownerID int64, mo
 		Value: fmt.Sprintf("%s · Sub aktif: <code>%d/%d</code>", modBadge, activeSub, totalSub),
 	})
 
-	keyboard := make([][]botgotd.InlineKeyboardButton, 0, 8)
-	keyboard = append(keyboard,
-		[]botgotd.InlineKeyboardButton{
-			{Text: modBtnText, CallbackData: fmt.Sprintf("owner_plug:mod:%d:%s", ownerID, sp.Key)},
-		},
-		[]botgotd.InlineKeyboardButton{
-			{Text: "✅ Semua Sub ON", CallbackData: fmt.Sprintf("owner_plug:suball:%d:%s:1", ownerID, sp.Key)},
-			{Text: "⛔ Semua Sub OFF", CallbackData: fmt.Sprintf("owner_plug:suball:%d:%s:0", ownerID, sp.Key)},
+	btnRows := make([][]ownerRichButton, 0, 8)
+	btnRows = append(btnRows,
+		[]ownerRichButton{{Text: modBtnText, Data: fmt.Sprintf("owner_plug:mod:%d:%s", ownerID, sp.Key), Style: modStyle}},
+		[]ownerRichButton{
+			{Text: "✅ Semua Sub ON", Data: fmt.Sprintf("owner_plug:suball:%d:%s:1", ownerID, sp.Key), Style: "primary"},
+			{Text: "⛔ Semua Sub OFF", Data: fmt.Sprintf("owner_plug:suball:%d:%s:0", ownerID, sp.Key), Style: "danger"},
 		},
 	)
 
-	btnRow := make([]botgotd.InlineKeyboardButton, 0, 3)
+	curRow := make([]ownerRichButton, 0, 3)
 	for _, sub := range subs {
 		subOn := modEnabled
 		if subOn {
@@ -111,45 +140,53 @@ func (h *Handler) renderOwnerPluginDetail(ctx context.Context, ownerID int64, mo
 			}
 		}
 		icon := "🟢"
+		subStyle := "primary"
 		stText := "🟢 ON"
 		if !subOn {
 			icon = "🔴"
+			subStyle = "danger"
 			stText = "🔴 OFF"
 		}
 		rows = append(rows, monitorRichRow{
 			Label: fmt.Sprintf("%s !%s", stText, html.EscapeString(sub.Key)),
 			Value: html.EscapeString(sub.Description),
 		})
-		btnRow = append(btnRow, botgotd.InlineKeyboardButton{
-			Text:         fmt.Sprintf("%s %s", icon, sub.Label),
-			CallbackData: fmt.Sprintf("owner_plug:cmd:%d:%s:%s", ownerID, sp.Key, sub.Key),
+		curRow = append(curRow, ownerRichButton{
+			Text:  fmt.Sprintf("%s %s", icon, sub.Label),
+			Data:  fmt.Sprintf("owner_plug:cmd:%d:%s:%s", ownerID, sp.Key, sub.Key),
+			Style: subStyle,
 		})
-		if len(btnRow) == 3 {
-			keyboard = append(keyboard, btnRow)
-			btnRow = make([]botgotd.InlineKeyboardButton, 0, 3)
+		if len(curRow) == 3 {
+			btnRows = append(btnRows, curRow)
+			curRow = make([]ownerRichButton, 0, 3)
 		}
 	}
-	if len(btnRow) > 0 {
-		keyboard = append(keyboard, btnRow)
+	if len(curRow) > 0 {
+		btnRows = append(btnRows, curRow)
 	}
 
-	backCB := "owner_help:page:5"
 	scopeNote := "Global (Semua Userbot)"
+	var markup *botgotd.InlineKeyboardMarkup
 	if ownerID > 0 {
-		backCB = fmt.Sprintf("owner_plug:list:%d", ownerID)
 		scopeNote = fmt.Sprintf("Khusus UserID <code>%d</code>", ownerID)
+		btnRows = append(btnRows, []ownerRichButton{
+			{Text: "⬅️ Kembali", Data: fmt.Sprintf("owner_plug:list:%d", ownerID)},
+			{Text: "🗑️ Tutup", Data: "owner_help:close", Style: "danger"},
+		})
+	} else {
+		btnRows = append(btnRows, []ownerRichButton{
+			{Text: "⬅️ Kembali", Data: "owner_help:page:5"},
+		})
+		markup = &botgotd.InlineKeyboardMarkup{InlineKeyboard: buildOwnerHelpNavRows(len(ownerHelpPages))}
 	}
-	keyboard = append(keyboard, []botgotd.InlineKeyboardButton{
-		{Text: "⬅️ Kembali", CallbackData: backCB},
-		{Text: "🗑️ Tutup", CallbackData: "owner_help:close"},
-	})
 
 	title := fmt.Sprintf("🔌 Plugin · %s", sp.Title)
 	if ownerID > 0 {
 		title = fmt.Sprintf("🔌 Plugin · %s (%d)", sp.Title, ownerID)
 	}
 	quote := fmt.Sprintf("ℹ️ Scope: <b>%s</b> · Ketuk tombol di atas untuk On/Off modul utama atau masing-masing sub-command.", scopeNote)
-	return renderMonitorRichCard(title, rows, quote, false), &botgotd.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	text := renderMonitorRichCard(title, rows, quote, false) + "\n" + renderOwnerRichButtonRows(btnRows)
+	return text, markup
 }
 
 func (h *Handler) resolvePluginTargetOwner(ctx context.Context, b *botgotd.Bot, update *botgotd.Update, rawArg string) (int64, string, bool) {
@@ -325,13 +362,5 @@ func (h *Handler) OwnerPluginCallback(ctx context.Context, b *botgotd.Bot, updat
 		return
 	}
 	msg := cb.Message.Message
-	_, editErr := editMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.ID, text, markup)
-	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		if _, sendErr := sendMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.MessageThreadID, text, markup); sendErr == nil {
-			_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{
-				ChatID:    msg.Chat.ID,
-				MessageID: msg.ID,
-			})
-		}
-	}
+	_, _ = editMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.ID, text, markup)
 }

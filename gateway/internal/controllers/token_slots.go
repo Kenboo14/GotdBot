@@ -236,14 +236,8 @@ func (h *Handler) ShowSwitchTokenMenu(ctx context.Context, b *botgotd.Bot, chatI
 
 	msgText := sb.String()
 	if len(editMsgID) > 0 && editMsgID[0] > 0 {
-		if _, err := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
-			ChatID:    chatID,
-			MessageID: editMsgID[0],
-			Text:      msgText,
-			ParseMode: "HTML",
-		}); err == nil {
-			return
-		}
+		_, _ = editMonitorRichMessageWithMarkup(ctx, b, chatID, editMsgID[0], msgText, nil)
+		return
 	}
 	_, _ = b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,

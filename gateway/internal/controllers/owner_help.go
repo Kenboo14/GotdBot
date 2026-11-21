@@ -106,24 +106,9 @@ func renderOwnerHelpPage(page int) (string, *botgotd.InlineKeyboardMarkup) {
 	return (*Handler)(nil).renderOwnerHelp(context.Background(), page)
 }
 
-func (h *Handler) renderOwnerHelp(ctx context.Context, page int) (string, *botgotd.InlineKeyboardMarkup) {
+func buildOwnerHelpNavRows(page int) [][]botgotd.InlineKeyboardButton {
 	total := len(ownerHelpPages)
-	if page < 1 {
-		page = 1
-	}
-	if page > total {
-		page = total
-	}
-	spec := ownerHelpPages[page-1]
-	rows := spec.Rows
-	keyboard := make([][]botgotd.InlineKeyboardButton, 0, 9)
-
-	if page == total {
-		rows, keyboard = h.appendOwnerPluginGrid(ctx, 0, make([]monitorRichRow, 0, len(ownerPluginSpecs)), keyboard)
-	}
-
-	text := renderMonitorRichCard(spec.Title, rows, spec.Quote, false)
-
+	keyboard := make([][]botgotd.InlineKeyboardButton, 0, 5)
 	tabRow := make([]botgotd.InlineKeyboardButton, 0, 3)
 	for i, item := range ownerHelpPages {
 		label := item.TabLabel
@@ -164,7 +149,32 @@ func (h *Handler) renderOwnerHelp(ctx context.Context, page int) (string, *botgo
 	keyboard = append(keyboard, navRow, []botgotd.InlineKeyboardButton{
 		{Text: "🗑️ Tutup", CallbackData: "owner_help:close"},
 	})
-	return text, &botgotd.InlineKeyboardMarkup{InlineKeyboard: keyboard}
+	return keyboard
+}
+
+func (h *Handler) renderOwnerHelp(ctx context.Context, page int) (string, *botgotd.InlineKeyboardMarkup) {
+	total := len(ownerHelpPages)
+	if page < 1 {
+		page = 1
+	}
+	if page > total {
+		page = total
+	}
+	spec := ownerHelpPages[page-1]
+	rows := spec.Rows
+	richButtons := ""
+
+	if page == total {
+		var btnRows [][]ownerRichButton
+		rows, btnRows = h.appendOwnerPluginGrid(ctx, 0, make([]monitorRichRow, 0, len(ownerPluginSpecs)))
+		richButtons = renderOwnerRichButtonRows(btnRows)
+	}
+
+	text := renderMonitorRichCard(spec.Title, rows, spec.Quote, false)
+	if richButtons != "" {
+		text += "\n" + richButtons
+	}
+	return text, &botgotd.InlineKeyboardMarkup{InlineKeyboard: buildOwnerHelpNavRows(page)}
 }
 
 func (h *Handler) SendOwnerHelp(ctx context.Context, b *botgotd.Bot, update *botgotd.Update, page int) {
@@ -229,13 +239,5 @@ func (h *Handler) OwnerHelpCallback(ctx context.Context, b *botgotd.Bot, update 
 	}
 	msg := cb.Message.Message
 	text, markup := h.renderOwnerHelp(ctx, page)
-	_, editErr := editMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.ID, text, markup)
-	if editErr != nil && !isMessageNotModifiedErr(editErr) {
-		if _, sendErr := sendMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.MessageThreadID, text, markup); sendErr == nil {
-			_, _ = b.DeleteMessage(ctx, &botgotd.DeleteMessageParams{
-				ChatID:    msg.Chat.ID,
-				MessageID: msg.ID,
-			})
-		}
-	}
+	_, _ = editMonitorRichMessageWithMarkup(ctx, b, msg.Chat.ID, msg.ID, text, markup)
 }

@@ -23,20 +23,29 @@ func TestOwnerHelpPagesAndPagination(t *testing.T) {
 		assertMonitorCardLayout(t, ownerHelpPages[page-1].TabLabel, text)
 
 		rm, ok := buildStripedRichMessage(text)
-		if !ok || rm == nil {
-			t.Fatalf("page %d buildStripedRichMessage failed", page)
-		}
-		tableChecked := false
-		for _, blk := range rm.Blocks {
-			if tbl, isTbl := blk.(*tg.PageBlockTable); isTbl {
-				tableChecked = true
-				if !tbl.Striped || tbl.Bordered || !tbl.Compact {
-					t.Fatalf("page %d table style mismatch: striped=%v bordered=%v compact=%v", page, tbl.Striped, tbl.Bordered, tbl.Compact)
+		if page == total {
+			if ok || rm != nil {
+				t.Fatalf("page %d with <tg-button-row> should bypass local striped parser", page)
+			}
+			if !strings.Contains(text, "<tg-button-row>") || !strings.Contains(text, `data="owner_plug:open:0:admin"`) {
+				t.Fatalf("page %d missing rich inline plugin buttons: %q", page, text)
+			}
+		} else {
+			if !ok || rm == nil {
+				t.Fatalf("page %d buildStripedRichMessage failed", page)
+			}
+			tableChecked := false
+			for _, blk := range rm.Blocks {
+				if tbl, isTbl := blk.(*tg.PageBlockTable); isTbl {
+					tableChecked = true
+					if !tbl.Striped || tbl.Bordered || !tbl.Compact {
+						t.Fatalf("page %d table style mismatch: striped=%v bordered=%v compact=%v", page, tbl.Striped, tbl.Bordered, tbl.Compact)
+					}
 				}
 			}
-		}
-		if !tableChecked {
-			t.Fatalf("page %d missing PageBlockTable", page)
+			if !tableChecked {
+				t.Fatalf("page %d missing PageBlockTable", page)
+			}
 		}
 
 		var hasPrev, hasNext bool
@@ -44,6 +53,9 @@ func TestOwnerHelpPagesAndPagination(t *testing.T) {
 			for _, btn := range row {
 				if len(btn.CallbackData) > 64 {
 					t.Fatalf("callback_data exceeds 64 bytes: %q", btn.CallbackData)
+				}
+				if strings.HasPrefix(btn.CallbackData, "owner_plug:") {
+					t.Fatalf("owner_plug button should be rich inline, not bottom keyboard: %+v", btn)
 				}
 				if btn.Text == "⬅️ Prev" {
 					hasPrev = true

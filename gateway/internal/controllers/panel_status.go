@@ -64,14 +64,8 @@ func (h *Handler) renderStatusDashboard(ctx context.Context, b *botgotd.Bot, cha
 	text := strings.Replace(base, "<hr/>", actions, 1)
 
 	if editMsgID > 0 {
-		if _, err := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
-			ChatID:    chatID,
-			MessageID: editMsgID,
-			Text:      text,
-			ParseMode: "HTML",
-		}); err == nil {
-			return
-		}
+		_, _ = editMonitorRichMessageWithMarkup(ctx, b, chatID, editMsgID, text, nil)
+		return
 	}
 	b.SendMessage(ctx, &botgotd.SendMessageParams{
 		ChatID:      chatID,

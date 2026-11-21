@@ -24,6 +24,9 @@ import (
 var monitorHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 func buildStripedRichMessage(htmlText string) (*tg.InputRichMessage, bool) {
+	if strings.Contains(htmlText, "<tg-button") {
+		return nil, false
+	}
 	formatted := botgotd.FormatRichHTML(htmlText)
 	blocks, err := rich.ParseHTML(strings.NewReader(formatted))
 	if err != nil || len(blocks) == 0 {
@@ -207,13 +210,10 @@ func sendMonitorRichMessageWithMarkup(ctx context.Context, b *botgotd.Bot, targe
 	chatID := parseMonitorChatID(target)
 	if b.API != nil && b.Peers != nil && chatID != 0 {
 		if peer := b.Peers.GetInputPeer(chatID); isValidMTProtoPeer(chatID, peer) {
-			plainText, entities := botgotd.ParseHTML(htmlText)
 			mtMarkup := keyboard.ConvertReplyMarkup(markup)
 			newReq := func(rm tg.InputRichMessageClass) *tg.MessagesSendMessageRequest {
 				req := &tg.MessagesSendMessageRequest{
 					Peer:        peer,
-					Message:     plainText,
-					Entities:    entities,
 					ReplyMarkup: mtMarkup,
 					RandomID:    randomMTProtoID(),
 				}
@@ -323,38 +323,39 @@ func editMonitorRichMessageWithMarkup(ctx context.Context, b *botgotd.Bot, targe
 	chatID := parseMonitorChatID(target)
 	if b.API != nil && b.Peers != nil && chatID != 0 {
 		if peer := b.Peers.GetInputPeer(chatID); isValidMTProtoPeer(chatID, peer) {
-			plainText, entities := botgotd.ParseHTML(htmlText)
 			mtMarkup := keyboard.ConvertReplyMarkup(markup)
 			newReq := func(rm tg.InputRichMessageClass) *tg.MessagesEditMessageRequest {
 				req := &tg.MessagesEditMessageRequest{
 					Peer:        peer,
 					ID:          msgID,
-					Message:     plainText,
-					Entities:    entities,
 					ReplyMarkup: mtMarkup,
 				}
 				req.SetRichMessage(rm)
 				return req
 			}
 			if richMsg, ok := buildStripedRichMessage(htmlText); ok {
-				if _, err := b.API.MessagesEditMessage(ctx, newReq(richMsg)); err == nil {
+				if _, err := b.API.MessagesEditMessage(ctx, newReq(richMsg)); err == nil || isMessageNotModifiedError(err) {
 					return &botgotd.Message{ID: msgID, Chat: botgotd.Chat{ID: chatID}}, nil
-				} else if _, isFlood := parseMonitorRetryAfter(err, time.Hour); isFlood || isMessageNotModifiedError(err) || isMessageNotFoundError(err) {
+				} else if _, isFlood := parseMonitorRetryAfter(err, time.Hour); isFlood || isMessageNotFoundError(err) {
 					return nil, err
 				}
 			}
-			if _, err := b.API.MessagesEditMessage(ctx, newReq(rich.HTML(botgotd.FormatRichHTML(htmlText)))); err == nil {
+			if _, err := b.API.MessagesEditMessage(ctx, newReq(rich.HTML(botgotd.FormatRichHTML(htmlText)))); err == nil || isMessageNotModifiedError(err) {
 				return &botgotd.Message{ID: msgID, Chat: botgotd.Chat{ID: chatID}}, nil
-			} else if _, isFlood := parseMonitorRetryAfter(err, time.Hour); isFlood || isMessageNotModifiedError(err) || isMessageNotFoundError(err) {
+			} else if _, isFlood := parseMonitorRetryAfter(err, time.Hour); isFlood || isMessageNotFoundError(err) {
 				return nil, err
 			}
 		}
 	}
-	return b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
+	msg, err := b.EditMessageText(ctx, &botgotd.EditMessageTextParams{
 		ChatID:      target,
 		MessageID:   msgID,
 		Text:        htmlText,
 		ParseMode:   botgotd.ParseModeHTML,
 		ReplyMarkup: markup,
 	})
+	if isMessageNotModifiedError(err) {
+		return &botgotd.Message{ID: msgID, Chat: botgotd.Chat{ID: chatID}}, nil
+	}
+	return msg, err
 }
