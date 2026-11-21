@@ -20,8 +20,12 @@ import (
 
 func (h *Handler) StartShopServices(ctx context.Context, b *botgotd.Bot) {
 	cfg := loadPGConfig()
-	if cfg.CallbackListenAddr != "" {
-		go h.runShopCallbackHTTP(ctx, b, cfg.CallbackListenAddr, cfg.CallbackSecret)
+	listenAddr := cfg.CallbackListenAddr
+	if listenAddr == "" && resolveInternalAdminKey() != "" {
+		listenAddr = ":8085"
+	}
+	if listenAddr != "" {
+		go h.runShopCallbackHTTP(ctx, b, listenAddr, cfg.CallbackSecret)
 	}
 	if cfg.isConfigured() {
 		go h.runShopPendingPoller(ctx, b)
@@ -33,6 +37,7 @@ func (h *Handler) runShopCallbackHTTP(ctx context.Context, b *botgotd.Bot, addr,
 	mux.HandleFunc("POST /internal/shop/payment-callback", func(w http.ResponseWriter, r *http.Request) {
 		h.serveShopPaymentCallback(w, r, b, secret)
 	})
+	h.registerAdminHTTPRoutes(mux, b)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           mux,

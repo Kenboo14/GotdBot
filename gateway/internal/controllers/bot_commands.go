@@ -18,6 +18,7 @@ func registerBotCommands(b *botgotd.Bot, h *Handler) {
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/shop", botgotd.MatchTypePrefix, h.ShopCommand)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/worker", botgotd.MatchTypePrefix, h.WorkerCommand)
 	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/plugin", botgotd.MatchTypePrefix, h.PluginCommand)
+	b.RegisterHandler(botgotd.HandlerTypeMessageText, "/dashlogin", botgotd.MatchTypeExact, h.DashLoginCommand)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "token_set_duration:", botgotd.MatchTypePrefix, h.TokenCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "owner_help:", botgotd.MatchTypePrefix, h.OwnerHelpCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "owner_plug:", botgotd.MatchTypePrefix, h.OwnerPluginCallback)
