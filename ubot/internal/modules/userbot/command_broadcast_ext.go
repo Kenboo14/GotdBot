@@ -137,9 +137,15 @@ func (s *Service) runForwardBroadcast(ctx context.Context, client *gobot.Client,
 				}
 			}
 		}
+		var peerFlooded bool
 		if sendErr != nil {
 			failed++
-			if len(failures) < 100 {
+			if isPeerFloodError(sendErr) {
+				peerFlooded = true
+				if len(failures) < 100 {
+					failures = append(failures, fmt.Sprintf("%s: Dihentikan (PEER_FLOOD)", item.Name))
+				}
+			} else if len(failures) < 100 {
 				failures = append(failures, fmt.Sprintf("%s: %s", item.Name, compactBroadcastError(sendErr)))
 			}
 		} else {
@@ -160,9 +166,13 @@ func (s *Service) runForwardBroadcast(ctx context.Context, client *gobot.Client,
 				_ = s.notifyBroadcast(context.Background(), monitorChatID, ownerID, taskID, "broadcast_progress", len(targets), lastProgress, success, failed, nil)
 			}
 		}
+		if peerFlooded {
+			log.Printf("[userbot %d] Forward broadcast stopped early due to PEER_FLOOD", ownerID)
+			break
+		}
 		select {
 		case <-ctx.Done():
-		case <-time.After(350 * time.Millisecond):
+		case <-time.After(broadcastStepDelay(item.Kind)):
 		}
 	}
 	if monitorChatID != 0 && s.redis != nil {

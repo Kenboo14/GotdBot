@@ -18,6 +18,18 @@ import (
 )
 
 func isSessionRevokedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToUpper(err.Error())
+	if strings.Contains(errStr, "INPUT_USER_DEACTIVATED") ||
+		strings.Contains(errStr, "USER_IS_BLOCKED") ||
+		strings.Contains(errStr, "USER_IS_BOT") ||
+		strings.Contains(errStr, "USER_PRIVACY_RESTRICTED") ||
+		strings.Contains(errStr, "USER_ID_INVALID") ||
+		strings.Contains(errStr, "PEER_FLOOD") {
+		return false
+	}
 	return gobotsession.IsSessionRevoked(err)
 }
 

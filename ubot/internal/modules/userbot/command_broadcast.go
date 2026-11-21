@@ -430,7 +430,7 @@ func dialogKind(peer tg.InputPeerClass, entities tg.Entities, ownerID int64) (st
 	switch value := peer.(type) {
 	case *tg.InputPeerUser:
 		user := entities.Users[value.UserID]
-		return "private", value.UserID, value.UserID == ownerID || user != nil && user.Bot
+		return "private", value.UserID, value.UserID == ownerID || user != nil && (user.Bot || user.Deleted)
 	case *tg.InputPeerChat:
 		return "group", value.ChatID, false
 	case *tg.InputPeerChannel:
@@ -516,13 +516,23 @@ func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerI
 					}
 				}
 			}
+			var peerFlooded bool
 			if sendErr != nil {
 				failed++
-				if len(failures) < 100 {
+				if isPeerFloodError(sendErr) {
+					peerFlooded = true
+					if len(failures) < 100 {
+						failures = append(failures, fmt.Sprintf("%s: Dihentikan (PEER_FLOOD)", item.Name))
+					}
+				} else if len(failures) < 100 {
 					failures = append(failures, fmt.Sprintf("%s: %s", item.Name, compactBroadcastError(sendErr)))
 				}
 			} else {
 				success++
+			}
+			if peerFlooded {
+				log.Printf("[userbot %d] Broadcast stopped early due to PEER_FLOOD", ownerID)
+				break
 			}
 		}
 		processed := index + 1
@@ -540,7 +550,10 @@ func (s *Service) runBroadcast(ctx context.Context, client *gobot.Client, ownerI
 				_ = s.notifyBroadcast(context.Background(), monitorChatID, ownerID, taskID, "broadcast_progress", len(targets), lastProgress, success, failed, nil)
 			}
 		}
-		time.Sleep(350 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+		case <-time.After(broadcastStepDelay(item.Kind)):
+		}
 	}
 	if monitorChatID != 0 {
 		progress := lastProgress
@@ -569,6 +582,23 @@ func (s *Service) notifyBroadcast(ctx context.Context, chatID, ownerID int64, ta
 		ChatID: chatID, Type: kind, OwnerID: ownerID, TaskID: taskID,
 		Total: total, Progress: progress, Success: success, Failed: failed, Errors: failures,
 	})
+}
+
+func broadcastStepDelay(kind string) time.Duration {
+	if kind == "private" {
+		return 800*time.Millisecond + randJitterMs(400)
+	}
+	return 350 * time.Millisecond
+}
+
+func isPeerFloodError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if tgerr.Is(err, "PEER_FLOOD") {
+		return true
+	}
+	return strings.Contains(strings.ToUpper(err.Error()), "PEER_FLOOD")
 }
 
 func compactBroadcastError(err error) string {
