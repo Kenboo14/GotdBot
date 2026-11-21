@@ -38,26 +38,6 @@ func (h *Handler) ShowMainMenu(ctx context.Context, b *botgotd.Bot, chatID, user
 	})
 }
 
-// ShowShop displays Shop info
-func (h *Handler) ShowShop(ctx context.Context, b *botgotd.Bot, chatID int64) {
-	var sb strings.Builder
-	sb.WriteString("<h1>🛒 GotdBot Store &amp; Layanan Premium</h1>\n")
-	sb.WriteString("<table border=\"1\">\n")
-	sb.WriteString("  <tr><th>💎 Layanan</th><th>⚡ Keunggulan</th></tr>\n")
-	sb.WriteString("  <tr><td>👑 VIP Userbot</td><td>Masa aktif tanpa batas &amp; prioritas MTProto</td></tr>\n")
-	sb.WriteString("  <tr><td>🌐 Multi-Account Hub</td><td>Koneksikan puluhan nomor paralel</td></tr>\n")
-	sb.WriteString("  <tr><td>🚀 Dedicated Instance</td><td>Bot gateway privat eksklusif</td></tr>\n")
-	sb.WriteString("</table>\n")
-	sb.WriteString("<hr/>\n<p>Untuk konsultasi atau upgrade paket, silakan hubungi admin botgotd.</p>")
-
-	b.SendMessage(ctx, &botgotd.SendMessageParams{
-		ChatID:      chatID,
-		Text:        sb.String(),
-		ParseMode:   "HTML",
-		ReplyMarkup: mainMenuMarkup,
-	})
-}
-
 // ShowExpertExtra displays Expert Extra info
 func (h *Handler) ShowExpertExtra(ctx context.Context, b *botgotd.Bot, chatID int64) {
 	text := `<h1>⚡ Expert Extra Features</h1>
@@ -216,6 +196,12 @@ func (h *Handler) RoutePanelButton(ctx context.Context, b *botgotd.Bot, update *
 	if text == assets.BtnBantuan || strings.EqualFold(text, "bantuan") || text == "/help" {
 		effectiveUserID := h.GetEffectiveUserID(chatID, userID)
 		h.ShowBantuan(ctx, b, chatID, effectiveUserID)
+		return true
+	}
+
+	if text == assets.BtnShop || strings.EqualFold(text, "shop") {
+		effectiveUserID := h.GetEffectiveUserID(chatID, userID)
+		h.renderShopCatalog(ctx, b, chatID, effectiveUserID, 0)
 		return true
 	}
 

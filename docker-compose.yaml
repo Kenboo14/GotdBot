@@ -83,8 +83,20 @@ services:
       MONITOR_INVOICE: ${MONITOR_INVOICE:-}
       MONITOR_DATABASE: ${MONITOR_DATABASE:-}
       GROUP_CACHE: ${GROUP_CACHE:-AiotdCaches}
+      PG_BASE_URL: ${PG_BASE_URL:-}
+      PG_API_KEY: ${PG_API_KEY:-}
+      PG_ADMIN_KEY: ${PG_ADMIN_KEY:-}
+      PG_MERCHANT_ID: ${PG_MERCHANT_ID:-default}
+      PG_CALLBACK_URL: ${PG_CALLBACK_URL:-}
+      PG_CALLBACK_SECRET: ${PG_CALLBACK_SECRET:-}
+      PG_CALLBACK_LISTEN_ADDR: ${PG_CALLBACK_LISTEN_ADDR:-:8085}
+      SHOP_PACKAGES_JSON: ${SHOP_PACKAGES_JSON:-}
       GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-85MiB}
       GOGC: ${GOGC:-30}
+    ports:
+      - "127.0.0.1:${PG_CALLBACK_PORT:-8085}:8085"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro

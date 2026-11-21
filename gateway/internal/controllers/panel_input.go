@@ -19,6 +19,14 @@ func (h *Handler) HandlePanelInput(ctx context.Context, b *botgotd.Bot, chatID, 
 	if state == "" {
 		return false
 	}
+	if state == ownerPGUploadState {
+		senderID := userID
+		if message != nil && message.From != nil && message.From.ID != 0 {
+			senderID = message.From.ID
+		}
+		h.handleOwnerPGQRISUpload(ctx, b, chatID, senderID, text, message)
+		return true
+	}
 
 	// 1. Isolated Remote Control Add List
 	if strings.HasPrefix(state, "ctrl_add_list:") {

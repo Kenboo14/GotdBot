@@ -12,23 +12,33 @@ import (
 
 func TestOwnerHelpPagesAndPagination(t *testing.T) {
 	total := len(ownerHelpPages)
-	if total != 5 {
-		t.Fatalf("expected 5 owner help pages, got %d", total)
+	if total != 6 {
+		t.Fatalf("expected 6 owner help pages, got %d", total)
 	}
 	if resolveOwnerHelpPageArg("plugin") != 5 {
 		t.Fatalf("expected resolveOwnerHelpPageArg(plugin) == 5, got %d", resolveOwnerHelpPageArg("plugin"))
+	}
+	if resolveOwnerHelpPageArg("qris") != 6 {
+		t.Fatalf("expected resolveOwnerHelpPageArg(qris) == 6, got %d", resolveOwnerHelpPageArg("qris"))
 	}
 	for page := 1; page <= total; page++ {
 		text, markup := renderOwnerHelpPage(page)
 		assertMonitorCardLayout(t, ownerHelpPages[page-1].TabLabel, text)
 
 		rm, ok := buildStripedRichMessage(text)
-		if page == total {
+		if page == 5 {
 			if ok || rm != nil {
 				t.Fatalf("page %d with <tg-button-row> should bypass local striped parser", page)
 			}
 			if !strings.Contains(text, "<tg-button-row>") || !strings.Contains(text, `data="owner_plug:open:0:admin"`) {
 				t.Fatalf("page %d missing rich inline plugin buttons: %q", page, text)
+			}
+		} else if page == 6 {
+			if ok || rm != nil {
+				t.Fatalf("page %d with <tg-button-row> should bypass local striped parser", page)
+			}
+			if !strings.Contains(text, "<tg-button-row>") || !strings.Contains(text, `data="owner_pg:upload"`) {
+				t.Fatalf("page %d missing rich inline PG upload button: %q", page, text)
 			}
 		} else {
 			if !ok || rm == nil {

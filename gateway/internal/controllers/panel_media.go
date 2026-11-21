@@ -71,6 +71,10 @@ func (h *Handler) HandlePanelMedia(ctx context.Context, b *botgotd.Bot, update *
 	}
 	message := update.Message
 	state := h.getPanelState(message.Chat.ID)
+	if state == ownerPGUploadState {
+		h.handleOwnerPGQRISUpload(ctx, b, message.Chat.ID, message.From.ID, message.Caption, message)
+		return
+	}
 	if state == "waiting_restore_backup" && message.Document != nil {
 		h.handleRestoreBackupDocument(ctx, b, message.Chat.ID, h.GetEffectiveUserID(message.Chat.ID, message.From.ID), message)
 		return

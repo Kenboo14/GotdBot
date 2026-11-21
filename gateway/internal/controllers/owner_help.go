@@ -30,7 +30,7 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "🔍 /token info &lt;uid|token&gt;", Value: "Cek detail status lisensi, slot &amp; masa aktif"},
 			{Label: "🚫 /token revoke &lt;uid|token&gt;", Value: "Cabut lisensi / voucher dan putuskan sesi"},
 		},
-		Quote: "ℹ️ Format durasi: <b>h</b> (Hari), <b>j</b> (Jam), <b>m</b> (Menit). Contoh: <code>/token pro++ 30h</code> · Halaman 1/5.",
+		Quote: "ℹ️ Format durasi: <b>h</b> (Hari), <b>j</b> (Jam), <b>m</b> (Menit). Contoh: <code>/token pro++ 30h</code> · Halaman 1/6.",
 	},
 	{
 		TabLabel: "⚙️ Worker",
@@ -42,7 +42,7 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "🚧 /worker drain &lt;worker_id&gt;", Value: "Keluarkan worker dari rotasi &amp; migrasikan seluruh usernya"},
 			{Label: "✅ /worker undrain &lt;worker_id&gt;", Value: "Aktifkan kembali worker agar menerima user baru &amp; failover"},
 		},
-		Quote: "ℹ️ Auto-HELL memindah user berat (skor &gt;= 70 selama 3x cek) ke <code>ubot-hell</code> dan mengembalikan setelah &gt;= 6 jam jika skor &lt;= 25 · Halaman 2/5.",
+		Quote: "ℹ️ Auto-HELL memindah user berat (skor &gt;= 70 selama 3x cek) ke <code>ubot-hell</code> dan mengembalikan setelah &gt;= 6 jam jika skor &lt;= 25 · Halaman 2/6.",
 	},
 	{
 		TabLabel: "📊 Server",
@@ -56,7 +56,7 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "⚡ /ping", Value: "Uji konektivitas &amp; respons worker userbot aktif"},
 			{Label: "🧾 !code [bahasa]", Value: "Format ulang teks pesan yang di-reply ke blok kode"},
 		},
-		Quote: "ℹ️ Gunakan <code>/server</code> untuk memantau VPS live dan <code>/simulasi</code> untuk stress-test aman sebelum rilis · Halaman 3/5.",
+		Quote: "ℹ️ Gunakan <code>/server</code> untuk memantau VPS live dan <code>/simulasi</code> untuk stress-test aman sebelum rilis · Halaman 3/6.",
 	},
 	{
 		TabLabel: "🧭 Monitor",
@@ -72,12 +72,17 @@ var ownerHelpPages = []ownerHelpPageSpec{
 			{Label: "🎫 MONITOR_TOKEN_*", Value: "Log token dibuat, diklaim, brankas backup &amp; kedaluwarsa"},
 			{Label: "🐞 MONITOR_TRACEBACK", Value: "Peringatan error runtime, panic &amp; anomali handler"},
 		},
-		Quote: "ℹ️ Ketik <code>/help user</code> bila ingin membuka menu bantuan userbot reguler · Halaman 4/5.",
+		Quote: "ℹ️ Ketik <code>/help user</code> bila ingin membuka menu bantuan userbot reguler · Halaman 4/6.",
 	},
 	{
 		TabLabel: "🔌 Plugin",
 		Title:    "🔌 Owner Help · Kontrol Plugin Global",
-		Quote:    "ℹ️ Ketuk nama modul di bawah untuk atur ON/OFF modul utama maupun sub-command secara global. Khusus per-user pakai <code>/plugin &lt;uid|@username&gt;</code> · Halaman 5/5.",
+		Quote:    "ℹ️ Ketuk nama modul di bawah untuk atur ON/OFF modul utama maupun sub-command secara global. Khusus per-user pakai <code>/plugin &lt;uid|@username&gt;</code> · Halaman 5/6.",
+	},
+	{
+		TabLabel: "💳 PG",
+		Title:    "💳 Owner Help · Payment Gateway QRIS",
+		Quote:    "ℹ️ Klik tombol Upload QRIS Statis di bawah lalu kirim gambar/foto QRIS merchant Anda langsung ke chat ini tanpa perlu mengatur .env · Halaman 6/6.",
 	},
 }
 
@@ -97,6 +102,8 @@ func resolveOwnerHelpPageArg(arg string) int {
 		return 4
 	case strings.Contains(a, "plug") || strings.Contains(a, "fitur") || strings.Contains(a, "mod"):
 		return 5
+	case strings.Contains(a, "pg") || strings.Contains(a, "qris") || strings.Contains(a, "shop") || strings.Contains(a, "pay"):
+		return 6
 	default:
 		return 1
 	}
@@ -164,9 +171,13 @@ func (h *Handler) renderOwnerHelp(ctx context.Context, page int) (string, *botgo
 	rows := spec.Rows
 	richButtons := ""
 
-	if page == total {
+	if page == 5 {
 		var btnRows [][]ownerRichButton
 		rows, btnRows = h.appendOwnerPluginGrid(ctx, 0, make([]monitorRichRow, 0, len(ownerPluginSpecs)))
+		richButtons = renderOwnerRichButtonRows(btnRows)
+	} else if page == 6 {
+		var btnRows [][]ownerRichButton
+		rows, btnRows = h.appendOwnerPGHelp(ctx)
 		richButtons = renderOwnerRichButtonRows(btnRows)
 	}
 

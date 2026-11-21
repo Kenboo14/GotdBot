@@ -42,6 +42,7 @@ type Handler struct {
 	userPluginStates map[int64]map[string]bool
 	tokenCbMu        sync.RWMutex
 	tokenCbKeys      map[string]string
+	shop             *shopManager
 }
 
 func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
@@ -65,6 +66,7 @@ func NewHandler(broker *broker.Redis, db *databases.DataManager) *Handler {
 		accountNames:     make(map[int64]string),
 		topicSessions:    make(map[int64]*topicSessionState),
 		tokenCbKeys:      make(map[string]string),
+		shop:             newShopManager(),
 	}
 }
 
@@ -77,6 +79,7 @@ func (m *Init) Register(ctx context.Context, b *botgotd.Bot, r *broker.Redis) {
 	go startTelemetryDashboard(ctx, b, r)
 	go h.startLicenseExpiryMonitor(ctx, b)
 	go h.lb.StartFailoverLoop(ctx)
+	h.StartShopServices(ctx, b)
 
 	// Listener dari ubot
 	go r.Listener(ctx, b, "from:group:ubot", "from:worker:ubot", "from:ubot", h.SendMessage)
@@ -85,6 +88,7 @@ func (m *Init) Register(ctx context.Context, b *botgotd.Bot, r *broker.Redis) {
 	registerBotCommands(b, h)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "panel:", botgotd.MatchTypePrefix, h.PanelCallback)
 	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "ctrl:", botgotd.MatchTypePrefix, h.PanelCallback)
+	b.RegisterHandler(botgotd.HandlerTypeCallbackQueryData, "shop:", botgotd.MatchTypePrefix, h.ShopCallback)
 	b.RegisterHandlerMatchFunc(func(update *botgotd.Update) bool {
 		if update == nil {
 			return false
